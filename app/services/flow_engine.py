@@ -7,8 +7,27 @@ def process_message(state: ChatState, text: str = None, button_id: str = None):
     if not flow:
         return "Un asesor te contactará.", ChatState.LLAMADA, []
 
-    # Botón presionado
-    if button_id and button_id in flow["options"]:
+    # 1️⃣ ENTRADA AL ESTADO (sin botón y sin texto)
+    if button_id is None and text is None:
+        # Auto avance (caso ESPERA → INICIO)
+        if "auto_next" in flow:
+            next_state = flow["auto_next"]
+            next_flow = FLOW.get(next_state)
+            return (
+                flow["text"],
+                next_state,
+                next_flow.get("buttons", []),
+            )
+
+        # Render normal del estado
+        return (
+            flow["text"],
+            state,
+            flow.get("buttons", []),
+        )
+
+    # 2️⃣ BOTÓN PRESIONADO (válido)
+    if button_id and button_id in flow.get("options", {}):
         next_state = flow["options"][button_id]
         next_flow = FLOW.get(next_state, {})
         return (
@@ -17,7 +36,7 @@ def process_message(state: ChatState, text: str = None, button_id: str = None):
             next_flow.get("buttons", []),
         )
 
-    # Texto libre → IA / aclaración
+    # 3️⃣ TEXTO LIBRE → IA / ACLARACIÓN
     if text:
         return (
             "Déjame ayudarte con tu duda 😊",
@@ -25,7 +44,7 @@ def process_message(state: ChatState, text: str = None, button_id: str = None):
             [],
         )
 
-    # Caso inválido
+    # 4️⃣ BOTÓN INVÁLIDO
     return (
         "Por favor selecciona una opción válida.",
         state,
