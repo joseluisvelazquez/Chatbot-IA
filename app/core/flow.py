@@ -172,4 +172,18 @@ FLOW = {
         "buttons": [],
         "options": {},
     },
+    ChatState.ACLARACION: {
+        "text": (
+            "💬 Gracias por tu mensaje.\n\n"
+            "Puedo ayudarte a aclarar tu duda o continuar con el proceso de verificación."
+        ),
+        "buttons": [
+            {"id": "ACLARA_CONTINUAR", "label": "▶️ Continuar verificación"},
+            {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
+        ],
+        "options": {
+            "ACLARA_CONTINUAR": ChatState.INICIO,
+            "ACLARA_LLAMADA": ChatState.LLAMADA,
+        },
+    },
 }

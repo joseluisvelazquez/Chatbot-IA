@@ -18,7 +18,9 @@ def get_or_create_session(phone: str, folio: str | None = None):
         db.refresh(session)
 
     db.close()
-    return session
+    return session   # 👈 OBJETO, no ID
+
+
 
 
 def update_session(session_id: int, state: ChatState, last_message: str | None):
