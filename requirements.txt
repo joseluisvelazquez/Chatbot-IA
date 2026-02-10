@@ -5,3 +5,7 @@ sqlalchemy
 pymysql
 python-dotenv
 cryptography
+black
+flake8
+pytest
+sentry-sdk
