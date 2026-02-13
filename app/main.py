@@ -5,6 +5,7 @@ app = FastAPI(title="MXCOMP Chatbot")
 
 app.include_router(webhook_router)
 
+
 @app.get("/")
 def health():
     return {"status": "ok"}

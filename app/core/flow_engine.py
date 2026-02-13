@@ -1,34 +1,68 @@
-from app.core.flow import FLOW
+from app.core.flow import FLOW, DEFAULT_TRANSITIONS
 from app.core.states import ChatState
+from app.core.intents import detect_intent
+from app.services.ai_module import handle_out_of_flow
 
-def process_message(state: ChatState, text: str = None, button_id: str = None):
-    flow = FLOW.get(state)
+INTERRUPT_STATES = {
+    ChatState.ACLARACION,
+    ChatState.INCONSISTENCIA,
+    ChatState.FUERA_DE_FLUJO,
+    ChatState.LLAMADA,
+}
+
+
+def process_message(session, text: str, intent: str = None):
+
+    current_state = ChatState(session.state)
+    flow = FLOW.get(current_state)
 
     if not flow:
-        return "Un asesor te contactará.", ChatState.LLAMADA, []
+        return "Un asesor te contactará.", ChatState.LLAMADA, [], None
 
-    # 🟢 Botón válido
-    if button_id and button_id in flow["options"]:
-        next_state = flow["options"][button_id]
-        next_flow = FLOW.get(next_state, {})
+    # 1️⃣ Botón tiene prioridad
+    if intent:
+        detected_intent = intent
+    else:
+        detected_intent = detect_intent(text, current_state)
+
+    # 2️⃣ Ambiguo en binario
+    if detected_intent == "ambiguous":
         return (
-            next_flow.get("text", ""),
-            next_state,
-            next_flow.get("buttons", []),
+            "Solo necesito que confirmes con 'Sí' o 'No'.",
+            current_state,
+            flow.get("buttons", []),
+            None,
         )
 
-    # 🟡 Texto libre → ACLARACIÓN
-    if text:
-        aclaracion_flow = FLOW[ChatState.ACLARACION]
-        return (
-            aclaracion_flow["text"],
-            ChatState.ACLARACION,
-            aclaracion_flow["buttons"],
+    # 3️⃣ Opciones específicas del estado
+    if detected_intent in flow.get("options", {}):
+        next_state = flow["options"][detected_intent]
+
+    # 4️⃣ Transiciones globales
+    elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other":
+        next_state = DEFAULT_TRANSITIONS[detected_intent]
+
+
+    # 5️⃣ FUERA DE FLUJO → IA
+
+
+    previous_state_to_save = None
+
+    if next_state in INTERRUPT_STATES:
+        previous_state_to_save = session.state
+
+    if next_state == "__RESUME__":
+        next_state = (
+            ChatState(session.previous_state)
+            if session.previous_state
+            else ChatState.INICIO
         )
 
-    # 🔴 Caso inválido (ni texto ni botón válido)
+    next_flow = FLOW.get(next_state, {})
+
     return (
-        "Por favor selecciona una opción válida.",
-        state,
-        flow.get("buttons", []),
+        next_flow.get("text", ""),
+        next_state,
+        next_flow.get("buttons", []),
+        previous_state_to_save,
     )

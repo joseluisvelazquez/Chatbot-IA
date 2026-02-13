@@ -9,3 +9,4 @@ black
 flake8
 pytest
 sentry-sdk
+httpx
