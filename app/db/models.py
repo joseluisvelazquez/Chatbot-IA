@@ -20,7 +20,6 @@ class ChatSession(Base):
 
     # Último mensaje recibido
     last_message = Column(Text, nullable=True)
-    version = Column(Integer, nullable=False, default=0)
 
     # Control de concurrencia
     created_at = Column(DateTime(timezone=True), server_default=func.now())
