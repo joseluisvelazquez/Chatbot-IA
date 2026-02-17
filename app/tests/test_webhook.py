@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.states import ChatState
 
-
 client = TestClient(app)
 
 
@@ -13,17 +12,18 @@ class FakeSession:
         self.id = 1
         self.state = ChatState.CONFIRMAR_NOMBRE.value
         self.previous_state = None
+        self.last_message_id = None
 
 
 def test_webhook_success(monkeypatch):
 
-    # 🔥 Fake session
     fake_session = FakeSession()
 
-    def fake_get_or_create(phone):
+    # 🔹 mocks nuevos
+    def fake_get_or_create(db, phone):
         return fake_session
 
-    def fake_process_message(session, text, intent):
+    def fake_process_message(state, text, intent):
         return (
             "respuesta de prueba",
             ChatState.CONFIRMAR_DOMICILIO,
@@ -31,13 +31,12 @@ def test_webhook_success(monkeypatch):
             None,
         )
 
-    def fake_update_session(session_id, state, last_message, previous_state=None):
-        # Aquí solo validamos que lo llamen
-        assert session_id == 1
+    def fake_update_session(db, session, state, last_message, previous_state=None, message_id=None):
+        assert session.id == 1
         assert state == ChatState.CONFIRMAR_DOMICILIO.value
         assert last_message == "sí"
+        assert message_id == "msg-1"
 
-    # 🔥 Monkeypatch correcto (parchear donde se usa)
     monkeypatch.setattr(
         "app.api.webhook.get_or_create_session",
         fake_get_or_create,
@@ -57,9 +56,9 @@ def test_webhook_success(monkeypatch):
         "/webhook",
         json={
             "phone": "1234567890",
-            "state": ChatState.CONFIRMAR_NOMBRE.value,
             "text": "sí",
             "button_id": None,
+            "message_id": "msg-1",
         },
     )
 
@@ -70,16 +69,3 @@ def test_webhook_success(monkeypatch):
     assert data["reply"] == "respuesta de prueba"
     assert data["next_state"] == ChatState.CONFIRMAR_DOMICILIO.value
     assert data["buttons"] == [{"id": "TEST", "label": "Test"}]
-def test_webhook_invalid_state():
-
-    response = client.post(
-        "/webhook",
-        json={
-            "phone": "1234567890",
-            "state": "ESTADO_INVALIDO",
-            "text": "hola",
-            "button_id": None,
-        },
-    )
-
-    assert response.status_code == 422

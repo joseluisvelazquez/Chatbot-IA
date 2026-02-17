@@ -1,41 +1,50 @@
 import re
 from app.core.states import ChatState
 
-INTENT_PRIORITY = [
-    "human",        # más crítico
-    "doubt",
-    "negative",
-    "affirmative",
-    "later",
-]
-
 INTENT_KEYWORDS = {
     "affirmative": ["sí", "si", "ok", "vale", "adelante", "correcto"],
     "negative": ["no", "nop", "incorrecto"],
-    "later": ["luego", "después", "más tarde"],
+    "later": ["luego", "después", "mas tarde", "más tarde"],
     "doubt": ["duda", "dudas", "no entiendo", "no entiendo bien"],
     "human": ["llamar", "asesor", "persona", "hablar"],
 }
-def detect_intent(text: str, state) -> str:
-    text = text.lower()
 
+# Para binario, conviene tokenizar y contar "si/no" como palabras (no como substrings)
+BIN_AFF = {"si", "sí"}
+BIN_NEG = {"no"}
+
+
+def detect_intent(text: str, state: ChatState | None = None) -> str:
+    text_l = text.lower()
+
+    # 1) Tokenizar (palabras) para binario
+    words = re.findall(r"[a-záéíóúñ]+", text_l)
+
+    pos = sum(w in BIN_AFF for w in words)
+    neg = sum(w in BIN_NEG for w in words)
+
+    # Si hay mezcla binaria, decide por mayoría; empate -> ambiguous
+    if pos or neg:
+        if pos > neg:
+            return "affirmative"
+        if neg > pos:
+            return "negative"
+        return "ambiguous"
+
+    # 2) Si NO hay binario, aplica intents generales (por substring como ya hacías)
     detected = set()
-
     for intent, keywords in INTENT_KEYWORDS.items():
-        if any(k in text for k in keywords):
+        if any(k in text_l for k in keywords):
             detected.add(intent)
 
-    # 🔥 Si no detectó nada
     if not detected:
         return "other"
 
-    # 🔥 Si solo hay uno
-    if len(detected) == 1:
-        return detected.pop()
-
-    # 🔥 Prioridad global
-    for intent in INTENT_PRIORITY:
+    # prioridad SOLO para generales
+    priority_general = ["human", "doubt", "later"]
+    for intent in priority_general:
         if intent in detected:
             return intent
 
-    return "other"
+    # fallback
+    return next(iter(detected))
