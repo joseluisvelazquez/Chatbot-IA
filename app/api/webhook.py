@@ -43,74 +43,77 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     text = data["text"]
     message_id = data["message_id"]
     button_id = data["button_id"]
-    next_state = ChatState.INICIO
 
-    # 1️⃣ Obtener sesión
-    chat = get_or_create_session(db, phone)
+    reply = None
+    buttons = []
 
-    # 🚫 2️⃣ Anti duplicado (SIEMPRE PRIMERO)
-    if chat.last_message_id == message_id:
-        return {"status": "duplicate"}
+    try:
+        # 🔒 BLOQUEO DE SESIÓN (FOR UPDATE vive dentro del service)
+        chat = get_or_create_session(db, phone)
 
-    # 🔄 3️⃣ RESTART GLOBAL
-    if wants_restart(text):
+        # 🚫 Anti duplicado DENTRO de la transacción
+        if chat.last_message_id == message_id: # Si el último mensaje procesado es el mismo que estamos recibiendo, es un duplicado. Esto puede pasar si Meta reintenta enviar el mismo mensaje varias veces.
+            db.rollback()
+            return {"status": "duplicate"}
 
-        next_state = ChatState.INICIO
-        flow = FLOW[next_state]
+        # 🔄 RESTART GLOBAL
+        if wants_restart(text): #No se subira a producción esta función, es solo para pruebas internas, y se puede activar escribiendo "reiniciar" o "restart" en el chat.
+            next_state = ChatState.INICIO
+            flow = FLOW[next_state]
 
-        update_session(
-            db=db,
-            session=chat,
-            state=next_state.value,
-            last_message=text,
-            previous_state=None,
-            message_id=message_id,
-        )
+            update_session(
+                session=chat,
+                state=next_state.value,
+                last_message=text,
+                previous_state=None,
+                message_id=message_id,
+            )
 
-        await send_whatsapp_message(
-            phone,
-            "Perfecto 👍 reiniciemos tu proceso.\n\n" + flow["text"],
-            flow.get("buttons", []),
-        )
+            reply = "Perfecto 👍 reiniciemos tu proceso.\n\n" + flow["text"]
+            buttons = flow.get("buttons", [])
 
-        return {"status": "restarted"}
+        # 💤 Primer mensaje después de espera
+        elif chat.state == ChatState.ESPERA.value:
+            next_state = ChatState.INICIO
+            flow = FLOW[next_state]
 
-    if chat.state == ChatState.ESPERA.value:
+            update_session(
+                session=chat,
+                state=next_state.value,
+                last_message=text,
+                previous_state=None,
+                message_id=message_id,
+            )
 
-        next_state = ChatState.INICIO
-        flow = FLOW[next_state]
+            reply = flow["text"]
+            buttons = flow.get("buttons", [])
 
-        update_session(
-            db=db,
-            session=chat,
-            state=next_state.value,
-            last_message=text,
-            previous_state=None,
-            message_id=message_id,
-        )
+        # 🔁 Flujo normal
+        else:
+            reply, next_state, buttons, prev, document = process_message(
+                state=chat.state,
+                text=text,
+                intent=button_id,
+                previous_state=chat.previous_state,
+            )
 
-        await send_whatsapp_message(phone, flow["text"], flow.get("buttons", []))
+            update_session(
+                session=chat,
+                state=next_state.value,
+                last_message=text,
+                previous_state=prev,
+                message_id=message_id,
+            )
 
-        return {"status": "conversation_started"}
+        # 🔴 EL ÚNICO COMMIT DEL REQUEST
+        db.commit() ##Se utiliza commit aquí para asegurar que el lock se libere lo antes posible, y que los cambios en la sesión se guarden solo después de procesar el mensaje exitosamente.
 
-    # 5️⃣ Flow normal
-    reply, next_state, buttons, prev, document = process_message(
-        state=chat.state,
-        text=text,
-        intent=button_id,
-        previous_state=chat.previous_state,
-    )
+    except Exception as e:
+        db.rollback()
+        raise e
 
-    update_session(
-        db=db,
-        session=chat,
-        state=next_state.value,
-        last_message=text,
-        previous_state=prev,
-        message_id=message_id,
-    )
-
+    # 📤 RESPONDER FUERA DEL LOCK
     if reply:
-        await send_whatsapp_message(phone, reply, buttons)
+        await send_whatsapp_message(phone, reply, buttons) # Se responde al usuario después de liberar el lock, para minimizar el tiempo que la sesión está bloqueada.
 
     return {"status": "ok"}
