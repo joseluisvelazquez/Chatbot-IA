@@ -14,6 +14,8 @@ import os
 router = APIRouter()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
+def is_test_payload(payload: dict) -> bool:
+    return "phone" in payload and "text" in payload
 
 # ---------------- VERIFY ----------------
 @router.get("/webhook")
@@ -34,6 +36,37 @@ async def verify(request: Request):
 async def webhook(request: Request, db: Session = Depends(get_db)):
 
     payload = await request.json()
+    # ---------------- TEST MODE ----------------
+    if is_test_payload(payload):
+        phone = payload["phone"]
+        text = payload["text"]
+        button_id = payload.get("button_id")
+        message_id = payload.get("message_id")
+
+        chat = get_or_create_session(db, phone)
+
+        reply, next_state, buttons, prev, document = process_message(
+            state=chat.state,
+            text=text,
+            intent=button_id,
+            previous_state=chat.previous_state,
+        )
+
+        update_session(
+            db=db,
+            session=chat,
+            state=next_state.value,
+            last_message=text,
+            previous_state=prev,
+            message_id=message_id,
+        )
+
+        return {
+            "reply": reply,
+            "next_state": next_state.value,
+            "buttons": buttons,
+        }
+    
     data = parse_meta_message(payload)
 
     if not data:
@@ -115,5 +148,5 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     # 📤 RESPONDER FUERA DEL LOCK
     if reply:
         await send_whatsapp_message(phone, reply, buttons) # Se responde al usuario después de liberar el lock, para minimizar el tiempo que la sesión está bloqueada.
-
+        
     return {"status": "ok"}

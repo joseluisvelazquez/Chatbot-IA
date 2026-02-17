@@ -3,6 +3,7 @@ from app.core.states import ChatState
 from app.core.intents import detect_intent
 from app.services.ai_module import handle_out_of_flow
 
+# Estados que requieren guardar el estado previo para poder reanudar después de la interrupción
 INTERRUPT_STATES = {
     ChatState.ACLARACION,
     ChatState.INCONSISTENCIA,
@@ -27,7 +28,7 @@ def process_message(
     # 2️⃣ Ambiguo en binario
     if detected_intent == "ambiguous":
         return (
-            "Solo necesito que confirmes con 'Sí' o 'No'.",
+            "Por favor responde Sí o No.",
             current_state,
             flow.get("buttons", []),
             None,
