@@ -1,20 +1,18 @@
-from fastapi import APIRouter, Depends, Request 
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
-from sqlalchemy.orm import Session 
-from app.utils.restart_detector import wants_restart 
-from app.db.session import get_db 
-import os
-from app.adapters.meta_webhook import parse_meta_message 
-from app.services.session_service import get_or_create_session, update_session 
-from app.adapters.whatsapp_client import send_whatsapp_message 
-from app.core.flow_engine import process_message 
-from app.core.states import ChatState 
+from sqlalchemy.orm import Session
+from app.utils.restart_detector import wants_restart
+from app.db.session import get_db
+from app.adapters.meta_webhook import parse_meta_message
+from app.services.session_service import get_or_create_session, update_session
+from app.adapters.whatsapp_client import send_whatsapp_message
+from app.core.flow_engine import process_message
+from app.core.states import ChatState
 from app.core.flow import FLOW
+import os
 
 router = APIRouter()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-VERIFY_TOKEN="mxcomp_token_prueba"
-import os
 
 
 # ---------------- VERIFY ----------------
@@ -22,7 +20,10 @@ import os
 async def verify(request: Request):
     params = request.query_params
 
-    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == VERIFY_TOKEN:
+    if (
+        params.get("hub.mode") == "subscribe"
+        and params.get("hub.verify_token") == VERIFY_TOKEN
+    ):
         return PlainTextResponse(params.get("hub.challenge"))
 
     return PlainTextResponse("Error", status_code=403)
@@ -31,11 +32,9 @@ async def verify(request: Request):
 # ---------------- RECEIVE ----------------
 @router.post("/webhook")
 async def webhook(request: Request, db: Session = Depends(get_db)):
-    
 
     payload = await request.json()
     data = parse_meta_message(payload)
-    
 
     if not data:
         return {"status": "ignored"}
@@ -45,12 +44,11 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     message_id = data["message_id"]
     button_id = data["button_id"]
     next_state = ChatState.INICIO
-    
 
     # 1️⃣ Obtener sesión
     chat = get_or_create_session(db, phone)
 
-    #🚫 2️⃣ Anti duplicado (SIEMPRE PRIMERO)
+    # 🚫 2️⃣ Anti duplicado (SIEMPRE PRIMERO)
     if chat.last_message_id == message_id:
         return {"status": "duplicate"}
 
@@ -72,12 +70,11 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         await send_whatsapp_message(
             phone,
             "Perfecto 👍 reiniciemos tu proceso.\n\n" + flow["text"],
-            flow.get("buttons", [])
+            flow.get("buttons", []),
         )
 
         return {"status": "restarted"}
 
-    # 🟢 4️⃣ BOOTSTRAP
     if chat.state == ChatState.ESPERA.value:
 
         next_state = ChatState.INICIO
@@ -92,11 +89,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             message_id=message_id,
         )
 
-        await send_whatsapp_message(
-            phone,
-            flow["text"],
-            flow.get("buttons", [])
-        )
+        await send_whatsapp_message(phone, flow["text"], flow.get("buttons", []))
 
         return {"status": "conversation_started"}
 

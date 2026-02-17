@@ -6,9 +6,7 @@ from app.db.base import Base
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
-    __table_args__ = (
-        UniqueConstraint("phone", name="uq_chat_phone"),
-    )
+    __table_args__ = (UniqueConstraint("phone", name="uq_chat_phone"),)
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -27,5 +25,5 @@ class ChatSession(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    #id del último mensaje procesado
+    # id del último mensaje procesado
     last_message_id = Column(String(100), nullable=True)

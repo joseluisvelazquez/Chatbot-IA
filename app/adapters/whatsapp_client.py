@@ -5,8 +5,6 @@ PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 WHATSAPP_TOKEN = os.getenv("ACCESS_TOKEN")
 
 
-
-
 BASE_URL = f"https://graph.facebook.com/v24.0/{PHONE_NUMBER_ID}/messages"
 
 HEADERS = {
@@ -16,6 +14,7 @@ HEADERS = {
 
 
 # ---------------- BUTTON BUILDER ----------------
+
 
 def _build_buttons(buttons: list):
     return [
@@ -31,6 +30,7 @@ def _build_buttons(buttons: list):
 
 
 # ---------------- CORE SEND ----------------
+
 
 async def _send(payload: dict):
 
@@ -53,48 +53,56 @@ async def _send(payload: dict):
 
 # ---------------- SENDERS ----------------
 
+
 async def send_text(phone: str, text: str):
-    return await _send({
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "text",
-        "text": {"body": text},
-    })
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "text",
+            "text": {"body": text},
+        }
+    )
 
 
 async def send_buttons(phone: str, text: str, buttons: list):
-    return await _send({
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {"text": text},
-            "action": {"buttons": _build_buttons(buttons)},
-        },
-    })
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": text},
+                "action": {"buttons": _build_buttons(buttons)},
+            },
+        }
+    )
 
 
 async def send_document(phone: str, url: str, filename="archivo.pdf"):
-    return await _send({
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "document",
-        "document": {
-            "link": url,
-            "filename": filename,
-        },
-    })
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "document",
+            "document": {
+                "link": url,
+                "filename": filename,
+            },
+        }
+    )
 
 
 # ---------------- PUBLIC API ----------------
 
+
 async def send_whatsapp_message(phone, text=None, buttons=None, document_url=None):
 
-    #print(f"\n📤 Enviando a {phone}")
-    #print("Texto:", text)
-    #print("Botones:", buttons)
-    #print("Documento:", document_url)
+    # print(f"\n📤 Enviando a {phone}")
+    # print("Texto:", text)
+    # print("Botones:", buttons)
+    # print("Documento:", document_url)
 
     # documento primero
     if document_url:

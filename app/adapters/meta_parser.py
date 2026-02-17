@@ -1,4 +1,3 @@
-
 def build_meta_buttons(buttons: list):
     return [
         {

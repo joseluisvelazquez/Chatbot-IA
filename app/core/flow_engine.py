@@ -3,7 +3,6 @@ from app.core.states import ChatState
 from app.core.intents import detect_intent
 from app.services.ai_module import handle_out_of_flow
 
-
 INTERRUPT_STATES = {
     ChatState.ACLARACION,
     ChatState.INCONSISTENCIA,
@@ -12,7 +11,9 @@ INTERRUPT_STATES = {
 }
 
 
-def process_message(state, text: str, intent: str = None, previous_state: str | None = None):
+def process_message(
+    state, text: str, intent: str = None, previous_state: str | None = None
+):
 
     current_state = ChatState(state)
     flow = FLOW.get(current_state)
@@ -40,7 +41,9 @@ def process_message(state, text: str, intent: str = None, previous_state: str | 
         next_state = flow["options"][detected_intent]
 
         if next_state == "__RESUME__":
-            next_state = ChatState(previous_state) if previous_state else ChatState.INICIO
+            next_state = (
+                ChatState(previous_state) if previous_state else ChatState.INICIO
+            )
 
     # 4️⃣ Transiciones globales
     elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other":
