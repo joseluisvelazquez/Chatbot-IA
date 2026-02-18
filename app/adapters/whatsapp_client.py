@@ -1,13 +1,12 @@
-import os
 import httpx
 from app.adapters.meta_parser import build_meta_buttons
-# ---------------- CONFIG ----------------
-# Estas variables se configuran en el .env, y se usan para autenticar las peticiones a la API de WhatsApp Business de Meta.
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-WHATSAPP_TOKEN = os.getenv("ACCESS_TOKEN")
+from app.config.settings import (
+    WHATSAPP_TOKEN,
+    PHONE_NUMBER_ID,
+    META_API_VERSION,
+    BASE_URL
+)
 
-
-BASE_URL = f"https://graph.facebook.com/v24.0/{PHONE_NUMBER_ID}/messages"
 
 HEADERS = {
     "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -23,9 +22,10 @@ async def _send(payload: dict):
 
     print("\n================ META REQUEST ================")
     print(payload)
+    url = f"{BASE_URL}/{PHONE_NUMBER_ID}/messages"
 
     async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(BASE_URL, headers=HEADERS, json=payload)
+        response = await client.post(url, headers=HEADERS, json=payload)
 
     print("STATUS:", response.status_code)
     print("RESPONSE:", response.text)

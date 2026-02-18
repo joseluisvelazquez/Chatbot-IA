@@ -12,7 +12,7 @@ class ChatSession(Base):
 
     # Identificación del usuario
     phone = Column(String(20), nullable=False, index=True)
-    folio = Column(String(50), nullable=True, index=True)
+    folio = Column(String(50), nullable=True, index=True) #Foreign key a tabla del siga 
 
     # Estados del bot
     state = Column(String(50), nullable=False)
