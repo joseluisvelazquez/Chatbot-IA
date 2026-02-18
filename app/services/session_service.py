@@ -1,30 +1,64 @@
-from app.db.session import SessionLocal
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.db.models import ChatSession
 from app.core.states import ChatState
 
 
-def get_or_create_session(phone: str, folio: str | None = None):
-    db = SessionLocal()
+def get_or_create_session(db: Session, phone: str, folio: str | None = None):
+    """
+    Obtiene la sesión bloqueando la fila.
+    Si no existe la crea de forma segura contra concurrencia.
+    """
 
-    session = db.query(ChatSession).filter_by(phone=phone).first()
+    # 1️⃣ intentar obtener con lock
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.phone == phone)
+        .with_for_update(nowait=True)
+        .first()
+    )
 
-    if not session:
-        session = ChatSession(
-            phone=phone,
-            folio=folio,
-            state=ChatState.ESPERA.value,
+    if session:
+        return session
+
+    # 2️⃣ crear sesión (puede competir con otro request)
+    session = ChatSession(
+        phone=phone,
+        folio=folio,
+        state=ChatState.ESPERA.value,
+    )
+
+    db.add(session)
+
+    try:
+        db.flush()  # intenta insertar
+        return session
+
+    except IntegrityError:
+        # otro proceso la creó primero
+        db.rollback()
+
+        # volver a leer con lock
+        session = (
+            db.query(ChatSession)
+            .filter(ChatSession.phone == phone)
+            .with_for_update()
+            .first()
         )
-        db.add(session)
-        db.commit()
-        db.refresh(session)
 
-    db.close()
-    return session  # 👈 OBJETO, no ID
-
-
-def update_session(session_id, state, last_message, previous_state=None):
-    db = SessionLocal()
-    session = db.query(ChatSession).get(session_id)
+        return session
+    
+def update_session(
+    session: ChatSession,
+    state: str,
+    last_message: str,
+    previous_state: str | None = None,
+    message_id: str | None = None,
+):
+    """
+    Solo muta el objeto dentro de la transacción.
+    El commit lo controla el webhook.
+    """
 
     session.state = state
     session.last_message = last_message
@@ -32,5 +66,8 @@ def update_session(session_id, state, last_message, previous_state=None):
     if previous_state is not None:
         session.previous_state = previous_state
 
-    db.commit()
-    db.close()
+    # anti duplicado
+    if message_id:
+        session.last_message_id = message_id
+
+    return session

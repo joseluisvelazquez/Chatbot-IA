@@ -187,25 +187,25 @@ FLOW = {
             "En un momento te contactará un asesor para ayudarte a resolver esta inconsistencia."
         ),
         "buttons": [
-            {"id": "ACLARA_CONTINUAR", "label": "▶️ Continuar verificación"},
+            {"id": "REANUDACION", "label": "▶️ Continuar verificación"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
         ],
         "options": {
-            "ACLARA_CONTINUAR": ChatState.INICIO,
+            "REANUDACION": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
     ChatState.FUERA_DE_FLUJO: {  # Se debe de checar para responder mensajes con la ia
         "text": (
             "💬 Gracias por tu mensaje.\n\n"
-            "En un momento te contactará un asesor para ayudarte a resolver este fuera  lasdb."
+            "En un momento te contactará un asesor para ayudarte a (fuera de flujo)"
         ),
         "buttons": [
-            {"id": "REANUDACIÓN", "label": "▶️ Continuar verificación"},
+            {"id": "REANUDACION", "label": "▶️ Continuar verificación"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
         ],
         "options": {
-            "REANUDACIÓN": "__RESUME__",
+            "REANUDACION": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
@@ -215,11 +215,25 @@ FLOW = {
             "Puedo ayudarte a aclarar tu duda o continuar con el proceso de verificación."
         ),
         "buttons": [
-            {"id": "ACLARA_CONTINUAR", "label": "▶️ Continuar verificación"},
+            {"id": "REANUDACION", "label": "▶️ Continuar verificación"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
         ],
         "options": {
-            "ACLARA_CONTINUAR": "__RESUME__",
+            "REANUDACION": "__RESUME__",
+            "ACLARA_LLAMADA": ChatState.LLAMADA,
+        },
+    },
+    ChatState.LLAMADA: {
+        "text": (
+            "💬 Gracias por tu mensaje.\n\n"
+            "Puedo ayudarte a aclarar tu duda o continuar con el proceso de llamada."
+        ),
+        "buttons": [
+            {"id": "REANUDACION", "label": "▶️ Continuar verificación"},
+            {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
+        ],
+        "options": {
+            "REANUDACION": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },

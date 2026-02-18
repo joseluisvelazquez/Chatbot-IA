@@ -1,12 +1,9 @@
 from pydantic import BaseModel
 from typing import Optional
-from app.core.states import ChatState
-
-
 
 
 class WebhookRequest(BaseModel):
-    phone: Optional[str] = None
-    state: ChatState
-    text: Optional[str] = None
+    phone: str
+    text: str
     button_id: Optional[str] = None
+    message_id: str
