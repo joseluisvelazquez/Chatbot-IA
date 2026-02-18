@@ -12,7 +12,7 @@ def get_or_create_session(phone: str, folio: str | None = None):
         session = ChatSession(
             phone=phone,
             folio=folio,
-            state=ChatState.ESPERA.value,
+            state=ChatState.INICIO.value,
         )
         db.add(session)
         db.commit()

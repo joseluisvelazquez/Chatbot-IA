@@ -1,7 +1,6 @@
 from app.core.flow import FLOW, DEFAULT_TRANSITIONS
 from app.core.states import ChatState
 from app.core.intents import detect_intent
-from app.services.ai_module import handle_out_of_flow
 
 INTERRUPT_STATES = {
     ChatState.ACLARACION,
@@ -10,8 +9,9 @@ INTERRUPT_STATES = {
     ChatState.LLAMADA,
 }
 
-
 def process_message(session, text: str, intent: str = None):
+
+    text = text or ""
 
     current_state = ChatState(session.state)
     flow = FLOW.get(current_state)
@@ -19,13 +19,20 @@ def process_message(session, text: str, intent: str = None):
     if not flow:
         return "Un asesor te contactará.", ChatState.LLAMADA, [], None
 
-    # 1️⃣ Botón tiene prioridad
+    # Default seguro
+    next_state = current_state
+
+    # Prioridad botón
     if intent:
         detected_intent = intent
     else:
         detected_intent = detect_intent(text, current_state)
+    
+    # Bloqueo de arranque
+    if current_state == ChatState.INICIO and detected_intent != "start_verification" and not intent:
+        return "", current_state, [], None
 
-    # 2️⃣ Ambiguo en binario
+    # Ambiguo binario
     if detected_intent == "ambiguous":
         return (
             "Solo necesito que confirmes con 'Sí' o 'No'.",
@@ -34,17 +41,19 @@ def process_message(session, text: str, intent: str = None):
             None,
         )
 
-    # 3️⃣ Opciones específicas del estado
-    if detected_intent in flow.get("options", {}):
-        next_state = flow["options"][detected_intent]
+    options = flow.get("options", {})
 
-    # 4️⃣ Transiciones globales
-    elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other":
+    # Transición específica
+    if detected_intent in options:
+        next_state = options[detected_intent]
+
+    # Transición global
+    elif detected_intent in DEFAULT_TRANSITIONS:
         next_state = DEFAULT_TRANSITIONS[detected_intent]
 
-
-    # 5️⃣ FUERA DE FLUJO → IA
-
+    # Fallback → repetir estado
+    else:
+        next_state = current_state
 
     previous_state_to_save = None
 
@@ -60,8 +69,10 @@ def process_message(session, text: str, intent: str = None):
 
     next_flow = FLOW.get(next_state, {})
 
+    formatted_text = next_flow.get("text", "")
+
     return (
-        next_flow.get("text", ""),
+        formatted_text,
         next_state,
         next_flow.get("buttons", []),
         previous_state_to_save,

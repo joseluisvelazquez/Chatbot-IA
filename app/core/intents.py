@@ -17,23 +17,28 @@ INTENT_KEYWORDS = {
     "human": ["llamar", "asesor", "persona", "hablar"],
 }
 def detect_intent(text: str, state) -> str:
-    text = text.lower()
+    text = text.lower().strip()
 
     detected = set()
+
+    # Detectar mensaje formal de inicio de verificación
+    folio_pattern = r"folio\s*es\s*:\s*(\w+)"
+    if re.search(folio_pattern, text, re.IGNORECASE):
+        return "start_verification"
 
     for intent, keywords in INTENT_KEYWORDS.items():
         if any(k in text for k in keywords):
             detected.add(intent)
 
-    # 🔥 Si no detectó nada
+    # Si no detectó nada
     if not detected:
         return "other"
 
-    # 🔥 Si solo hay uno
+    # Si solo hay uno
     if len(detected) == 1:
         return detected.pop()
 
-    # 🔥 Prioridad global
+    # Prioridad global
     for intent in INTENT_PRIORITY:
         if intent in detected:
             return intent

@@ -5,7 +5,7 @@ DEFAULT_TRANSITIONS = {
     "later": ChatState.RECORDATORIO,
     "human": ChatState.LLAMADA,
     "doubt": ChatState.ACLARACION,
-    "other": ChatState.FUERA_DE_FLUJO,
+    #"other": ChatState.FUERA_DE_FLUJO,
 }
 
 FLOW = {
@@ -38,6 +38,7 @@ FLOW = {
             "INICIO_LUEGO": ChatState.RECORDATORIO,  # quick reply (Meta)
             "INICIO_LLAMADA": ChatState.LLAMADA,  # quick reply (Meta)
             "affirmative": ChatState.CONFIRMAR_NOMBRE,  # texto
+            "start_verification": ChatState.CONFIRMAR_NOMBRE,
         },
     },
     ChatState.CONFIRMAR_NOMBRE: {
