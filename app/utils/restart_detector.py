@@ -9,6 +9,7 @@ RESTART_KEYWORDS = [
     "otra vez",
 ]
 
+
 def wants_restart(text: str) -> bool:
     if not text:
         return False

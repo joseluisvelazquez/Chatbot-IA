@@ -4,28 +4,30 @@ from app.core.states import ChatState
 
 
 def test_binary_affirmative_transition():
-    reply, next_state, buttons, prev = process_message(
+    reply, next_state, buttons, prev, document = process_message(
         state=ChatState.CONFIRMAR_NOMBRE.value,
         text="sí",
         intent=None,
     )
 
     assert next_state == ChatState.CONFIRMAR_DOMICILIO
+    assert document is None
 
 
 def test_binary_ambiguous():
-    reply, next_state, buttons, prev = process_message(
+    reply, next_state, buttons, prev, document = process_message(
         state=ChatState.CONFIRMAR_NOMBRE.value,
         text="si no",
         intent=None,
     )
 
     assert next_state == ChatState.CONFIRMAR_NOMBRE
-    assert "Solo necesito" in reply
+    assert "Sí o No" in reply
+    assert document is None
 
 
 def test_resume_previous_state():
-    reply, next_state, buttons, prev = process_message(
+    reply, next_state, buttons, prev, document = process_message(
         state=ChatState.ACLARACION.value,
         text="continuar",
         intent="REANUDACION",
@@ -33,6 +35,7 @@ def test_resume_previous_state():
     )
 
     assert next_state == ChatState.CONFIRMAR_DOMICILIO
+    assert document is None
 
 
 def test_out_of_flow_ai_respond(monkeypatch):
@@ -47,7 +50,7 @@ def test_out_of_flow_ai_respond(monkeypatch):
 
     monkeypatch.setattr(flow_engine, "handle_out_of_flow", fake_ai)
 
-    reply, next_state, buttons, prev = flow_engine.process_message(
+    reply, next_state, buttons, prev, document = flow_engine.process_message(
         state=ChatState.CONFIRMAR_NOMBRE.value,
         text="quiero cancelar",
         intent=None,
@@ -55,3 +58,4 @@ def test_out_of_flow_ai_respond(monkeypatch):
 
     assert reply == "respuesta IA"
     assert next_state == ChatState.CONFIRMAR_NOMBRE
+    assert document is None

@@ -1,13 +1,12 @@
-import os
 import httpx
+from app.adapters.meta_parser import build_meta_buttons
+from app.config.settings import (
+    WHATSAPP_TOKEN,
+    PHONE_NUMBER_ID,
+    META_API_VERSION,
+    BASE_URL
+)
 
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-WHATSAPP_TOKEN = os.getenv("ACCESS_TOKEN")
-
-
-
-
-BASE_URL = f"https://graph.facebook.com/v24.0/{PHONE_NUMBER_ID}/messages"
 
 HEADERS = {
     "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -15,30 +14,18 @@ HEADERS = {
 }
 
 
-# ---------------- BUTTON BUILDER ----------------
-
-def _build_buttons(buttons: list):
-    return [
-        {
-            "type": "reply",
-            "reply": {
-                "id": b["id"],
-                "title": b["label"][:20],
-            },
-        }
-        for b in buttons[:3]
-    ]
-
 
 # ---------------- CORE SEND ----------------
 
+# Esta función se encarga de enviar la petición a Meta, y loguear la respuesta. Si Meta devuelve un error, se loguea pero no se trunca el bot, para evitar que problemas temporales con Meta afecten la experiencia del usuario.
 async def _send(payload: dict):
 
     print("\n================ META REQUEST ================")
     print(payload)
+    url = f"{BASE_URL}/{PHONE_NUMBER_ID}/messages"
 
     async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(BASE_URL, headers=HEADERS, json=payload)
+        response = await client.post(url, headers=HEADERS, json=payload)
 
     print("STATUS:", response.status_code)
     print("RESPONSE:", response.text)
@@ -53,48 +40,56 @@ async def _send(payload: dict):
 
 # ---------------- SENDERS ----------------
 
+# Estas funciones construyen el payload específico para cada tipo de mensaje (texto, botones, documentos), y llaman a _send para enviar la petición a Meta.
 async def send_text(phone: str, text: str):
-    return await _send({
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "text",
-        "text": {"body": text},
-    })
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "text",
+            "text": {"body": text},
+        }
+    )
 
 
 async def send_buttons(phone: str, text: str, buttons: list):
-    return await _send({
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {"text": text},
-            "action": {"buttons": _build_buttons(buttons)},
-        },
-    })
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": text},
+                "action": {"buttons": build_meta_buttons(buttons)},
+            },
+        }
+    )
 
 
 async def send_document(phone: str, url: str, filename="archivo.pdf"):
-    return await _send({
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "document",
-        "document": {
-            "link": url,
-            "filename": filename,
-        },
-    })
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "document",
+            "document": {
+                "link": url,
+                "filename": filename,
+            },
+        }
+    )
 
 
 # ---------------- PUBLIC API ----------------
 
+# Esta es la función que se exporta para ser usada en el resto del código. Recibe el teléfono, el texto, los botones y/o el documento a enviar, y llama a las funciones específicas según corresponda.
 async def send_whatsapp_message(phone, text=None, buttons=None, document_url=None):
 
-    #print(f"\n📤 Enviando a {phone}")
-    #print("Texto:", text)
-    #print("Botones:", buttons)
-    #print("Documento:", document_url)
+    # print(f"\n📤 Enviando a {phone}")
+    # print("Texto:", text)
+    # print("Botones:", buttons)
+    # print("Documento:", document_url)
 
     # documento primero
     if document_url:

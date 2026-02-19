@@ -1,28 +1,30 @@
-from fastapi import APIRouter, Depends, Request 
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
-from sqlalchemy.orm import Session 
-from app.utils.restart_detector import wants_restart 
-from app.db.session import get_db 
-import os
-from app.adapters.meta_webhook import parse_meta_message 
-from app.services.session_service import get_or_create_session, update_session 
-from app.adapters.whatsapp_client import send_whatsapp_message 
-from app.core.flow_engine import process_message 
-from app.core.states import ChatState 
-from app.core.flow import FLOW
+from sqlalchemy.orm import Session
+from app.db.session import get_db
+from app.adapters.meta_webhook import parse_meta_payload
+from app.services.session_service import get_or_create_session, update_session
+from app.adapters.whatsapp_client import send_whatsapp_message
+from app.core.flow_engine import process_message
+from app.config.settings import (
+    VERIFY_TOKEN,
+)
 
 router = APIRouter()
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-VERIFY_TOKEN="mxcomp_token_prueba"
-import os
 
+
+def is_test_payload(payload: dict) -> bool:
+    return "phone" in payload and "text" in payload
 
 # ---------------- VERIFY ----------------
 @router.get("/webhook")
 async def verify(request: Request):
     params = request.query_params
 
-    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == VERIFY_TOKEN:
+    if (
+        params.get("hub.mode") == "subscribe"
+        and params.get("hub.verify_token") == VERIFY_TOKEN
+    ):
         return PlainTextResponse(params.get("hub.challenge"))
 
     return PlainTextResponse("Error", status_code=403)
@@ -31,93 +33,66 @@ async def verify(request: Request):
 # ---------------- RECEIVE ----------------
 @router.post("/webhook")
 async def webhook(request: Request, db: Session = Depends(get_db)):
-    
 
     payload = await request.json()
-    data = parse_meta_message(payload)
-    
+
+    data = parse_meta_payload(payload)
 
     if not data:
         return {"status": "ignored"}
+    elif data["unsupported"]:
+        await send_whatsapp_message(data["phone"], "Por favor responde usando las opciones del menú 🙂")
+        return {"status": "ok"}
+    elif data["is_status"]:
+        # Aquí podrías manejar eventos de estado como mensajes entregados o leídos, si te interesa.
+        return {"status": "whatsapp_status"}
+
 
     phone = data["phone"]
     text = data["text"]
     message_id = data["message_id"]
     button_id = data["button_id"]
-    next_state = ChatState.INICIO
-    
 
-    # 1️⃣ Obtener sesión
-    chat = get_or_create_session(db, phone)
+    try:
+        # 🔒 LOCK conversación
+        chat = get_or_create_session(db, phone)
 
-    #🚫 2️⃣ Anti duplicado (SIEMPRE PRIMERO)
-    if chat.last_message_id == message_id:
-        return {"status": "duplicate"}
+        # 🚫 anti duplicado
+        if chat.last_message_id == message_id:
+            db.rollback()
+            return {"status": "duplicate"}
 
-    # 🔄 3️⃣ RESTART GLOBAL
-    if wants_restart(text):
+        # 🧠 MOTOR CONVERSACIONAL (única decisión)
+        result = process_message(
+            session=chat,
+            text=text,
+            intent=button_id
+        )
 
-        next_state = ChatState.INICIO
-        flow = FLOW[next_state]
+        reply = result.reply
+        next_state = result.next_state
+        buttons = result.buttons
+        previous_state = result.previous_state
 
+        # 💾 persistencia
         update_session(
-            db=db,
             session=chat,
             state=next_state.value,
             last_message=text,
-            previous_state=None,
+            previous_state=previous_state,
             message_id=message_id,
         )
 
-        await send_whatsapp_message(
-            phone,
-            "Perfecto 👍 reiniciemos tu proceso.\n\n" + flow["text"],
-            flow.get("buttons", [])
-        )
 
-        return {"status": "restarted"}
+        db.commit()
 
-    # 🟢 4️⃣ BOOTSTRAP
-    if chat.state == ChatState.ESPERA.value:
+    except Exception as e:
+        db.rollback()
+        raise e
 
-        next_state = ChatState.INICIO
-        flow = FLOW[next_state]
-
-        update_session(
-            db=db,
-            session=chat,
-            state=next_state.value,
-            last_message=text,
-            previous_state=None,
-            message_id=message_id,
-        )
-
-        await send_whatsapp_message(
-            phone,
-            flow["text"],
-            flow.get("buttons", [])
-        )
-
-        return {"status": "conversation_started"}
-
-    # 5️⃣ Flow normal
-    reply, next_state, buttons, prev, document = process_message(
-        state=chat.state,
-        text=text,
-        intent=button_id,
-        previous_state=chat.previous_state,
-    )
-
-    update_session(
-        db=db,
-        session=chat,
-        state=next_state.value,
-        last_message=text,
-        previous_state=prev,
-        message_id=message_id,
-    )
-
+    # 📤 responder fuera del lock
     if reply:
         await send_whatsapp_message(phone, reply, buttons)
+    
 
     return {"status": "ok"}
