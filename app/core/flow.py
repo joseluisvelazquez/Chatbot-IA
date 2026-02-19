@@ -1,4 +1,6 @@
 from app.core.states import ChatState
+import app.content.messages as msg
+
 
 DEFAULT_TRANSITIONS = {
     "negative": ChatState.INCONSISTENCIA,
@@ -8,184 +10,172 @@ DEFAULT_TRANSITIONS = {
     "other": ChatState.FUERA_DE_FLUJO,
 }
 
+
 FLOW = {
+
     ChatState.ESPERA: {
-        "text": (
-            "Hola, soy Alonso 👋🏻\n\n"
-            "Estoy aquí para apoyarte con la activación de tus beneficios. 🤳🏻\n"
-            "En breve te contactaré nuevamente para brindarte más información."
-        ),
+        "text": msg.ESPERA,
         "buttons": [],
         "options": {
             "affirmative": ChatState.INICIO,
         },
         "auto_next": ChatState.INICIO,
     },
+
     ChatState.INICIO: {
-        "text": (
-            "¡Ya volví!\n"
-            "Vamos a confirmar algunos datos de tu compra.\n"
-            "El proceso toma menos de ⌚ 5 minutos y es necesario para activar tus beneficios 🎁\n\n"
-            "¿Podemos comenzar?"
-        ),
+        "text": msg.INICIO,
         "buttons": [
             {"id": "INICIO_SI", "label": "✅ Sí, adelante"},
             {"id": "INICIO_LUEGO", "label": "⏰ Recuérdamelo más tarde"},
             {"id": "INICIO_LLAMADA", "label": "📞 Prefiero que me llames"},
         ],
         "options": {
-            "INICIO_SI": ChatState.CONFIRMAR_NOMBRE,  # quick reply (Meta)
-            "INICIO_LUEGO": ChatState.RECORDATORIO,  # quick reply (Meta)
-            "INICIO_LLAMADA": ChatState.LLAMADA,  # quick reply (Meta)
-            "affirmative": ChatState.CONFIRMAR_NOMBRE,  # texto
+            "INICIO_SI": ChatState.CONFIRMAR_NOMBRE,
+            "INICIO_LUEGO": ChatState.RECORDATORIO,
+            "INICIO_LLAMADA": ChatState.LLAMADA,
+            "affirmative": ChatState.CONFIRMAR_NOMBRE,
         },
     },
+
     ChatState.CONFIRMAR_NOMBRE: {
-        "text": "📝 ¿Tu nombre completo es *{nombre_completo}*?",
+        "text": msg.CONFIRMAR_NOMBRE,
         "buttons": [
             {"id": "NOMBRE_SI", "label": "✅ Sí"},
             {"id": "NOMBRE_NO", "label": "❌ No"},
         ],
         "options": {
             "NOMBRE_SI": ChatState.CONFIRMAR_DOMICILIO,
-            "affirmative": ChatState.CONFIRMAR_DOMICILIO,  # texto
+            "affirmative": ChatState.CONFIRMAR_DOMICILIO,
             "NOMBRE_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA,  # texto
+            "negative": ChatState.INCONSISTENCIA,
         },
     },
+
     ChatState.CONFIRMAR_DOMICILIO: {
-        "text": "🏠 ¿Tu domicilio es *{domicilio_completo}*?",
+        "text": msg.CONFIRMAR_DOMICILIO,
         "buttons": [
             {"id": "DOM_SI", "label": "✅ Sí"},
             {"id": "DOM_NO", "label": "❌ No"},
         ],
         "options": {
             "DOM_SI": ChatState.CONFIRMAR_FECHA,
-            "affirmative": ChatState.CONFIRMAR_FECHA,  # texto
+            "affirmative": ChatState.CONFIRMAR_FECHA,
             "DOM_NO": ChatState.INCONSISTENCIA,
         },
     },
+
     ChatState.CONFIRMAR_FECHA: {
-        "text": "📆 ¿Tu contrato fue el *{fecha_venta}*?",
+        "text": msg.CONFIRMAR_FECHA,
         "buttons": [
             {"id": "FECHA_SI", "label": "✅ Sí"},
             {"id": "FECHA_NO", "label": "❌ No"},
         ],
         "options": {
             "FECHA_SI": ChatState.CONFIRMAR_PRODUCTO,
-            "affirmative": ChatState.CONFIRMAR_PRODUCTO,  # texto
+            "affirmative": ChatState.CONFIRMAR_PRODUCTO,
             "FECHA_NO": ChatState.INCONSISTENCIA,
         },
     },
+
     ChatState.CONFIRMAR_PRODUCTO: {
-        "text": "🖥️ ¿El producto adquirido es *{nombre_producto}*?",
+        "text": msg.CONFIRMAR_PRODUCTO,
         "buttons": [
             {"id": "PROD_SI", "label": "✅ Sí"},
             {"id": "PROD_NO", "label": "❌ No"},
         ],
         "options": {
             "PROD_SI": ChatState.CONFIRMAR_COMPONENTES,
-            "affirmative": ChatState.CONFIRMAR_COMPONENTES,  # texto
+            "affirmative": ChatState.CONFIRMAR_COMPONENTES,
             "PROD_NO": ChatState.INCONSISTENCIA,
         },
     },
+
     ChatState.CONFIRMAR_COMPONENTES: {
-        "text": (
-            "📦 ¿Recibiste todos los componentes?\n"
-            "CPU, Monitor, Teclado, Mouse, Bocinas, Regulador y Antena WiFi"
-        ),
+        "text": msg.CONFIRMAR_COMPONENTES,
         "buttons": [
             {"id": "COMP_SI", "label": "✅ Sí"},
             {"id": "COMP_NO", "label": "❌ No"},
         ],
         "options": {
             "COMP_SI": ChatState.CONFIRMAR_PAGO_INICIAL,
-            "affirmative": ChatState.CONFIRMAR_PAGO_INICIAL,  # texto
+            "affirmative": ChatState.CONFIRMAR_PAGO_INICIAL,
             "COMP_NO": ChatState.INCONSISTENCIA,
         },
     },
+
     ChatState.CONFIRMAR_PAGO_INICIAL: {
-        "text": "💲 ¿Tu pago inicial fue de *${importe_pago_inicial}*?",
+        "text": msg.CONFIRMAR_PAGO,
         "buttons": [
             {"id": "PAGO_SI", "label": "✅ Sí"},
             {"id": "PAGO_NO", "label": "❌ No"},
         ],
         "options": {
             "PAGO_SI": ChatState.INFO_PAGOS,
-            "affirmative": ChatState.INFO_PAGOS,  # texto
+            "affirmative": ChatState.INFO_PAGOS,
             "PAGO_NO": ChatState.INCONSISTENCIA,
         },
     },
+
     ChatState.INFO_PAGOS: {
-        "text": "🏦 ¿Está claro tu esquema de pagos?",
+        "text": msg.INFO_PAGOS,
         "buttons": [
             {"id": "PAGOS_OK", "label": "✅ Está claro"},
             {"id": "PAGOS_DUDA", "label": "❓ Tengo dudas"},
         ],
         "options": {
-            "PAGOS_OK": ChatState.INFO_BANCOS,
-            "affirmative": ChatState.INFO_BANCOS,  # texto
+            "PAGOS_OK": ChatState.PLAN_3_MESES,
+            "affirmative": ChatState.PLAN_3_MESES,
             "PAGOS_DUDA": ChatState.ACLARACION,
         },
     },
-    ChatState.INFO_BANCOS: {
-        "text": "🏦 Aquí tienes los datos bancarios.",
-        "buttons": [
-            {"id": "BANCOS_OK", "label": "✅ Está claro"},
-            {"id": "BANCOS_DUDA", "label": "❓ Tengo dudas"},
-        ],
-        "options": {
-            "BANCOS_OK": ChatState.PLAN_3_MESES,
-            "affirmative": ChatState.PLAN_3_MESES,  # texto
-            "BANCOS_DUDA": ChatState.ACLARACION,
-        },
-    },
+
     ChatState.PLAN_3_MESES: {
-        "text": "🎓 ¿Tienes dudas sobre tu plan de 3 meses?",
+        "text": msg.PLAN_3_MESES,
         "buttons": [
-            {"id": "PLAN3_OK", "label": "✅ No tengo dudas"},
+            {"id": "PLAN3_OK", "label": "✅ Está claro"},
             {"id": "PLAN3_DUDA", "label": "❓ Tengo dudas"},
         ],
         "options": {
             "PLAN3_OK": ChatState.INFO_PLANES,
-            "affirmative": ChatState.INFO_PLANES,  # texto
+            "affirmative": ChatState.INFO_PLANES,
             "PLAN3_DUDA": ChatState.ACLARACION,
         },
     },
+
     ChatState.INFO_PLANES: {
-        "text": "📜 ¿Tienes dudas sobre los planes de 6, 9, 12, 15 y 18 meses?",
+        "text": msg.INFO_PLANES,
         "buttons": [
             {"id": "PLANES_OK", "label": "✅ No tengo dudas"},
             {"id": "PLANES_DUDA", "label": "❓ Tengo dudas"},
         ],
         "options": {
             "PLANES_OK": ChatState.BENEFICIOS,
-            "affirmative": ChatState.BENEFICIOS,  # texto
+            "affirmative": ChatState.BENEFICIOS,
             "PLANES_DUDA": ChatState.ACLARACION,
         },
     },
+
     ChatState.BENEFICIOS: {
-        "text": "🎉 ¡Felicidades! Ya puedes disfrutar de tus beneficios.",
+        "text": msg.BENEFICIOS,
         "buttons": [
             {"id": "BEN_OK", "label": "✅ No tengo dudas"},
             {"id": "BEN_DUDA", "label": "❓ Tengo dudas"},
         ],
         "options": {
             "BEN_OK": ChatState.FINALIZADO,
-            "affirmative": ChatState.FINALIZADO,  # texto
+            "affirmative": ChatState.FINALIZADO,
             "BEN_DUDA": ChatState.ACLARACION,
         },
     },
+
     ChatState.FINALIZADO: {
-        "text": "✅ Verificación completada. Gracias por tu tiempo.",
+        "text": msg.FINALIZADO,
         "buttons": [],
         "options": {},
     },
-    ChatState.INCONSISTENCIA: {  # Se debe de checar para encontrar una ayuda con la inconsistencia a través de un mensaje o una llamada del asesor
-        "text": (
-            "💬 Gracias por tu mensaje.\n\n"
-            "En un momento te contactará un asesor para ayudarte a resolver esta inconsistencia."
-        ),
+
+    ChatState.INCONSISTENCIA: {
+        "text": msg.INCONSISTENCIA,
         "buttons": [
             {"id": "REANUDACION", "label": "▶️ Continuar verificación"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
@@ -195,11 +185,9 @@ FLOW = {
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
-    ChatState.FUERA_DE_FLUJO: {  # Se debe de checar para responder mensajes con la ia
-        "text": (
-            "💬 Gracias por tu mensaje.\n\n"
-            "En un momento te contactará un asesor para ayudarte a (fuera de flujo)"
-        ),
+
+    ChatState.FUERA_DE_FLUJO: {
+        "text": msg.INCONSISTENCIA,
         "buttons": [
             {"id": "REANUDACION", "label": "▶️ Continuar verificación"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
@@ -209,11 +197,9 @@ FLOW = {
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
+
     ChatState.ACLARACION: {
-        "text": (
-            "💬 Gracias por tu mensaje.\n\n"
-            "Puedo ayudarte a aclarar tu duda o continuar con el proceso de verificación."
-        ),
+        "text": msg.ACLARACION,
         "buttons": [
             {"id": "REANUDACION", "label": "▶️ Continuar verificación"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
@@ -223,11 +209,9 @@ FLOW = {
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
+
     ChatState.LLAMADA: {
-        "text": (
-            "💬 Gracias por tu mensaje.\n\n"
-            "Puedo ayudarte a aclarar tu duda o continuar con el proceso de llamada."
-        ),
+        "text": msg.ACLARACION,
         "buttons": [
             {"id": "REANUDACION", "label": "▶️ Continuar verificación"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar con un asesor"},
