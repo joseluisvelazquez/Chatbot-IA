@@ -10,3 +10,4 @@ flake8
 pytest
 sentry-sdk
 httpx
+pydantic_settings

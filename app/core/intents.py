@@ -22,8 +22,11 @@ def detect_intent(text: str, state: ChatState | None = None) -> str:
     # 0️⃣ Inicio formal obligatorio
     # -------------------------------------------------
     folio_pattern = r"folio\s*es\s*:\s*(\w+)"
-    if re.search(folio_pattern, text_l):
-        return "start_verification"
+    match = re.search(folio_pattern, text_l)
+
+    if match:
+        folio = match.group(1).strip()
+        return "start_verification", folio
 
     # -------------------------------------------------
     # 1️⃣ Intenciones críticas primero (NO binarias)
@@ -31,7 +34,7 @@ def detect_intent(text: str, state: ChatState | None = None) -> str:
     for intent in CRITICAL_PRIORITY:
         for k in INTENT_KEYWORDS[intent]:
             if k in text_l:
-                return intent
+                return intent, None
 
     # -------------------------------------------------
     # 2️⃣ Binario puro
@@ -43,10 +46,10 @@ def detect_intent(text: str, state: ChatState | None = None) -> str:
 
     if pos or neg:
         if pos > neg:
-            return "affirmative"
+            return "affirmative", None
         if neg > pos:
-            return "negative"
-        return "ambiguous"
+            return "negative", None
+        return "ambiguous", None
 
     # -------------------------------------------------
     # 3️⃣ Intenciones generales
@@ -55,6 +58,6 @@ def detect_intent(text: str, state: ChatState | None = None) -> str:
         if intent in CRITICAL_PRIORITY:
             continue
         if any(k in text_l for k in keywords):
-            return intent
+            return intent, None
 
-    return "other"
+    return "other", None

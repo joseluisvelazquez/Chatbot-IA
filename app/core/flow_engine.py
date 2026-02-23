@@ -1,17 +1,20 @@
+from __future__ import annotations
+
+from app.content.message_builder import MessageBuilder
 from app.core.flow import FLOW, DEFAULT_TRANSITIONS
 from app.core.states import ChatState
 from app.core.intents import detect_intent
 from app.services.ai_module import handle_out_of_flow
-from dataclasses import dataclass
 from app.core.states import ChatState
+from dataclasses import dataclass
 from app.utils.restart_detector import wants_restart
-# Estados que requieren guardar el estado previo para poder reanudar después de la interrupción
-INTERRUPT_STATES = {
-    ChatState.ACLARACION,
-    ChatState.INCONSISTENCIA,
-    ChatState.FUERA_DE_FLUJO,
-    ChatState.LLAMADA,
-}
+from app.siga.siga_repository import (
+    construir_domicilio,
+    obtener_venta_por_folio,
+    obtener_domicilio_por_movimiento,
+    construir_nombre,
+)
+from app.content.message_builder import MessageBuilder
 
 @dataclass
 class FlowResult:
@@ -20,11 +23,10 @@ class FlowResult:
     buttons: list
     previous_state: str | None = None
 
-def process_message(session, text: str, intent: str | None = None) -> FlowResult:
+def process_message(session, text: str, intent: str | None = None, db=None) -> FlowResult:
 
     current_state = ChatState(session.state)
     previous_state = session.previous_state
-
     flow = FLOW.get(current_state)
 
     if not flow:
@@ -34,52 +36,47 @@ def process_message(session, text: str, intent: str | None = None) -> FlowResult
             []
         )
 
-    # ------------------------------------------------
-    # RESTART GLOBAL
-    # ------------------------------------------------
-    if wants_restart(text):
-        next_state = ChatState.INICIO
-        flow = FLOW[next_state]
+    # --------------------------------------
+    # Detectar intención
+    # --------------------------------------
+    if intent:
+        detected_intent = intent
+        folio = None
+    else:
+        detected_intent, folio = detect_intent(text, current_state)
+    # --------------------------------------
+    # Si mandó folio para iniciar
+    # --------------------------------------
+    if detected_intent == "start_verification":
+
+        venta = obtener_venta_por_folio(db, folio)
+
+        if not venta:
+            return FlowResult(
+                "❌ No encontramos tu folio. Verifica e intenta nuevamente.",
+                current_state,
+                flow.get("buttons", []),
+            )
+
+        # Guardamos folio en sesión
+        session.folio = folio
+
+        # Pasamos directo a confirmar nombre
+        next_state = ChatState.CONFIRMAR_NOMBRE
+
+        reply = MessageBuilder.confirmar_nombre(
+            construir_nombre(venta)
+        )
 
         return FlowResult(
-            "Perfecto 👍 reiniciemos tu proceso.\n\n" + flow["text"],
+            reply,
             next_state,
-            flow.get("buttons", []),
-            None
+            FLOW[next_state].get("buttons", []),
         )
 
-    # ------------------------------------------------
-    # REANUDAR DESPUÉS DE ESPERA
-    # ------------------------------------------------
-    if current_state == ChatState.ESPERA:
-        next_state = ChatState.INICIO
-        flow = FLOW[next_state]
-
-        return FlowResult(
-            flow["text"],
-            next_state,
-            flow.get("buttons", []),
-            None
-        )
-
-    # ------------------------------------------------
-    # INTENT DETECTION
-    # ------------------------------------------------
-    detected_intent = intent if intent else detect_intent(text, current_state)
-
-    if detected_intent == "ambiguous":
-        return FlowResult(
-            "Por favor responde Sí o No.",
-            current_state,
-            flow.get("buttons", []),
-            None
-        )
-
-    # ------------------------------------------------
-    # OPCIONES DEL ESTADO
-    # ------------------------------------------------
-    next_state = None
-
+    # --------------------------------------
+    # Transiciones normales
+    # --------------------------------------
     if detected_intent in flow.get("options", {}):
         next_state = flow["options"][detected_intent]
 
@@ -90,28 +87,48 @@ def process_message(session, text: str, intent: str | None = None) -> FlowResult
         next_state = DEFAULT_TRANSITIONS[detected_intent]
 
     else:
-        ai_result = handle_out_of_flow(current_state, text)
-
-        if ai_result and ai_result.get("action") == "respond":
-            return FlowResult(
-                ai_result["reply"],
-                current_state,
-                flow.get("buttons", []),
-                None
-            )
-
         next_state = ChatState.FUERA_DE_FLUJO
 
-    # guardar estado previo
-    previous_state_to_save = None
-    if next_state in INTERRUPT_STATES:
-        previous_state_to_save = current_state.value
+    # --------------------------------------
+    # Render dinámico del siguiente estado
+    # --------------------------------------
 
     next_flow = FLOW.get(next_state, {})
 
+    reply = next_flow.get("text", "")
+
+    # Si requiere datos de SIGA
+    if session.folio:
+
+        venta = obtener_venta_por_folio(db, session.folio)
+
+        if next_state == ChatState.CONFIRMAR_NOMBRE:
+            reply = MessageBuilder.confirmar_nombre(
+                construir_nombre(venta)
+            )
+
+        elif next_state == ChatState.CONFIRMAR_DOMICILIO:
+            domicilio = obtener_domicilio_por_movimiento(
+                db,
+                venta.id_movimiento_bv
+            )
+            reply = MessageBuilder.confirmar_domicilio(
+                construir_domicilio(domicilio)
+            )
+
+        elif next_state == ChatState.CONFIRMAR_FECHA:
+            reply = MessageBuilder.confirmar_fecha(
+                venta.fecha_venta.strftime("%d/%m/%Y")
+                if venta.fecha_venta else "No disponible"
+            )
+
+        elif next_state == ChatState.CONFIRMAR_PRODUCTO:
+            reply = MessageBuilder.confirmar_producto(
+                venta.descripcion or "No disponible"
+            )
+
     return FlowResult(
-        next_flow.get("text", ""),
+        reply,
         next_state,
         next_flow.get("buttons", []),
-        previous_state_to_save
     )

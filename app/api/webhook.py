@@ -6,15 +6,9 @@ from app.adapters.meta_webhook import parse_meta_payload
 from app.services.session_service import get_or_create_session, update_session
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.core.flow_engine import process_message
-from app.config.settings import (
-    VERIFY_TOKEN,
-)
+from app.config.settings import settings
 
 router = APIRouter()
-
-
-def is_test_payload(payload: dict) -> bool:
-    return "phone" in payload and "text" in payload
 
 # ---------------- VERIFY ----------------
 @router.get("/webhook")
@@ -23,12 +17,11 @@ async def verify(request: Request):
 
     if (
         params.get("hub.mode") == "subscribe"
-        and params.get("hub.verify_token") == VERIFY_TOKEN
+        and params.get("hub.verify_token") == settings.VERIFY_TOKEN
     ):
         return PlainTextResponse(params.get("hub.challenge"))
 
     return PlainTextResponse("Error", status_code=403)
-
 
 # ---------------- RECEIVE ----------------
 @router.post("/webhook")
@@ -66,7 +59,8 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         result = process_message(
             session=chat,
             text=text,
-            intent=button_id
+            intent=button_id,
+            db=db,  # pasamos la sesión para que pueda hacer queries si es necesario
         )
 
         reply = result.reply

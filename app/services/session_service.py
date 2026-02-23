@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from app.db.models import ChatSession
+from app.db.models import ChatSessions
 from app.core.states import ChatState
 
 
@@ -12,8 +12,8 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None):
 
     # 1️⃣ intentar obtener con lock
     session = (
-        db.query(ChatSession)
-        .filter(ChatSession.phone == phone)
+        db.query(ChatSessions)
+        .filter(ChatSessions.phone == phone)
         .with_for_update(nowait=True)
         .first()
     )
@@ -22,7 +22,7 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None):
         return session
 
     # 2️⃣ crear sesión (puede competir con otro request)
-    session = ChatSession(
+    session = ChatSessions(
         phone=phone,
         folio=folio,
         state=ChatState.ESPERA.value,
@@ -40,8 +40,8 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None):
 
         # volver a leer con lock
         session = (
-            db.query(ChatSession)
-            .filter(ChatSession.phone == phone)
+            db.query(ChatSessions)
+            .filter(ChatSessions.phone == phone)
             .with_for_update()
             .first()
         )
@@ -49,7 +49,7 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None):
         return session
     
 def update_session(
-    session: ChatSession,
+    session: ChatSessions,
     state: str,
     last_message: str,
     previous_state: str | None = None,
