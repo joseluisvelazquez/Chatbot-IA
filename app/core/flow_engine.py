@@ -139,7 +139,10 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # Render dinámico del siguiente estado
     # --------------------------------------
 
-    next_flow = FLOW.get(next_state, {})
+        elif next_state == ChatState.CONFIRMAR_PRODUCTO:
+            reply = MessageBuilder.confirmar_producto(
+                venta.descripcion or "No disponible"
+            )
 
     reply = next_flow.get("text", "")
 

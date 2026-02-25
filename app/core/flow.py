@@ -1,7 +1,6 @@
 from app.core.states import ChatState
 import app.content.messages as msg
 
-
 DEFAULT_TRANSITIONS = {
     "negative": ChatState.INCONSISTENCIA,
     "later": ChatState.RECORDATORIO,
