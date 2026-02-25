@@ -1,5 +1,17 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-__pycache__/
-*.pyc
+# Archivos de base de datos
+*.sql
+*.dump
+*.bak
+
+# Entornos
 .env
 venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Docker
+mysql_data/

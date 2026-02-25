@@ -1,39 +1,53 @@
-import os
+from pydantic_settings import BaseSettings
+from pydantic import Field
 
 
-# ============================================================
-# Función interna para validar variables obligatorias
-# ============================================================
-def _get_env_variable(name: str) -> str:
-    """
-    Obtiene una variable de entorno y falla si no existe.
-    """
-    value = os.getenv(name)
+class Settings(BaseSettings):
 
-    if not value:
-        raise RuntimeError(f"❌ La variable de entorno '{name}' no está definida.")
+    # ============================================================
+    # WhatsApp Cloud API (obligatorias)
+    # ============================================================
 
-    return value
+    VERIFY_TOKEN: str
+    WHATSAPP_TOKEN: str
+    PHONE_NUMBER_ID: str
+
+    # ============================================================
+    # Opcionales
+    # ============================================================
+
+    META_API_VERSION: str = "v24.0"
+
+    # ============================================================
+    # Base URL (propiedad dinámica)
+    # ============================================================
+
+    @property
+    def BASE_URL(self) -> str:
+        return f"https://graph.facebook.com/{self.META_API_VERSION}"
+
+    # ============================================================
+    # Base de datos
+    # ============================================================
+
+    DB_HOST: str
+    DB_PORT: int = 3306
+    DB_USER: str
+    DB_PASSWORD: str
+    DB_NAME: str
+
+    @property
+    def DATABASE_URL(self) -> str:
+        return (
+            f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}"
+            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            "?charset=utf8mb4"
+        )
+
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
 
 
-# ============================================================
-# Variables requeridas para WhatsApp Cloud API
-# ============================================================
-
-VERIFY_TOKEN = _get_env_variable("VERIFY_TOKEN")
-WHATSAPP_TOKEN = _get_env_variable("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = _get_env_variable("PHONE_NUMBER_ID")
-
-
-# ============================================================
-# Opcionales con valor por defecto
-# ============================================================
-
-META_API_VERSION = os.getenv("META_API_VERSION", "v24.0")
-
-
-# ============================================================
-# URL base de Graph API
-# ============================================================
-
-BASE_URL = f"https://graph.facebook.com/{META_API_VERSION}"
+# Instancia global
+settings = Settings()

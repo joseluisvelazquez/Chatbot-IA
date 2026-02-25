@@ -1,15 +1,11 @@
 import httpx
 from app.adapters.meta_parser import build_meta_buttons
-from app.config.settings import (
-    WHATSAPP_TOKEN,
-    PHONE_NUMBER_ID,
-    META_API_VERSION,
-    BASE_URL
-)
+from app.config.settings import settings
+
 
 
 HEADERS = {
-    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+    "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
     "Content-Type": "application/json",
 }
 
@@ -22,7 +18,7 @@ async def _send(payload: dict):
 
     print("\n================ META REQUEST ================")
     print(payload)
-    url = f"{BASE_URL}/{PHONE_NUMBER_ID}/messages"
+    url = f"{settings.BASE_URL}/{settings.PHONE_NUMBER_ID}/messages"
 
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(url, headers=HEADERS, json=payload)
@@ -30,7 +26,7 @@ async def _send(payload: dict):
     print("STATUS:", response.status_code)
     print("RESPONSE:", response.text)
     print("=============================================\n")
-
+   
     # si Meta falla, no truenes el bot
     if response.status_code >= 400:
         print("⚠️ ERROR ENVIANDO A WHATSAPP")
