@@ -26,7 +26,7 @@ async def _send(payload: dict):
     print("STATUS:", response.status_code)
     print("RESPONSE:", response.text)
     print("=============================================\n")
-
+   
     # si Meta falla, no truenes el bot
     if response.status_code >= 400:
         print("⚠️ ERROR ENVIANDO A WHATSAPP")

@@ -5,6 +5,7 @@
 
 # Entornos
 .env
+venv/
 
 # Python
 __pycache__/

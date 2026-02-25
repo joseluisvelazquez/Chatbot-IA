@@ -90,10 +90,59 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         next_state = ChatState.FUERA_DE_FLUJO
 
     # --------------------------------------
+    # Manejo especial: Componentes faltantes
+    # --------------------------------------
+    if current_state == ChatState.COMPONENTES_FALTANTES:
+
+        # Mapear botón a nombre real
+        componentes_map = {
+            "FALT_CPU": "CPU roja",
+            "FALT_MONITOR": "Monitor",
+            "FALT_TECLADO": "Teclado",
+            "FALT_MOUSE": "Mouse",
+            "FALT_BOCINAS": "Bocinas",
+            "FALT_REGULADOR": "Regulador",
+            "FALT_WIFI": "Antena WiFi",
+        }
+
+        if detected_intent in componentes_map:
+
+            componente = componentes_map[detected_intent]
+
+            # Inicializar extra_data si no existe
+            if not session.extra_data:
+                session.extra_data = {}
+
+            faltantes = session.extra_data.get("faltantes", [])
+
+            # Evitar duplicados
+            if componente not in faltantes:
+                faltantes.append(componente)
+
+            session.extra_data["faltantes"] = faltantes
+
+            next_state = ChatState.COMPONENTES_CONFIRMAR_FALTANTES
+
+            reply = (
+                "Has seleccionado:\n\n• "
+                + "\n• ".join(faltantes)
+                + "\n\n¿Deseas agregar otro componente faltante?"
+            )
+
+            return FlowResult(
+                reply,
+                next_state,
+                FLOW[next_state].get("buttons", []),
+            )
+
+    # --------------------------------------
     # Render dinámico del siguiente estado
     # --------------------------------------
 
-    next_flow = FLOW.get(next_state, {})
+        elif next_state == ChatState.CONFIRMAR_PRODUCTO:
+            reply = MessageBuilder.confirmar_producto(
+                venta.descripcion or "No disponible"
+            )
 
     reply = next_flow.get("text", "")
 
@@ -113,7 +162,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 venta.id_movimiento_bv
             )
             reply = MessageBuilder.confirmar_domicilio(
-                construir_domicilio(domicilio)
+                construir_domicilio(domicilio, db)
             )
 
         elif next_state == ChatState.CONFIRMAR_FECHA:
@@ -124,7 +173,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         elif next_state == ChatState.CONFIRMAR_PRODUCTO:
             reply = MessageBuilder.confirmar_producto(
-                venta.descripcion or "No disponible"
+                venta.sku_bitacora_v or "No disponible"
             )
 
     return FlowResult(
