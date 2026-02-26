@@ -67,6 +67,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         next_state = result.next_state
         buttons = result.buttons
         previous_state = result.previous_state
+        print(f"DEBUG: next_state={next_state}, previous_state={previous_state}, buttons={buttons}")
 
         # 💾 persistencia
         update_session(
