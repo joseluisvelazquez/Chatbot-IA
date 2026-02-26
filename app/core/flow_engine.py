@@ -64,30 +64,32 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         # Pasamos directo a confirmar nombre
         next_state = ChatState.CONFIRMAR_NOMBRE
 
-        reply = MessageBuilder.confirmar_nombre(
-            construir_nombre(venta)
-        )
-
-        return FlowResult(
-            reply,
-            next_state,
-            FLOW[next_state].get("buttons", []),
-        )
-
+        
     # --------------------------------------
     # Transiciones normales
     # --------------------------------------
-    if detected_intent in flow.get("options", {}):
+    elif detected_intent in flow.get("options", {}):
         next_state = flow["options"][detected_intent]
+
+        # Guardar estado anterior si vamos a inconsistencia o similares
+        if next_state in [
+            ChatState.INCONSISTENCIA,
+            ChatState.FUERA_DE_FLUJO,
+            ChatState.ACLARACION,
+            ChatState.LLAMADA,
+        ]:
+            previous_state = session.state
 
         if next_state == "__RESUME__":
             next_state = ChatState(previous_state) if previous_state else ChatState.INICIO
 
     elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other":
         next_state = DEFAULT_TRANSITIONS[detected_intent]
+        previous_state = session.state
 
     else:
         next_state = ChatState.FUERA_DE_FLUJO
+        previous_state = session.state
 
     # --------------------------------------
     # Manejo especial: Componentes faltantes
@@ -133,16 +135,16 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 reply,
                 next_state,
                 FLOW[next_state].get("buttons", []),
+                previous_state,
             )
 
     # --------------------------------------
     # Render dinámico del siguiente estado
     # --------------------------------------
 
-        elif next_state == ChatState.CONFIRMAR_PRODUCTO:
-            reply = MessageBuilder.confirmar_producto(
-                venta.descripcion or "No disponible"
-            )
+        
+
+    next_flow = FLOW.get(next_state)
 
     reply = next_flow.get("text", "")
 
@@ -175,9 +177,13 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply = MessageBuilder.confirmar_producto(
                 venta.sku_bitacora_v or "No disponible"
             )
+        
 
+    
+    print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
     return FlowResult(
         reply,
         next_state,
         next_flow.get("buttons", []),
+        previous_state,
     )
