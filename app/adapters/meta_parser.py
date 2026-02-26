@@ -1,4 +1,6 @@
-def build_meta_buttons(buttons: list): # Convierte la lista de botones del flujo a formato Meta
+def build_meta_buttons(
+    buttons: list,
+):  # Convierte la lista de botones del flujo a formato Meta
     return [
         {
             "type": "reply",

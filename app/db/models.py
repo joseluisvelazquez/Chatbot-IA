@@ -3,24 +3,51 @@ import datetime
 import decimal
 import enum
 
-from sqlalchemy import Column, DECIMAL, Date, DateTime, Double, Enum, ForeignKeyConstraint, Index, Integer, String, TIMESTAMP, Table, Text, Time, text
-from sqlalchemy.dialects.mysql import ENUM, FLOAT, INTEGER, LONGTEXT, MEDIUMTEXT, TEXT, TINYINT, TINYTEXT, VARCHAR
+from sqlalchemy import (
+    Column,
+    DECIMAL,
+    Date,
+    DateTime,
+    Double,
+    Enum,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    TIMESTAMP,
+    Table,
+    Text,
+    Time,
+    text,
+)
+from sqlalchemy.dialects.mysql import (
+    ENUM,
+    FLOAT,
+    INTEGER,
+    LONGTEXT,
+    MEDIUMTEXT,
+    TEXT,
+    TINYINT,
+    TINYTEXT,
+    VARCHAR,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 
 class Base(DeclarativeBase):
     pass
 
 
 class SolicitudesCambioUrgencia(str, enum.Enum):
-    MUY_URGENTE = 'Muy Urgente'
-    URGENTE = 'Urgente'
-    MODERADA = 'Moderada'
-    NO_URGENTE = 'No Urgente'
-    POCO_URGENTE = 'Poco Urgente'
+    MUY_URGENTE = "Muy Urgente"
+    URGENTE = "Urgente"
+    MODERADA = "Moderada"
+    NO_URGENTE = "No Urgente"
+    POCO_URGENTE = "Poco Urgente"
 
 
 class AdjuntosColaboradores(Base):
-    __tablename__ = 'adjuntos_colaboradores'
+    __tablename__ = "adjuntos_colaboradores"
 
     id_adj_col: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_ac: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -30,26 +57,28 @@ class AdjuntosColaboradores(Base):
 
 
 t_adjuntos_comprobante_salida = Table(
-    'adjuntos_comprobante_salida', Base.metadata,
-    Column('id_comp', Integer, nullable=False),
-    Column('id_emp_comp_s', Integer),
-    Column('no_serie', VARCHAR(50)),
-    Column('comprobante', TEXT),
-    Column('fecha', Date)
+    "adjuntos_comprobante_salida",
+    Base.metadata,
+    Column("id_comp", Integer, nullable=False),
+    Column("id_emp_comp_s", Integer),
+    Column("no_serie", VARCHAR(50)),
+    Column("comprobante", TEXT),
+    Column("fecha", Date),
 )
 
 
 t_adjuntos_soporte_tecnico = Table(
-    'adjuntos_soporte_tecnico', Base.metadata,
-    Column('id_adjunto_s', Integer, nullable=False),
-    Column('id_emp_adj_s', Integer),
-    Column('nombre_archivo', TEXT),
-    Column('id_movimiento_adj', VARCHAR(15))
+    "adjuntos_soporte_tecnico",
+    Base.metadata,
+    Column("id_adjunto_s", Integer, nullable=False),
+    Column("id_emp_adj_s", Integer),
+    Column("nombre_archivo", TEXT),
+    Column("id_movimiento_adj", VARCHAR(15)),
 )
 
 
 class AdjuntosSucursalMovil(Base):
-    __tablename__ = 'adjuntos_sucursal_movil'
+    __tablename__ = "adjuntos_sucursal_movil"
 
     id_adjunt_vh: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_adv: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -59,7 +88,7 @@ class AdjuntosSucursalMovil(Base):
 
 
 class BitacoraActualizacionPreciosUtilidades(Base):
-    __tablename__ = 'bitacora_actualizacion_precios_utilidades'
+    __tablename__ = "bitacora_actualizacion_precios_utilidades"
 
     id_registro: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_compra: Mapped[Optional[int]] = mapped_column(Integer)
@@ -73,27 +102,33 @@ class BitacoraActualizacionPreciosUtilidades(Base):
 
 
 class BitacoraActualizacionProducto(Base):
-    __tablename__ = 'bitacora_actualizacion_producto'
+    __tablename__ = "bitacora_actualizacion_producto"
 
     id_act_prod: Mapped[int] = mapped_column(Integer, primary_key=True)
     estado_proceso: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
     mensaje_error: Mapped[Optional[str]] = mapped_column(TEXT)
     sku_producto: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
-    fecha_creacion: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'))
+    fecha_creacion: Mapped[Optional[datetime.datetime]] = mapped_column(
+        TIMESTAMP, server_default=text("CURRENT_TIMESTAMP")
+    )
 
 
 class BitacoraActualizacionResguardos(Base):
-    __tablename__ = 'bitacora_actualizacion_resguardos'
+    __tablename__ = "bitacora_actualizacion_resguardos"
 
     id_actualizacion: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku: Mapped[str] = mapped_column(String(45), nullable=False)
     estatus: Mapped[int] = mapped_column(Integer, nullable=False)
     mensaje: Mapped[str] = mapped_column(Text, nullable=False)
-    fecha_actualizacion: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
+    fecha_actualizacion: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
 
 
 class BitacoraInventario(Base):
-    __tablename__ = 'bitacora_inventario'
+    __tablename__ = "bitacora_inventario"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_b_inv: Mapped[Optional[int]] = mapped_column(Integer)
@@ -117,15 +152,19 @@ class BitacoraInventario(Base):
 
 
 class BitacoraVentas(Base):
-    __tablename__ = 'bitacora_ventas'
+    __tablename__ = "bitacora_ventas"
 
     id_venta_b: Mapped[int] = mapped_column(Integer, primary_key=True)
-    devolucion: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    devolucion: Mapped[int] = mapped_column(
+        TINYINT(1), nullable=False, server_default=text("'0'")
+    )
     serie: Mapped[str] = mapped_column(VARCHAR(50), nullable=False)
     id_emp_bv: Mapped[Optional[int]] = mapped_column(Integer)
     id_suc_bv: Mapped[Optional[int]] = mapped_column(Integer)
     id_movimiento_bv: Mapped[Optional[str]] = mapped_column(VARCHAR(11))
-    id_anticipo_bv: Mapped[Optional[str]] = mapped_column(VARCHAR(45), server_default=text("'0'"))
+    id_anticipo_bv: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(45), server_default=text("'0'")
+    )
     tipo_movimiento: Mapped[Optional[int]] = mapped_column(Integer)
     no_cuenta: Mapped[Optional[str]] = mapped_column(VARCHAR(11))
     identificador: Mapped[Optional[str]] = mapped_column(VARCHAR(20))
@@ -143,7 +182,9 @@ class BitacoraVentas(Base):
     cantidad: Mapped[Optional[str]] = mapped_column(TEXT)
     medida: Mapped[Optional[str]] = mapped_column(VARCHAR(10))
     precio_unitario: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
-    precio_unitario_s_iva: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
+    precio_unitario_s_iva: Mapped[Optional[decimal.Decimal]] = mapped_column(
+        DECIMAL(13, 2)
+    )
     total_s_iva: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     iva: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     total_c_iva: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
@@ -151,13 +192,21 @@ class BitacoraVentas(Base):
     pago: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     cambio: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     metodo_pago: Mapped[Optional[str]] = mapped_column(TEXT)
-    p_comision: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(10, 0), server_default=text("'0'"))
-    t_comision: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(10, 0), server_default=text("'0'"))
+    p_comision: Mapped[Optional[decimal.Decimal]] = mapped_column(
+        DECIMAL(10, 0), server_default=text("'0'")
+    )
+    t_comision: Mapped[Optional[decimal.Decimal]] = mapped_column(
+        DECIMAL(10, 0), server_default=text("'0'")
+    )
     apartado: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
     contado: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
     credito: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
-    liquidacion: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
-    cancelacion: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
+    liquidacion: Mapped[Optional[int]] = mapped_column(
+        Integer, server_default=text("'0'")
+    )
+    cancelacion: Mapped[Optional[int]] = mapped_column(
+        Integer, server_default=text("'0'")
+    )
     fecha_venta: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
     usuario: Mapped[Optional[str]] = mapped_column(TEXT)
     corte: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
@@ -165,11 +214,13 @@ class BitacoraVentas(Base):
     folio: Mapped[Optional[str]] = mapped_column(VARCHAR(50))
     subsidio: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
 
-    ventas_documentos: Mapped[list['VentasDocumentos']] = relationship('VentasDocumentos', back_populates='bitacora_ventas')
+    ventas_documentos: Mapped[list["VentasDocumentos"]] = relationship(
+        "VentasDocumentos", back_populates="bitacora_ventas"
+    )
 
 
 class Cancelaciones(Base):
-    __tablename__ = 'cancelaciones'
+    __tablename__ = "cancelaciones"
 
     id_cancelacion: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_mov_cancelacion: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
@@ -181,7 +232,7 @@ class Cancelaciones(Base):
 
 
 class CarteraCuentasTemp(Base):
-    __tablename__ = 'cartera_cuentas_temp'
+    __tablename__ = "cartera_cuentas_temp"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -189,17 +240,25 @@ class CarteraCuentasTemp(Base):
     atrasos: Mapped[decimal.Decimal] = mapped_column(DECIMAL(13, 2), nullable=False)
     cod_cli: Mapped[str] = mapped_column(String(45), nullable=False)
     cuenta: Mapped[str] = mapped_column(String(200), nullable=False)
-    importe_renta: Mapped[decimal.Decimal] = mapped_column(DECIMAL(13, 2), nullable=False)
+    importe_renta: Mapped[decimal.Decimal] = mapped_column(
+        DECIMAL(13, 2), nullable=False
+    )
     nombre_completo: Mapped[str] = mapped_column(Text, nullable=False)
-    total_vencido: Mapped[decimal.Decimal] = mapped_column(DECIMAL(13, 2), nullable=False)
-    fecha_modifica: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
+    total_vencido: Mapped[decimal.Decimal] = mapped_column(
+        DECIMAL(13, 2), nullable=False
+    )
+    fecha_modifica: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
     nombre_usuario_modifica: Mapped[Optional[str]] = mapped_column(Text)
     nombre_usuario_gestor: Mapped[Optional[str]] = mapped_column(String(45))
     nombre_resumido: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class Categorias(Base):
-    __tablename__ = 'categorias'
+    __tablename__ = "categorias"
 
     id_categoria: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     id_emp: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -207,11 +266,11 @@ class Categorias(Base):
 
 
 class ChatSessions(Base):
-    __tablename__ = 'chat_sessions'
+    __tablename__ = "chat_sessions"
     __table_args__ = (
-        Index('idx_folio', 'folio'),
-        Index('idx_phone', 'phone'),
-        Index('uq_chat_phone', 'phone', unique=True)
+        Index("idx_folio", "folio"),
+        Index("idx_phone", "phone"),
+        Index("uq_chat_phone", "phone", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -220,16 +279,16 @@ class ChatSessions(Base):
     folio: Mapped[Optional[str]] = mapped_column(VARCHAR(50))
     previous_state: Mapped[Optional[str]] = mapped_column(VARCHAR(50))
     last_message: Mapped[Optional[str]] = mapped_column(TEXT)
-    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=text('CURRENT_TIMESTAMP'))
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime, server_default=text("CURRENT_TIMESTAMP")
+    )
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     last_message_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
 
 
 class Clientes(Base):
-    __tablename__ = 'clientes'
-    __table_args__ = (
-        Index('id_cliente', 'id_cliente'),
-    )
+    __tablename__ = "clientes"
+    __table_args__ = (Index("id_cliente", "id_cliente"),)
 
     id_cliente: Mapped[int] = mapped_column(Integer, primary_key=True)
     cod_cliente: Mapped[str] = mapped_column(VARCHAR(45), nullable=False)
@@ -291,7 +350,7 @@ class Clientes(Base):
 
 
 class ClientesAval(Base):
-    __tablename__ = 'clientes_aval'
+    __tablename__ = "clientes_aval"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     no_cuenta: Mapped[str] = mapped_column(VARCHAR(11), nullable=False)
@@ -303,7 +362,7 @@ class ClientesAval(Base):
 
 
 class ClientesCreditoDirecto(Base):
-    __tablename__ = 'clientes_credito_directo'
+    __tablename__ = "clientes_credito_directo"
 
     id_credito: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_cd: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -316,7 +375,7 @@ class ClientesCreditoDirecto(Base):
 
 
 class Colaboradores(Base):
-    __tablename__ = 'colaboradores'
+    __tablename__ = "colaboradores"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     nombre_resumido: Mapped[str] = mapped_column(TEXT, nullable=False)
@@ -355,15 +414,19 @@ class Colaboradores(Base):
     cuenta_bancaria: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
     institucion_bancaria: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
     last_login: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
-    image: Mapped[Optional[str]] = mapped_column(VARCHAR(255), server_default=text("'no_image.jpg'"))
+    image: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(255), server_default=text("'no_image.jpg'")
+    )
 
 
 class Compra(Base):
-    __tablename__ = 'compra'
+    __tablename__ = "compra"
 
     id_compra: Mapped[int] = mapped_column(Integer, primary_key=True)
     estatus: Mapped[int] = mapped_column(Integer, nullable=False)
-    estatus_nc: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("'0'"))
+    estatus_nc: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("'0'")
+    )
     id_movimiento_c: Mapped[Optional[str]] = mapped_column(VARCHAR(11))
     sku_compra: Mapped[Optional[str]] = mapped_column(TEXT)
     codigo_b_compra: Mapped[Optional[str]] = mapped_column(VARCHAR(20))
@@ -392,7 +455,7 @@ class Compra(Base):
 
 
 class ComprasComprobantesFiscales(Base):
-    __tablename__ = 'compras_comprobantes_fiscales'
+    __tablename__ = "compras_comprobantes_fiscales"
 
     id_comp_fiscal: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_comp_fiscal: Mapped[Optional[int]] = mapped_column(Integer)
@@ -402,7 +465,7 @@ class ComprasComprobantesFiscales(Base):
 
 
 class ContactosProveedor(Base):
-    __tablename__ = 'contactos_proveedor'
+    __tablename__ = "contactos_proveedor"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_cprov: Mapped[Optional[int]] = mapped_column(Integer)
@@ -415,11 +478,17 @@ class ContactosProveedor(Base):
 
 
 class CortesCaja(Base):
-    __tablename__ = 'cortes_caja'
+    __tablename__ = "cortes_caja"
 
     id_corte: Mapped[int] = mapped_column(Integer, primary_key=True)
-    fecha_inicio: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
-    fecha_final: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    fecha_inicio: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
+    fecha_final: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
     usuario: Mapped[str] = mapped_column(Text, nullable=False)
     generado_por: Mapped[str] = mapped_column(Text, nullable=False)
     corte_de: Mapped[str] = mapped_column(String(55), nullable=False)
@@ -428,7 +497,7 @@ class CortesCaja(Base):
 
 
 class CortesRelacionCuentas(Base):
-    __tablename__ = 'cortes_relacion_cuentas'
+    __tablename__ = "cortes_relacion_cuentas"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     gestor: Mapped[str] = mapped_column(TEXT, nullable=False)
@@ -436,7 +505,7 @@ class CortesRelacionCuentas(Base):
 
 
 class Cotizaciones(Base):
-    __tablename__ = 'cotizaciones'
+    __tablename__ = "cotizaciones"
 
     id_cotiz: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_cotiz: Mapped[Optional[int]] = mapped_column(Integer)
@@ -459,15 +528,17 @@ class Cotizaciones(Base):
 
 
 class Cuentas(Base):
-    __tablename__ = 'cuentas'
-    __table_args__ = (
-        Index('cuenta', 'cuenta'),
-    )
+    __tablename__ = "cuentas"
+    __table_args__ = (Index("cuenta", "cuenta"),)
 
     id_cuenta: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_suc_cuenta: Mapped[int] = mapped_column(Integer, nullable=False)
-    estado_act: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("'0'"))
-    orden_servicio: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    estado_act: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("'0'")
+    )
+    orden_servicio: Mapped[int] = mapped_column(
+        TINYINT(1), nullable=False, server_default=text("'0'")
+    )
     fecha_venta_domicilio: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     id_emp_cuenta: Mapped[Optional[int]] = mapped_column(Integer)
     fecha_venta: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
@@ -506,7 +577,7 @@ class Cuentas(Base):
 
 
 class CuentasComprobantes(Base):
-    __tablename__ = 'cuentas_comprobantes'
+    __tablename__ = "cuentas_comprobantes"
 
     id_comprobante: Mapped[int] = mapped_column(Integer, primary_key=True)
     codigo_cliente: Mapped[str] = mapped_column(VARCHAR(45), nullable=False)
@@ -516,7 +587,7 @@ class CuentasComprobantes(Base):
 
 
 class Departamentos(Base):
-    __tablename__ = 'departamentos'
+    __tablename__ = "departamentos"
 
     id_depto: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_depto: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -524,25 +595,39 @@ class Departamentos(Base):
 
 
 class DescuentosBitacora(Base):
-    __tablename__ = 'descuentos_bitacora'
+    __tablename__ = "descuentos_bitacora"
 
     id_desc: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_descuento: Mapped[int] = mapped_column(Integer, nullable=False)
     sku: Mapped[str] = mapped_column(VARCHAR(20), nullable=False)
     descripcion: Mapped[str] = mapped_column(TEXT, nullable=False)
-    utilidad_deseada: Mapped[decimal.Decimal] = mapped_column(DECIMAL(13, 3), nullable=False)
-    utilidad_minima: Mapped[decimal.Decimal] = mapped_column(DECIMAL(13, 3), nullable=False)
-    precio_inicial: Mapped[decimal.Decimal] = mapped_column(DECIMAL(13, 2), nullable=False)
-    descuento_minimo: Mapped[decimal.Decimal] = mapped_column(DECIMAL(13, 2), nullable=False)
-    precio_descuento: Mapped[decimal.Decimal] = mapped_column(DECIMAL(13, 2), nullable=False)
+    utilidad_deseada: Mapped[decimal.Decimal] = mapped_column(
+        DECIMAL(13, 3), nullable=False
+    )
+    utilidad_minima: Mapped[decimal.Decimal] = mapped_column(
+        DECIMAL(13, 3), nullable=False
+    )
+    precio_inicial: Mapped[decimal.Decimal] = mapped_column(
+        DECIMAL(13, 2), nullable=False
+    )
+    descuento_minimo: Mapped[decimal.Decimal] = mapped_column(
+        DECIMAL(13, 2), nullable=False
+    )
+    precio_descuento: Mapped[decimal.Decimal] = mapped_column(
+        DECIMAL(13, 2), nullable=False
+    )
     autorizo: Mapped[str] = mapped_column(TEXT, nullable=False)
-    fecha: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
+    fecha: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
     no_serie: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
 
 
 class DomiciliosCobro(Base):
-    __tablename__ = 'domicilios_cobro'
-    __table_args__ = {'comment': ' `gps`, `referencias`, `gestor`, `asesor`'}
+    __tablename__ = "domicilios_cobro"
+    __table_args__ = {"comment": " `gps`, `referencias`, `gestor`, `asesor`"}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     cod: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
@@ -568,13 +653,15 @@ class DomiciliosCobro(Base):
 
 
 class DomiciliosHorariosEntrega(Base):
-    __tablename__ = 'domicilios_horarios_entrega'
+    __tablename__ = "domicilios_horarios_entrega"
 
     id_d_h: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_d_h: Mapped[Optional[int]] = mapped_column(Integer)
     id_movimiento: Mapped[Optional[str]] = mapped_column(MEDIUMTEXT)
     suc_entrega: Mapped[Optional[str]] = mapped_column(MEDIUMTEXT)
-    tipo_de_vialidad: Mapped[Optional[str]] = mapped_column('tipo de vialidad', VARCHAR(60))
+    tipo_de_vialidad: Mapped[Optional[str]] = mapped_column(
+        "tipo de vialidad", VARCHAR(60)
+    )
     nombre_vialidad: Mapped[Optional[str]] = mapped_column(MEDIUMTEXT)
     no_ext: Mapped[Optional[str]] = mapped_column(VARCHAR(30))
     no_int: Mapped[Optional[str]] = mapped_column(VARCHAR(30))
@@ -594,7 +681,7 @@ class DomiciliosHorariosEntrega(Base):
 
 
 class Empresas(Base):
-    __tablename__ = 'empresas'
+    __tablename__ = "empresas"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     nombre_empresa: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
@@ -624,7 +711,7 @@ class Empresas(Base):
 
 
 class EntradaCompra(Base):
-    __tablename__ = 'entrada_compra'
+    __tablename__ = "entrada_compra"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     usuario: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
@@ -643,20 +730,20 @@ class EntradaCompra(Base):
 
 
 class Estado(Base):
-    __tablename__ = 'estado'
+    __tablename__ = "estado"
 
     idestado: Mapped[int] = mapped_column(Integer, primary_key=True)
     estado: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
 
 
 class EstadosCuenta(Base):
-    __tablename__ = 'estados_cuenta'
-    __table_args__ = (
-        Index('cuenta', 'cuenta_e'),
-    )
+    __tablename__ = "estados_cuenta"
+    __table_args__ = (Index("cuenta", "cuenta_e"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    corte: Mapped[int] = mapped_column(TINYINT, nullable=False, server_default=text("'0'"))
+    corte: Mapped[int] = mapped_column(
+        TINYINT, nullable=False, server_default=text("'0'")
+    )
     cuenta_e: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
     id_item: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
     producto_s: Mapped[Optional[str]] = mapped_column(TEXT)
@@ -674,13 +761,13 @@ class EstadosCuenta(Base):
 
 
 class EstadosCuentaDuplicate(Base):
-    __tablename__ = 'estados_cuenta_duplicate'
-    __table_args__ = (
-        Index('cuenta', 'cuenta_e'),
-    )
+    __tablename__ = "estados_cuenta_duplicate"
+    __table_args__ = (Index("cuenta", "cuenta_e"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    corte: Mapped[int] = mapped_column(TINYINT, nullable=False, server_default=text("'0'"))
+    corte: Mapped[int] = mapped_column(
+        TINYINT, nullable=False, server_default=text("'0'")
+    )
     cuenta_e: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
     id_item: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
     producto_s: Mapped[Optional[str]] = mapped_column(TEXT)
@@ -698,7 +785,7 @@ class EstadosCuentaDuplicate(Base):
 
 
 class EstudioSocioeconomico(Base):
-    __tablename__ = 'estudio_socioeconomico'
+    __tablename__ = "estudio_socioeconomico"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_empresa: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -742,11 +829,8 @@ class EstudioSocioeconomico(Base):
 
 
 class Inventario(Base):
-    __tablename__ = 'inventario'
-    __table_args__ = (
-        Index('serie', 'noserie'),
-        Index('sku', 'sku')
-    )
+    __tablename__ = "inventario"
+    __table_args__ = (Index("serie", "noserie"), Index("sku", "sku"))
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_inv: Mapped[Optional[int]] = mapped_column(Integer)
@@ -772,7 +856,7 @@ class Inventario(Base):
 
 
 class Marca(Base):
-    __tablename__ = 'marca'
+    __tablename__ = "marca"
 
     id_marca: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -780,7 +864,7 @@ class Marca(Base):
 
 
 class Matrices(Base):
-    __tablename__ = 'matrices'
+    __tablename__ = "matrices"
 
     id_matriz: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_empresa: Mapped[str] = mapped_column(VARCHAR(45), nullable=False)
@@ -799,14 +883,14 @@ class Matrices(Base):
 
 
 class Menu(Base):
-    __tablename__ = 'menu'
+    __tablename__ = "menu"
 
     id_menu: Mapped[int] = mapped_column(Integer, primary_key=True)
     menu: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
 
 
 class MetodosPago(Base):
-    __tablename__ = 'metodos_pago'
+    __tablename__ = "metodos_pago"
 
     id_metodo: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_mp: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -816,7 +900,7 @@ class MetodosPago(Base):
 
 
 class MotivosCancelacion(Base):
-    __tablename__ = 'motivos_cancelacion'
+    __tablename__ = "motivos_cancelacion"
 
     id_motivo: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_motivo: Mapped[Optional[int]] = mapped_column(Integer)
@@ -824,7 +908,7 @@ class MotivosCancelacion(Base):
 
 
 class NotaCredito(Base):
-    __tablename__ = 'nota_credito'
+    __tablename__ = "nota_credito"
 
     id_nota_c: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_nota: Mapped[Optional[int]] = mapped_column(Integer)
@@ -839,7 +923,7 @@ class NotaCredito(Base):
 
 
 class Permisos(Base):
-    __tablename__ = 'permisos'
+    __tablename__ = "permisos"
 
     id_p: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_per: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -854,10 +938,8 @@ class Permisos(Base):
 
 
 class PlanesPago(Base):
-    __tablename__ = 'planes_pago'
-    __table_args__ = (
-        Index('fecha_inicio', 'fecha_inicio', unique=True),
-    )
+    __tablename__ = "planes_pago"
+    __table_args__ = (Index("fecha_inicio", "fecha_inicio", unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     fecha_inicio: Mapped[Optional[datetime.date]] = mapped_column(Date)
@@ -874,7 +956,7 @@ class PlanesPago(Base):
 
 
 class Poblacion(Base):
-    __tablename__ = 'poblacion'
+    __tablename__ = "poblacion"
 
     idPoblacion: Mapped[int] = mapped_column(Integer, primary_key=True)
     poblacion: Mapped[Optional[str]] = mapped_column(VARCHAR(95))
@@ -882,7 +964,7 @@ class Poblacion(Base):
 
 
 class PreciosProductoUnidad(Base):
-    __tablename__ = 'precios_producto_unidad'
+    __tablename__ = "precios_producto_unidad"
 
     id_prd_unidad: Mapped[int] = mapped_column(Integer, primary_key=True)
     codigo_producto: Mapped[Optional[str]] = mapped_column(VARCHAR(60))
@@ -890,17 +972,23 @@ class PreciosProductoUnidad(Base):
     costo_sin_iva: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     utilidad_deseada: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 3))
     utilidad_minima: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 3))
-    precio_contado_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
+    precio_contado_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(
+        DECIMAL(13, 2)
+    )
     plazo_x_unidad: Mapped[Optional[str]] = mapped_column(VARCHAR(20))
-    porcentaje_interes_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
+    porcentaje_interes_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(
+        DECIMAL(13, 2)
+    )
     enganche_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
-    precio_credito_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
+    precio_credito_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(
+        DECIMAL(13, 2)
+    )
     pago_sem_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     inc_sem_x_unidad: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
 
 
 class PreciosProductos(Base):
-    __tablename__ = 'precios_productos'
+    __tablename__ = "precios_productos"
 
     id_precio: Mapped[int] = mapped_column(Integer, primary_key=True)
     codigo_producto: Mapped[str] = mapped_column(VARCHAR(60), nullable=False)
@@ -910,18 +998,20 @@ class PreciosProductos(Base):
     utilidad_minima: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 3))
     precio_contado: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     plazo: Mapped[Optional[str]] = mapped_column(VARCHAR(10))
-    porcentaje_interes: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
+    porcentaje_interes: Mapped[Optional[decimal.Decimal]] = mapped_column(
+        DECIMAL(13, 2)
+    )
     enganche: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     precio_credito: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
     pago_semanal: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
-    incremento_semanal: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
+    incremento_semanal: Mapped[Optional[decimal.Decimal]] = mapped_column(
+        DECIMAL(13, 2)
+    )
 
 
 class Productos(Base):
-    __tablename__ = 'productos'
-    __table_args__ = (
-        Index('codigo_prod', 'codigo_producto'),
-    )
+    __tablename__ = "productos"
+    __table_args__ = (Index("codigo_prod", "codigo_producto"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_p: Mapped[Optional[int]] = mapped_column(Integer)
@@ -942,7 +1032,7 @@ class Productos(Base):
 
 
 class ProductosKit(Base):
-    __tablename__ = 'productos_kit'
+    __tablename__ = "productos_kit"
 
     id_kit: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku: Mapped[Optional[str]] = mapped_column(VARCHAR(20))
@@ -953,9 +1043,9 @@ class ProductosKit(Base):
 
 
 class ProductosKits(Base):
-    __tablename__ = 'productos_kits'
+    __tablename__ = "productos_kits"
     __table_args__ = (
-        Index('serie_kit', 'noserie_kit', mysql_length={'noserie_kit': 30}),
+        Index("serie_kit", "noserie_kit", mysql_length={"noserie_kit": 30}),
     )
 
     id_kit: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -965,7 +1055,7 @@ class ProductosKits(Base):
 
 
 class Proveedor(Base):
-    __tablename__ = 'proveedor'
+    __tablename__ = "proveedor"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_suc_prov: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -989,7 +1079,7 @@ class Proveedor(Base):
 
 
 class Puestos(Base):
-    __tablename__ = 'puestos'
+    __tablename__ = "puestos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_puesto: Mapped[str] = mapped_column(VARCHAR(20), nullable=False)
@@ -1003,7 +1093,7 @@ class Puestos(Base):
 
 
 class ReferenciasPersonales(Base):
-    __tablename__ = 'referencias_personales'
+    __tablename__ = "referencias_personales"
 
     id_ref: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_ref: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1023,7 +1113,7 @@ class ReferenciasPersonales(Base):
 
 
 class Remisiones(Base):
-    __tablename__ = 'remisiones'
+    __tablename__ = "remisiones"
 
     id_rem: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_movimiento: Mapped[str] = mapped_column(VARCHAR(45), nullable=False)
@@ -1036,15 +1126,21 @@ class Remisiones(Base):
     almacen_recepcion: Mapped[str] = mapped_column(TEXT, nullable=False)
     id_emp_rem: Mapped[Optional[int]] = mapped_column(Integer)
     estatus: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
-    entregado: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
+    entregado: Mapped[Optional[int]] = mapped_column(
+        Integer, server_default=text("'0'")
+    )
 
 
 class ResumenArrendamientos(Base):
-    __tablename__ = 'resumen_arrendamientos'
+    __tablename__ = "resumen_arrendamientos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_resumen: Mapped[int] = mapped_column(Integer, nullable=False)
-    fecha_venta: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
+    fecha_venta: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
     id_movimiento: Mapped[str] = mapped_column(VARCHAR(40), nullable=False)
     cuenta: Mapped[str] = mapped_column(TEXT, nullable=False)
     cod_cliente: Mapped[str] = mapped_column(VARCHAR(40), nullable=False)
@@ -1058,7 +1154,7 @@ class ResumenArrendamientos(Base):
 
 
 class ResumenRentasArrendamientos(Base):
-    __tablename__ = 'resumen_rentas_arrendamientos'
+    __tablename__ = "resumen_rentas_arrendamientos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_movimiento: Mapped[str] = mapped_column(TEXT, nullable=False)
@@ -1068,7 +1164,7 @@ class ResumenRentasArrendamientos(Base):
 
 
 class Saldos(Base):
-    __tablename__ = 'saldos'
+    __tablename__ = "saldos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_s: Mapped[Optional[int]] = mapped_column(Integer)
@@ -1086,21 +1182,31 @@ class Saldos(Base):
 
 
 class SolicitudesCambio(Base):
-    __tablename__ = 'solicitudes_cambio'
+    __tablename__ = "solicitudes_cambio"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     usuario: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
     razon: Mapped[str] = mapped_column(TEXT, nullable=False)
     modulo: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
-    urgencia: Mapped[SolicitudesCambioUrgencia] = mapped_column(Enum(SolicitudesCambioUrgencia, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
+    urgencia: Mapped[SolicitudesCambioUrgencia] = mapped_column(
+        Enum(
+            SolicitudesCambioUrgencia,
+            values_callable=lambda cls: [member.value for member in cls],
+        ),
+        nullable=False,
+    )
     descripcion: Mapped[str] = mapped_column(TEXT, nullable=False)
-    fecha: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
-    estado: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    fecha: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    estado: Mapped[int] = mapped_column(
+        TINYINT(1), nullable=False, server_default=text("'0'")
+    )
     submodulo: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
 
 
 class SolicitudesProductos(Base):
-    __tablename__ = 'solicitudes_productos'
+    __tablename__ = "solicitudes_productos"
 
     id_solicitud: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_mov_solicitud: Mapped[str] = mapped_column(VARCHAR(20), nullable=False)
@@ -1116,7 +1222,7 @@ class SolicitudesProductos(Base):
 
 
 class SoporteTecnico(Base):
-    __tablename__ = 'soporte_tecnico'
+    __tablename__ = "soporte_tecnico"
 
     id_soporte: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_soporte: Mapped[Optional[int]] = mapped_column(Integer)
@@ -1145,14 +1251,16 @@ class SoporteTecnico(Base):
     estatus_encendido: Mapped[Optional[str]] = mapped_column(VARCHAR(5))
     condiciones: Mapped[Optional[str]] = mapped_column(TEXT)
     componentes: Mapped[Optional[str]] = mapped_column(TEXT)
-    estatus_terminacion: Mapped[Optional[int]] = mapped_column(Integer, server_default=text("'0'"))
+    estatus_terminacion: Mapped[Optional[int]] = mapped_column(
+        Integer, server_default=text("'0'")
+    )
     fecha_solicitud: Mapped[Optional[datetime.date]] = mapped_column(Date)
     fecha_terminacion: Mapped[Optional[datetime.date]] = mapped_column(Date)
     tecnico: Mapped[Optional[str]] = mapped_column(TEXT)
 
 
 class SubAlmacen(Base):
-    __tablename__ = 'sub_almacen'
+    __tablename__ = "sub_almacen"
 
     id_sub_almacen: Mapped[int] = mapped_column(Integer, primary_key=True)
     sub_almacen: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1160,7 +1268,7 @@ class SubAlmacen(Base):
 
 
 class SubAlmacenXAlmacen(Base):
-    __tablename__ = 'sub_almacen_x_almacen'
+    __tablename__ = "sub_almacen_x_almacen"
 
     id_sub_almacen: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp_sb: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1169,7 +1277,7 @@ class SubAlmacenXAlmacen(Base):
 
 
 class SubMenu(Base):
-    __tablename__ = 'sub_menu'
+    __tablename__ = "sub_menu"
 
     id_sub_menu: Mapped[int] = mapped_column(Integer, primary_key=True)
     sub_menu: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
@@ -1177,7 +1285,7 @@ class SubMenu(Base):
 
 
 class SucursalFija(Base):
-    __tablename__ = 'sucursal_fija'
+    __tablename__ = "sucursal_fija"
 
     id_suc_f: Mapped[str] = mapped_column(TEXT, primary_key=True)
     id_emp_sf: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1199,7 +1307,7 @@ class SucursalFija(Base):
 
 
 class SucursalMovil(Base):
-    __tablename__ = 'sucursal_movil'
+    __tablename__ = "sucursal_movil"
 
     id_suc_m: Mapped[int] = mapped_column(Integer, primary_key=True)
     estatus: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1219,7 +1327,7 @@ class SucursalMovil(Base):
 
 
 class TicketsSoporteWeb(Base):
-    __tablename__ = 'tickets_soporte_web'
+    __tablename__ = "tickets_soporte_web"
 
     id_ticket: Mapped[int] = mapped_column(Integer, primary_key=True)
     reg_ticket: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1227,7 +1335,9 @@ class TicketsSoporteWeb(Base):
     cod_colab: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
     modulo: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
     descripcion: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
-    fecha_abierto: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    fecha_abierto: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
     adjuntos: Mapped[Optional[str]] = mapped_column(VARCHAR(255))
     responsable: Mapped[Optional[str]] = mapped_column(VARCHAR(255))
     prioridad: Mapped[Optional[int]] = mapped_column(Integer)
@@ -1237,16 +1347,22 @@ class TicketsSoporteWeb(Base):
 
 
 class TiposCambio(Base):
-    __tablename__ = 'tipos_cambio'
+    __tablename__ = "tipos_cambio"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    hora: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
-    tipo_cambio: Mapped[decimal.Decimal] = mapped_column(Double(asdecimal=True), nullable=False)
+    hora: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
+    tipo_cambio: Mapped[decimal.Decimal] = mapped_column(
+        Double(asdecimal=True), nullable=False
+    )
     moneda: Mapped[str] = mapped_column(VARCHAR(30), nullable=False)
 
 
 class Transacciones(Base):
-    __tablename__ = 'transacciones'
+    __tablename__ = "transacciones"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     id_emp: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1269,7 +1385,7 @@ class Transacciones(Base):
 
 
 class UsuariosMaster(Base):
-    __tablename__ = 'usuarios_master'
+    __tablename__ = "usuarios_master"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     nombre: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
@@ -1286,7 +1402,7 @@ class UsuariosMaster(Base):
 
 
 class UsuariosXEmpresa(Base):
-    __tablename__ = 'usuarios_x_empresa'
+    __tablename__ = "usuarios_x_empresa"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     nombre_empresa: Mapped[Optional[str]] = mapped_column(TEXT)
@@ -1295,24 +1411,35 @@ class UsuariosXEmpresa(Base):
 
 
 class VerificacionCuenta(Base):
-    __tablename__ = 'verificacion_cuenta'
+    __tablename__ = "verificacion_cuenta"
     __table_args__ = (
-        Index('idx_verificacion_no_cuenta', 'no_cuenta'),
-        Index('uq_verificacion_no_cuenta', 'no_cuenta', unique=True)
+        Index("idx_verificacion_no_cuenta", "no_cuenta"),
+        Index("uq_verificacion_no_cuenta", "no_cuenta", unique=True),
     )
 
     id_verificacion: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     no_cuenta: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
     json: Mapped[Optional[str]] = mapped_column(LONGTEXT)
 
 
 class VentasDocumentos(Base):
-    __tablename__ = 'ventas_documentos'
+    __tablename__ = "ventas_documentos"
     __table_args__ = (
-        ForeignKeyConstraint(['id_venta_b'], ['bitacora_ventas.id_venta_b'], ondelete='CASCADE', name='fk_venta_documento'),
-        Index('fk_venta_documento', 'id_venta_b')
+        ForeignKeyConstraint(
+            ["id_venta_b"],
+            ["bitacora_ventas.id_venta_b"],
+            ondelete="CASCADE",
+            name="fk_venta_documento",
+        ),
+        Index("fk_venta_documento", "id_venta_b"),
     )
 
     id_documento: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -1323,6 +1450,10 @@ class VentasDocumentos(Base):
     extension: Mapped[str] = mapped_column(String(10), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     tamano_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    fecha_subida: Mapped[datetime.datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    fecha_subida: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
 
-    bitacora_ventas: Mapped['BitacoraVentas'] = relationship('BitacoraVentas', back_populates='ventas_documentos')
+    bitacora_ventas: Mapped["BitacoraVentas"] = relationship(
+        "BitacoraVentas", back_populates="ventas_documentos"
+    )

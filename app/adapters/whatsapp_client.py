@@ -2,16 +2,14 @@ import httpx
 from app.adapters.meta_parser import build_meta_buttons
 from app.config.settings import settings
 
-
-
 HEADERS = {
     "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
     "Content-Type": "application/json",
 }
 
 
-
 # ---------------- CORE SEND ----------------
+
 
 # Esta función se encarga de enviar la petición a Meta, y loguear la respuesta. Si Meta devuelve un error, se loguea pero no se trunca el bot, para evitar que problemas temporales con Meta afecten la experiencia del usuario.
 async def _send(payload: dict):
@@ -26,7 +24,7 @@ async def _send(payload: dict):
     print("STATUS:", response.status_code)
     print("RESPONSE:", response.text)
     print("=============================================\n")
-   
+
     # si Meta falla, no truenes el bot
     if response.status_code >= 400:
         print("⚠️ ERROR ENVIANDO A WHATSAPP")
@@ -35,6 +33,7 @@ async def _send(payload: dict):
 
 
 # ---------------- SENDERS ----------------
+
 
 # Estas funciones construyen el payload específico para cada tipo de mensaje (texto, botones, documentos), y llaman a _send para enviar la petición a Meta.
 async def send_text(phone: str, text: str):
@@ -78,6 +77,7 @@ async def send_document(phone: str, url: str, filename="archivo.pdf"):
 
 
 # ---------------- PUBLIC API ----------------
+
 
 # Esta es la función que se exporta para ser usada en el resto del código. Recibe el teléfono, el texto, los botones y/o el documento a enviar, y llama a las funciones específicas según corresponda.
 async def send_whatsapp_message(phone, text=None, buttons=None, document_url=None):
