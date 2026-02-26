@@ -16,6 +16,7 @@ from app.siga.siga_repository import (
 )
 from app.content.message_builder import MessageBuilder
 
+
 @dataclass
 class FlowResult:
     reply: str
@@ -23,18 +24,17 @@ class FlowResult:
     buttons: list
     previous_state: str | None = None
 
-def process_message(session, text: str, intent: str | None = None, db=None) -> FlowResult:
+
+def process_message(
+    session, text: str, intent: str | None = None, db=None
+) -> FlowResult:
 
     current_state = ChatState(session.state)
     previous_state = session.previous_state
     flow = FLOW.get(current_state)
 
     if not flow:
-        return FlowResult(
-            "Un asesor te contactará.",
-            ChatState.LLAMADA,
-            []
-        )
+        return FlowResult("Un asesor te contactará.", ChatState.LLAMADA, [])
 
     # --------------------------------------
     # Detectar intención
@@ -64,7 +64,6 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         # Pasamos directo a confirmar nombre
         next_state = ChatState.CONFIRMAR_NOMBRE
 
-        
     # --------------------------------------
     # Transiciones normales
     # --------------------------------------
@@ -81,7 +80,9 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             previous_state = session.state
 
         if next_state == "__RESUME__":
-            next_state = ChatState(previous_state) if previous_state else ChatState.INICIO
+            next_state = (
+                ChatState(previous_state) if previous_state else ChatState.INICIO
+            )
 
     elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other":
         next_state = DEFAULT_TRANSITIONS[detected_intent]
@@ -142,8 +143,6 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # Render dinámico del siguiente estado
     # --------------------------------------
 
-        
-
     next_flow = FLOW.get(next_state)
 
     reply = next_flow.get("text", "")
@@ -154,15 +153,10 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         venta = obtener_venta_por_folio(db, session.folio)
 
         if next_state == ChatState.CONFIRMAR_NOMBRE:
-            reply = MessageBuilder.confirmar_nombre(
-                construir_nombre(venta)
-            )
+            reply = MessageBuilder.confirmar_nombre(construir_nombre(venta))
 
         elif next_state == ChatState.CONFIRMAR_DOMICILIO:
-            domicilio = obtener_domicilio_por_movimiento(
-                db,
-                venta.id_movimiento_bv
-            )
+            domicilio = obtener_domicilio_por_movimiento(db, venta.id_movimiento_bv)
             reply = MessageBuilder.confirmar_domicilio(
                 construir_domicilio(domicilio, db)
             )
@@ -170,17 +164,18 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         elif next_state == ChatState.CONFIRMAR_FECHA:
             reply = MessageBuilder.confirmar_fecha(
                 venta.fecha_venta.strftime("%d/%m/%Y")
-                if venta.fecha_venta else "No disponible"
+                if venta.fecha_venta
+                else "No disponible"
             )
 
         elif next_state == ChatState.CONFIRMAR_PRODUCTO:
             reply = MessageBuilder.confirmar_producto(
                 venta.sku_bitacora_v or "No disponible"
             )
-        
 
-    
-    print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
+    print(
+        f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}"
+    )
     return FlowResult(
         reply,
         next_state,
