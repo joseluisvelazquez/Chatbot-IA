@@ -172,6 +172,10 @@ def process_message(
             reply = MessageBuilder.confirmar_producto(
                 venta.sku_bitacora_v or "No disponible"
             )
+        elif next_state == ChatState.CONFIRMAR_PAGO:
+            reply = MessageBuilder.confirmar_pago(
+                venta.importe or "No disponible"
+            )
 
     print(
         f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}"

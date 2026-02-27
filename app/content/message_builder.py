@@ -9,6 +9,9 @@ class MessageBuilder:
     @staticmethod
     def confirmar_producto(producto: str) -> str:
         return messages.CONFIRMAR_PRODUCTO.format(nombre_producto=producto)
+    @staticmethod
+    def confirmar_pago(pago: str) -> str:
+        return messages.CONFIRMAR_PAGO.format(importe_pago_inicial=pago)
 
     @staticmethod
     def confirmar_fecha(fecha: str) -> str:
