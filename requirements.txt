@@ -11,3 +11,4 @@ pytest
 sentry-sdk
 httpx
 pydantic_settings
+apscheduler

@@ -14,11 +14,9 @@ INICIO = (
 )
 
 CONFIRMAR_NOMBRE = "📝 ¿Tu nombre completo es *{nombre_completo}*?"
-CONFIRMAR_DOMICILIO = (
-    "🏠 ¿Tu domicilio es:\n\n"
-    "{domicilio_completo}\n"
-)
+CONFIRMAR_DOMICILIO = "🏠 ¿Tu domicilio es:\n\n" "{domicilio_completo}\n"
 CONFIRMAR_FECHA = "📆 ¿El día en que suscribiste tu contrato fue el *{fecha_venta}*?"
+
 CONFIRMAR_PRODUCTO = "🖥️🖨️ ¿El producto que adquiriste es una/un *{nombre_producto}*?"
 
 CONFIRMAR_COMPONENTES = (
@@ -50,14 +48,16 @@ INFO_METODOS_PAGO = (
     "💳 No olvides incluir este número *{numero_cuenta}* como concepto o referencia.\n\n"
     "Cada que hagas uno, deberás enviame tu comprobante por aquí 👇🏻 tan pronto como puedas para que lo aplique a tu estado de cuenta.\n\n"
     "¿Está claro o tienes alguna duda respecto a los métodos de pago?"
+)
 
+INFO_PLAN_3_MESES_DESCUENTO = (
+    "🎓 Tu estudiante ha sido acreedor a un descuento de *${subsidio}* por su buen desempeño académico.\n\n"
 )
 
 INFO_PLAN_3_MESES = (
-    "🎓 Tu estudiante ha sido acreedor a un descuento de *${subsidio}* por su buen desempeño académico.\n\n"
-    "💲Por lo que el saldo de tu cuenta es de *${saldo_3_meses}*.\n"
-    "⏳ Tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 🪙 13 pagos semanales (sugeridos) por *${importe_semanal_3m}*.\n\n"
-    "¿Tienes alguna duda respecto al plan de 3 meses?"   
+    "💲 El saldo de tu cuenta es de *${saldo_3_meses}*.\n\n"
+    "⏳ Tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) 🪙 por *${importe_semanal_3m}*.\n\n"
+    "¿Tienes alguna duda respecto al plan de 3 meses?"
 )
 
 INFO_OTROS_PLANES = (
@@ -83,6 +83,4 @@ INCONSISTENCIA = (
     "Un asesor te contactará para resolver la inconsistencia."
 )
 
-ACLARACION = (
-    "💬 Puedo ayudarte a aclarar tu duda o continuar el proceso."
-)
+ACLARACION = "💬 Puedo ayudarte a aclarar tu duda o continuar el proceso."

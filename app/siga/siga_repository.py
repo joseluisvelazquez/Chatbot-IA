@@ -1,23 +1,20 @@
 from sqlalchemy.orm import Session
-from app.db.models import BitacoraVentas, DomiciliosHorariosEntrega,Estado
+from app.db.models import BitacoraVentas, DomiciliosHorariosEntrega, Estado
 import unicodedata
+
 
 # ===============================
 # OBTENER VENTA POR FOLIO
 # ===============================
 def obtener_venta_por_folio(db: Session, folio: str) -> BitacoraVentas | None:
-    return (
-        db.query(BitacoraVentas)
-        .filter(BitacoraVentas.folio == folio)
-        .first()
-    )
+    return db.query(BitacoraVentas).filter(BitacoraVentas.folio == folio).first()
+
 
 # ===============================
 # OBTENER DOMICILIO POR MOVIMIENTO
 # ===============================
 def obtener_domicilio_por_movimiento(
-    db: Session,
-    id_movimiento: str
+    db: Session, id_movimiento: str
 ) -> DomiciliosHorariosEntrega | None:
 
     return (
@@ -26,15 +23,14 @@ def obtener_domicilio_por_movimiento(
         .first()
     )
 
+
 # ===============================
 # OBTENER DOMICILIO POR MOVIMIENTO
 # ===============================
-def obtener_estado(
-        db: Session,
-        idestado: str
-    ) -> Estado | None:
-    estado=db.query(Estado).filter(Estado.idestado == idestado).first()
+def obtener_estado(db: Session, idestado: str) -> Estado | None:
+    estado = db.query(Estado).filter(Estado.idestado == idestado).first()
     return estado.estado
+
 
 # ===============================
 # CONSTRUIR NOMBRE
@@ -42,11 +38,13 @@ def obtener_estado(
 def construir_nombre(venta: BitacoraVentas) -> str:
     return venta.nombre_completo or "No disponible"
 
+
 # ===============================
 # CONSTRUIR PRODUCTO
 # ===============================
 def construir_producto(venta: BitacoraVentas) -> str:
     return venta.sku_bitacora_v or "No disponible"
+
 
 # ===============================
 # CONSTRUIR FECHA
@@ -55,6 +53,7 @@ def construir_fecha(venta: BitacoraVentas) -> str:
     if not venta.fecha_venta:
         return "No disponible"
     return venta.fecha_venta.strftime("%d/%m/%Y")
+
 
 # ===============================
 # QUITAR CARACTERES
@@ -68,6 +67,7 @@ def limpiar_texto_danado(texto: str) -> str:
     texto = texto.encode("utf-8", "ignore").decode("utf-8")
     return texto
 
+
 # ===============================
 # TIPO DE VIALIDAD
 # ===============================
@@ -76,24 +76,25 @@ TIPO_VIALIDAD = {
     "02": "Andador",
     "03": "Avenida",
     "04": "Boulevard",
-    "05": "Calle", 
-    "06": "Callejón", 
+    "05": "Calle",
+    "06": "Callejón",
     "07": "Calzada",
     "08": "Cerrada",
-    "09": "Circuito",  
+    "09": "Circuito",
     "10": "Circunvalación",
-    "11": "Continuación", 
-    "12": "Corredor",    
-    "13": "Diagonal",  
-    "14": "Eje Vial", 
-    "15": "Pasaje", 
-    "16": "Peatonal",     
-    "17": "Periférico",  
-    "18": "Privada", 
-    "19": "Prolongación", 
-    "20": "Retorno",      
+    "11": "Continuación",
+    "12": "Corredor",
+    "13": "Diagonal",
+    "14": "Eje Vial",
+    "15": "Pasaje",
+    "16": "Peatonal",
+    "17": "Periférico",
+    "18": "Privada",
+    "19": "Prolongación",
+    "20": "Retorno",
     "21": "Viaducto",
 }
+
 
 # ===============================
 # ORDEN EN LOS NUMEROS DE ESTADO
@@ -102,6 +103,7 @@ def obtener_estado_abrev(estado: str) -> Estado | None:
     if not estado:
         return "Nimodillo"
     return Estado.estado
+
 
 # ===============================
 # ORDEN EN TIPO VIALIDAD
@@ -116,7 +118,10 @@ def obtener_tipo_vialidad(tipo):
 # ===============================
 # CONSTRUIR DOMICILIO COMPLETO
 # ===============================
-def construir_domicilio(domicilio: DomiciliosHorariosEntrega, db: Session,) -> str:
+def construir_domicilio(
+    domicilio: DomiciliosHorariosEntrega,
+    db: Session,
+) -> str:
     if not domicilio:
         return "No disponible"
     tipo = obtener_tipo_vialidad(domicilio.tipo_de_vialidad)
@@ -128,7 +133,7 @@ def construir_domicilio(domicilio: DomiciliosHorariosEntrega, db: Session,) -> s
     ciudad = (domicilio.ciudad or "").strip()
     referencias = (domicilio.referencias or "").strip()
 
-    estado = obtener_estado(db,domicilio.estado)
+    estado = obtener_estado(db, domicilio.estado)
 
     # Línea principal
     linea1 = f"{tipo} {nombre} {no_ext}".strip()

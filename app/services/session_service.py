@@ -47,7 +47,8 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None):
         )
 
         return session
-    
+
+
 def update_session(
     session: ChatSessions,
     state: str,

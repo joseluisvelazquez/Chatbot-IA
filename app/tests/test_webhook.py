@@ -28,7 +28,9 @@ def test_webhook_success(monkeypatch):
             None,  # ← document
         )
 
-    def fake_update_session(db, session, state, last_message, previous_state=None, message_id=None):
+    def fake_update_session(
+        db, session, state, last_message, previous_state=None, message_id=None
+    ):
         assert session.id == 1
         assert state == ChatState.CONFIRMAR_DOMICILIO.value
         assert last_message == "sí"

@@ -11,7 +11,6 @@ DEFAULT_TRANSITIONS = {
 
 
 FLOW = {
-
     ChatState.ESPERA: {
         "text": msg.ESPERA,
         "buttons": [],
@@ -20,7 +19,6 @@ FLOW = {
         },
         "auto_next": ChatState.INICIO,
     },
-
     ChatState.INICIO: {
         "text": msg.INICIO,
         "buttons": [
@@ -36,6 +34,26 @@ FLOW = {
         },
     },
 
+    ChatState.CONFIRMAR_FOLIO: {
+        "text": "",  
+        "buttons": [
+            {"id": "FOLIO_SI", "label": "✅ Sí"},
+            {"id": "FOLIO_NO", "label": "✏️ Cambiar"},
+        ],
+        "options": {
+            "FOLIO_SI": ChatState.CONFIRMAR_NOMBRE,
+            "FOLIO_NO": ChatState.CAMBIAR_FOLIO,
+        },
+    },
+
+    ChatState.CAMBIAR_FOLIO: {
+        "text": "✏️ Por favor envíame nuevamente tu folio.",
+        "buttons": [],
+        "options": {}
+    },
+
+    
+
     ChatState.CONFIRMAR_NOMBRE: {
         "text": msg.CONFIRMAR_NOMBRE,
         "buttons": [
@@ -46,10 +64,9 @@ FLOW = {
             "NOMBRE_SI": ChatState.CONFIRMAR_DOMICILIO,
             "affirmative": ChatState.CONFIRMAR_DOMICILIO,
             "NOMBRE_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA
+            "negative": ChatState.INCONSISTENCIA,
         },
     },
-
     ChatState.CONFIRMAR_DOMICILIO: {
         "text": msg.CONFIRMAR_DOMICILIO,
         "buttons": [
@@ -60,10 +77,9 @@ FLOW = {
             "DOM_SI": ChatState.CONFIRMAR_FECHA,
             "affirmative": ChatState.CONFIRMAR_FECHA,
             "DOM_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA
+            "negative": ChatState.INCONSISTENCIA,
         },
     },
-
     ChatState.CONFIRMAR_FECHA: {
         "text": msg.CONFIRMAR_FECHA,
         "buttons": [
@@ -74,10 +90,9 @@ FLOW = {
             "FECHA_SI": ChatState.CONFIRMAR_PRODUCTO,
             "affirmative": ChatState.CONFIRMAR_PRODUCTO,
             "FECHA_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA
+            "negative": ChatState.INCONSISTENCIA,
         },
     },
-
     ChatState.CONFIRMAR_PRODUCTO: {
         "text": msg.CONFIRMAR_PRODUCTO,
         "buttons": [
@@ -91,7 +106,6 @@ FLOW = {
             "negative": ChatState.INCONSISTENCIA,
         },
     },
-
     ChatState.CONFIRMAR_COMPONENTES: {
         "text": msg.CONFIRMAR_COMPONENTES,
         "buttons": [
@@ -101,12 +115,10 @@ FLOW = {
         "options": {
             "COMP_SI": ChatState.CONFIRMAR_PAGO_INICIAL,
             "affirmative": ChatState.CONFIRMAR_PAGO_INICIAL,
-
             "COMP_NO": ChatState.COMPONENTES_FALTANTES,
             "negative": ChatState.COMPONENTES_FALTANTES,
         },
     },
-
     ChatState.COMPONENTES_FALTANTES: {
         "text": "Selecciona el componente que faltó:",
         "buttons": [
@@ -128,7 +140,6 @@ FLOW = {
             "FALT_WIFI": ChatState.COMPONENTES_CONFIRMAR_FALTANTES,
         },
     },
-
     ChatState.COMPONENTES_CONFIRMAR_FALTANTES: {
         "text": "¿Deseas agregar otro componente faltante?",
         "buttons": [
@@ -140,7 +151,6 @@ FLOW = {
             "FALT_CONFIRMAR": ChatState.CONFIRMAR_PAGO_INICIAL,
         },
     },
-
     ChatState.CONFIRMAR_PAGO_INICIAL: {
         "text": msg.CONFIRMAR_PAGO,
         "buttons": [
@@ -151,10 +161,9 @@ FLOW = {
             "PAGO_SI": ChatState.INFO_PAGOS,
             "affirmative": ChatState.INFO_PAGOS,
             "PAGO_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA            
+            "negative": ChatState.INCONSISTENCIA,
         },
     },
-
     ChatState.INFO_PAGOS: {
         "text": msg.INFO_PAGOS,
         "buttons": [
@@ -167,7 +176,6 @@ FLOW = {
             "PAGOS_DUDA": ChatState.ACLARACION,
         },
     },
-
     ChatState.INFO_METODOS_PAGO: {
         "text": msg.INFO_METODOS_PAGO,
         "buttons": [
@@ -180,7 +188,6 @@ FLOW = {
             "PAGOS_DUDA": ChatState.ACLARACION,
         },
     },
-
     ChatState.INFO_PLAN_3_MESES: {
         "text": msg.INFO_PLAN_3_MESES,
         "buttons": [
@@ -193,7 +200,6 @@ FLOW = {
             "PLAN3_DUDA": ChatState.ACLARACION,
         },
     },
-
     ChatState.INFO_OTROS_PLANES: {
         "text": msg.INFO_OTROS_PLANES,
         "buttons": [
@@ -206,7 +212,6 @@ FLOW = {
             "PLANES_DUDA": ChatState.ACLARACION,
         },
     },
-
     ChatState.INFO_BENEFICIOS: {
         "text": msg.INFO_BENEFICIOS,
         "buttons": [
@@ -219,13 +224,11 @@ FLOW = {
             "BEN_DUDA": ChatState.ACLARACION,
         },
     },
-
     ChatState.FINALIZADO: {
         "text": msg.FINALIZADO,
         "buttons": [],
         "options": {},
     },
-
     ChatState.INCONSISTENCIA: {
         "text": msg.INCONSISTENCIA,
         "buttons": [
@@ -237,7 +240,6 @@ FLOW = {
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
-
     ChatState.FUERA_DE_FLUJO: {
         "text": msg.INCONSISTENCIA,
         "buttons": [
@@ -249,7 +251,6 @@ FLOW = {
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
-
     ChatState.ACLARACION: {
         "text": msg.ACLARACION,
         "buttons": [
@@ -261,7 +262,6 @@ FLOW = {
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
-
     ChatState.LLAMADA: {
         "text": msg.ACLARACION,
         "buttons": [
