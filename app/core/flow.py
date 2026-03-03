@@ -33,6 +33,27 @@ FLOW = {
             "affirmative": ChatState.CONFIRMAR_NOMBRE,
         },
     },
+
+    ChatState.CONFIRMAR_FOLIO: {
+        "text": "",  
+        "buttons": [
+            {"id": "FOLIO_SI", "label": "✅ Sí"},
+            {"id": "FOLIO_NO", "label": "✏️ Cambiar"},
+        ],
+        "options": {
+            "FOLIO_SI": ChatState.CONFIRMAR_NOMBRE,
+            "FOLIO_NO": ChatState.CAMBIAR_FOLIO,
+        },
+    },
+
+    ChatState.CAMBIAR_FOLIO: {
+        "text": "✏️ Por favor envíame nuevamente tu folio.",
+        "buttons": [],
+        "options": {}
+    },
+
+    
+
     ChatState.CONFIRMAR_NOMBRE: {
         "text": msg.CONFIRMAR_NOMBRE,
         "buttons": [
