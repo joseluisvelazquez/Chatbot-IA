@@ -15,7 +15,9 @@ from app.siga.siga_repository import (
     construir_nombre,
 )
 from app.content.message_builder import MessageBuilder
-
+from app.content import messages
+from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
+from app.utils.fechas import formatear_fecha_larga
 
 @dataclass
 class FlowResult:
@@ -62,8 +64,30 @@ def process_message(
         session.folio = folio
 
         # Pasamos directo a confirmar nombre
-        next_state = ChatState.CONFIRMAR_NOMBRE
+        next_state = ChatState.CONFIRMAR_FOLIO
 
+    # --------------------------------------
+    # Cambio manual de folio
+    # --------------------------------------
+    elif current_state == ChatState.CAMBIAR_FOLIO:
+
+        nuevo_folio = text.strip()
+
+        venta = obtener_venta_por_folio(db, nuevo_folio)
+
+        if not venta:
+            return FlowResult(
+                "❌ Ese folio no existe. Intenta nuevamente.",
+                current_state,
+                [],
+                previous_state,
+            )
+
+        # Reemplazamos el folio
+        session.folio = nuevo_folio
+
+        next_state = ChatState.CONFIRMAR_FOLIO
+        
     # --------------------------------------
     # Transiciones normales
     # --------------------------------------
@@ -141,9 +165,9 @@ def process_message(
 
     # --------------------------------------
     # Render dinámico del siguiente estado
-    # --------------------------------------
+    # --------------------------------------     
 
-    next_flow = FLOW.get(next_state)
+    next_flow = FLOW.get(next_state, {})
 
     reply = next_flow.get("text", "")
 
@@ -152,8 +176,13 @@ def process_message(
 
         venta = obtener_venta_por_folio(db, session.folio)
 
-        if next_state == ChatState.CONFIRMAR_NOMBRE:
-            reply = MessageBuilder.confirmar_nombre(construir_nombre(venta))
+        if next_state == ChatState.CONFIRMAR_FOLIO:
+            reply = f"🔎 Detecté tu folio: *{session.folio}*\n\n¿Es correcto??"
+
+        elif next_state == ChatState.CONFIRMAR_NOMBRE:
+            reply = MessageBuilder.confirmar_nombre(
+                construir_nombre(venta)
+            )
 
         elif next_state == ChatState.CONFIRMAR_DOMICILIO:
             domicilio = obtener_domicilio_por_movimiento(db, venta.id_movimiento_bv)
@@ -162,24 +191,39 @@ def process_message(
             )
 
         elif next_state == ChatState.CONFIRMAR_FECHA:
-            reply = MessageBuilder.confirmar_fecha(
-                venta.fecha_venta.strftime("%d/%m/%Y")
-                if venta.fecha_venta
-                else "No disponible"
+            fecha_natural = (
+                formatear_fecha_larga(venta.fecha_venta)
+                if venta.fecha_venta else "No disponible"
             )
+            reply = MessageBuilder.confirmar_fecha(fecha_natural)
 
         elif next_state == ChatState.CONFIRMAR_PRODUCTO:
             reply = MessageBuilder.confirmar_producto(
                 venta.sku_bitacora_v or "No disponible"
             )
-        elif next_state == ChatState.CONFIRMAR_PAGO:
-            reply = MessageBuilder.confirmar_pago(
-                venta.importe or "No disponible"
-            )
 
-    print(
-        f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}"
-    )
+        elif next_state == ChatState.INFO_PAGOS:
+            calculos = calcular_info_pagos(venta)
+            if calculos:
+                reply = MessageBuilder.info_pagos(
+                    fecha_limite=calculos["fecha_limite"],
+                    pago_minimo=calculos["pago_minimo"],
+                    importe_quincenal=calculos["importe_quincenal"],
+                    importe_mensual=calculos["importe_mensual"],
+                )
+
+        elif next_state == ChatState.INFO_PLAN_3_MESES:
+            calculos_3m = calcular_info_plan_3_meses(venta)
+            if calculos_3m:
+                reply = MessageBuilder.info_plan_3_meses(
+                    saldo_3_meses=calculos_3m["saldo_3_meses"],
+                    fecha_limite_3_meses=calculos_3m["fecha_limite_3_meses"],
+                    importe_semanal_3m=calculos_3m["importe_semanal_3m"],
+                    subsidio=calculos_3m["subsidio"] if calculos_3m["tiene_subsidio"] else None,
+                )
+
+
+    print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
     return FlowResult(
         reply,
         next_state,
