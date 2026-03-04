@@ -78,7 +78,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         if chat.last_message_id == message_id:
             db.rollback()
             return {"status": "duplicate"}
-        start = time.time()
 
         # 🧠 MOTOR CONVERSACIONAL (única decisión)
         result = process_message(
@@ -87,8 +86,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             intent=button_id,
             db=db,  # pasamos la sesión para que pueda hacer queries si es necesario
         )
-        end = time.time()
-        print("COMMIT TIME:", end - start)
 
         reply = result.reply
         next_state = result.next_state
