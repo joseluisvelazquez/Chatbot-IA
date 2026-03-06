@@ -142,10 +142,15 @@ async def send_whatsapp_message(phone, text=None, buttons=None, document_url=Non
 
     # botones con imagen
     if image_id and buttons:
-        await send_buttons_with_image(phone, text, buttons, image_id)
-    # botones solos
+        await send_buttons_with_image(phone, text, buttons[:3], image_id)
+
+    # botones sin imagen
     elif buttons:
-        await send_buttons(phone, text, buttons)
+        if len(buttons) > 3:
+            await send_list(phone, text, buttons)
+        else:
+            await send_buttons(phone, text, buttons)
+
     # solo texto
     elif text:
         await send_text(phone, text)

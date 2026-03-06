@@ -17,6 +17,7 @@ from app.content.message_builder import MessageBuilder
 from app.content import messages
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
 from app.utils.date_formatter import formatear_fecha_larga
+from app.utils import address_formatter
 from app.services.inconsistencias_service import get_open_inconsistencia
 
 
@@ -364,5 +365,5 @@ def process_message(
         buttons=next_flow.get("buttons", []),
         previous_state=previous_state,
         inconsistencia_patch=result_patch,
-        image_id
+        image_id=image_id
     )

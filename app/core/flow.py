@@ -143,8 +143,8 @@ FLOW = {
     ChatState.COMPONENTES_CONFIRMAR_FALTANTES: {
         "text": "¿Deseas agregar otro componente faltante?",
         "buttons": [
-            {"id": "FALT_AGREGAR", "label": "➕ Agregar otro"},
-            {"id": "FALT_CONFIRMAR", "label": "✅ Confirmar faltantes"},
+            {"id": "FALT_AGREGAR", "label": "✅ Si, agregar otro"},
+            {"id": "FALT_CONFIRMAR", "label": "❌ No, es todo"},
         ],
         "options": {
             "FALT_AGREGAR": ChatState.COMPONENTES_FALTANTES,
