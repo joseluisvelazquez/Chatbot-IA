@@ -82,5 +82,9 @@ INCONSISTENCIA = (
     "💬 Gracias por tu mensaje.\n\n"
     "Un asesor te contactará para resolver la inconsistencia."
 )
+FUERA_DE_FLUJO = (
+    "💬 Gracias por tu mensaje.\n\n"
+    "Fuera de flujo, un asesor te contactará para atender tu caso."
+)
 
 ACLARACION = "💬 Puedo ayudarte a aclarar tu duda o continuar el proceso."
