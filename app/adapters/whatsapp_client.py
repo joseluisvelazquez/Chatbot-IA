@@ -61,6 +61,35 @@ async def send_buttons(phone: str, text: str, buttons: list):
         }
     )
 
+# Funcion para enviar una lista de opciones, si hay más de 3 botones.
+async def send_list(phone: str, text: str, buttons: list):
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "interactive",
+            "interactive": {
+                "type": "list",
+                "body": {"text": text},
+                "action": {
+                    "button": "📋 Ver opciones",
+                    "sections": [
+                        {
+                            "title": "Selecciona una opción",
+                            "rows": [
+                                {
+                                    "id": btn["id"],
+                                    "title": btn["label"][:24],  # límite de WhatsApp
+                                }
+                                for btn in buttons
+                            ],
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
 
 async def send_document(phone: str, url: str, filename="archivo.pdf"):
     return await _send(
@@ -93,6 +122,9 @@ async def send_whatsapp_message(phone, text=None, buttons=None, document_url=Non
 
     # botones o texto
     if buttons:
-        await send_buttons(phone, text, buttons)
+        if len(buttons) > 3:
+            await send_list(phone, text, buttons)
+        else:
+            await send_buttons(phone, text, buttons)
     elif text:
         await send_text(phone, text)

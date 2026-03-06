@@ -8,6 +8,12 @@ from app.adapters.whatsapp_client import send_whatsapp_message
 from app.core.flow_engine import process_message
 from app.config.settings import settings
 import asyncio
+import time
+from app.services.inconsistencias_service import (
+    open_or_patch_inconsistencia,
+    close_open_inconsistencia,
+)
+from app.core.states import ChatState
 
 router = APIRouter()
 
@@ -69,7 +75,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             "is_status": data.get("is_status"),
         },
     )
-
     try:
         # 🔒 LOCK conversación
         chat = get_or_create_session(db, phone)
@@ -78,6 +83,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         if chat.last_message_id == message_id:
             db.rollback()
             return {"status": "duplicate"}
+
         start = time.time()
 
         # 🧠 MOTOR CONVERSACIONAL (única decisión)
@@ -85,8 +91,10 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             session=chat,
             text=text,
             intent=button_id,
-            db=db,  # pasamos la sesión para que pueda hacer queries si es necesario
+            db=db,
         )
+        print("PATCH RECIBIDO:", result.inconsistencia_patch)
+
         end = time.time()
         print("COMMIT TIME:", end - start)
 
@@ -94,11 +102,55 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         next_state = result.next_state
         buttons = result.buttons
         previous_state = result.previous_state
-        print(
-            f"DEBUG: next_state={next_state}, previous_state={previous_state}, buttons={buttons}"
-        )
 
-        # 💾 persistencia
+        print(f"DEBUG: next_state={next_state}, previous_state={previous_state}, buttons={buttons}")
+
+        # --------------------------------------
+        # 🧾 Persistencia de inconsistencias
+        # --------------------------------------
+
+        # 1) Si flow_engine mandó patch -> lo aplicamos (abre si no existe)
+        if result.inconsistencia_patch:
+            open_or_patch_inconsistencia(
+                db=db,
+                phone=phone,
+                folio=chat.folio,
+                session_id=chat.id,
+                patch=result.inconsistencia_patch,
+            )
+
+        # 2) Si caímos en estados "problemáticos" -> también abrimos/registramos evento
+        if next_state in [
+            ChatState.INCONSISTENCIA,
+            ChatState.ACLARACION,
+            ChatState.LLAMADA,
+        ]:
+            open_or_patch_inconsistencia(
+                db=db,
+                phone=phone,
+                folio=chat.folio,
+                session_id=chat.id,
+                patch={
+                    "evento": {
+                        "ultimo_estado": chat.state,
+                        "causa_estado": next_state.value,
+                        "ultimo_mensaje": text,
+                    }
+                },
+            )
+
+        # 3) Si finaliza -> cerramos inconsistencia abierta (si existe)
+        if next_state == ChatState.FINALIZADO:
+            close_open_inconsistencia(
+                db=db,
+                phone=phone,
+                folio=chat.folio,
+                session_id=chat.id,
+            )
+
+        # --------------------------------------
+        # 💾 persistencia chat_sessions
+        # --------------------------------------
         update_session(
             session=chat,
             state=next_state.value,
@@ -106,14 +158,15 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             previous_state=previous_state,
             message_id=message_id,
         )
+
         db.commit()
 
     except Exception as e:
         db.rollback()
         raise e
 
-    # 📤 responder fuera del lock
+    # 📤 responder fuera del lock (ya con commit hecho)
     if reply:
-        asyncio.create_task(send_whatsapp_message(phone, reply, buttons))
+        await send_whatsapp_message(phone, reply, buttons)
 
     return {"status": "ok"}

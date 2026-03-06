@@ -146,6 +146,4 @@ def construir_domicilio(
         lineas.append(f"C.P. {cp}")
     if ciudad or estado:
         lineas.append(f"{ciudad}, {estado}".strip(", "))
-    if referencias and referencias.upper() != "S/N":
-        lineas.append(f"Ref: {referencias}")
     return "\n".join(lineas)
