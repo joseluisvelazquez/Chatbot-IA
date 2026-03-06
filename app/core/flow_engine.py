@@ -9,15 +9,19 @@ from app.core.states import ChatState
 from dataclasses import dataclass
 from app.utils.restart_detector import wants_restart
 from app.siga.siga_repository import (
-    construir_domicilio,
     obtener_venta_por_folio,
     obtener_domicilio_por_movimiento,
     construir_nombre,
+    construir_producto,
+    construir_no_cuenta,
 )
+from app.utils import address_formatter
+
 from app.content.message_builder import MessageBuilder
 from app.content import messages
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
-from app.utils.fechas import formatear_fecha_larga
+from app.utils.date_formatter import formatear_fecha_larga
+from app.config.settings import settings
 
 @dataclass
 class FlowResult:
@@ -25,6 +29,7 @@ class FlowResult:
     next_state: ChatState
     buttons: list
     previous_state: str | None = None
+    image_id: str | None = None
 
 
 def process_message(
@@ -117,6 +122,14 @@ def process_message(
         previous_state = session.state
 
     # --------------------------------------
+    # Manejo especial: Salto de Confirmar Componentes
+    # --------------------------------------
+    if next_state == ChatState.CONFIRMAR_COMPONENTES and session.folio:
+        venta = obtener_venta_por_folio(db, session.folio)
+        if venta and venta.sku_bitacora_v != "PC-MAXICA":
+            next_state = ChatState.CONFIRMAR_PAGO_INICIAL
+
+    # --------------------------------------
     # Manejo especial: Componentes faltantes
     # --------------------------------------
     if current_state == ChatState.COMPONENTES_FALTANTES:
@@ -170,6 +183,7 @@ def process_message(
     next_flow = FLOW.get(next_state, {})
 
     reply = next_flow.get("text", "")
+    image_id = None
 
     # Si requiere datos de SIGA
     if session.folio:
@@ -177,7 +191,7 @@ def process_message(
         venta = obtener_venta_por_folio(db, session.folio)
 
         if next_state == ChatState.CONFIRMAR_FOLIO:
-            reply = f"🔎 Detecté tu folio: *{session.folio}*\n\n¿Es correcto??"
+            reply = f"🔎 Detecté tu folio: *{session.folio}*\n\n¿Es correcto?"
 
         elif next_state == ChatState.CONFIRMAR_NOMBRE:
             reply = MessageBuilder.confirmar_nombre(
@@ -187,7 +201,7 @@ def process_message(
         elif next_state == ChatState.CONFIRMAR_DOMICILIO:
             domicilio = obtener_domicilio_por_movimiento(db, venta.id_movimiento_bv)
             reply = MessageBuilder.confirmar_domicilio(
-                construir_domicilio(domicilio, db)
+                address_formatter.construir_domicilio(domicilio)
             )
 
         elif next_state == ChatState.CONFIRMAR_FECHA:
@@ -199,7 +213,7 @@ def process_message(
 
         elif next_state == ChatState.CONFIRMAR_PRODUCTO:
             reply = MessageBuilder.confirmar_producto(
-                venta.sku_bitacora_v or "No disponible"
+                construir_producto(venta)
             )
 
         elif next_state == ChatState.INFO_PAGOS:
@@ -211,6 +225,12 @@ def process_message(
                     importe_quincenal=calculos["importe_quincenal"],
                     importe_mensual=calculos["importe_mensual"],
                 )
+        
+        elif next_state == ChatState.INFO_METODOS_PAGO:
+            reply = MessageBuilder.info_metodos_pago(
+                construir_no_cuenta(venta)
+            )
+            image_id = settings.METODOS_PAGO_IMAGE_ID
 
         elif next_state == ChatState.INFO_PLAN_3_MESES:
             calculos_3m = calcular_info_plan_3_meses(venta)
@@ -229,4 +249,5 @@ def process_message(
         next_state,
         next_flow.get("buttons", []),
         previous_state,
+        image_id
     )

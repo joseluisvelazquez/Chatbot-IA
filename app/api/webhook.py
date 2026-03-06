@@ -8,6 +8,7 @@ from app.adapters.whatsapp_client import send_whatsapp_message
 from app.core.flow_engine import process_message
 from app.config.settings import settings
 import asyncio
+import time
 
 router = APIRouter()
 
@@ -114,6 +115,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
 
     # 📤 responder fuera del lock
     if reply:
-        asyncio.create_task(send_whatsapp_message(phone, reply, buttons))
+        asyncio.create_task(send_whatsapp_message(phone, reply, buttons, image_id=result.image_id))
 
     return {"status": "ok"}

@@ -2,6 +2,7 @@ from app.content import messages
 
 
 class MessageBuilder:
+
     @staticmethod
     def confirmar_nombre(nombre: str) -> str:
         return messages.CONFIRMAR_NOMBRE.format(nombre_completo=nombre)
@@ -30,6 +31,10 @@ class MessageBuilder:
             importe_quincenal=importe_quincenal,
             importe_mensual=importe_mensual,
         )
+    
+    @staticmethod
+    def info_metodos_pago(numero_cuenta: str) -> str:
+        return messages.INFO_METODOS_PAGO.format(numero_cuenta=numero_cuenta)
 
     @staticmethod
     def info_plan_3_meses(saldo_3_meses: str, fecha_limite_3_meses: str, importe_semanal_3m: str, subsidio: str | None = None) -> str:
