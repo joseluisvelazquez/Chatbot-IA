@@ -1,22 +1,24 @@
 from __future__ import annotations
-from app.content.message_builder import MessageBuilder
-from app.core.flow import FLOW, DEFAULT_TRANSITIONS
-from app.core.states import ChatState
-from app.core.intents import detect_intent
-from app.services.ai_module import handle_out_of_flow
+
 from dataclasses import dataclass
-from app.utils.restart_detector import wants_restart
+import logging
+
+from app.content.message_builder import MessageBuilder
+from app.core.flow import DEFAULT_TRANSITIONS, FLOW
+from app.core.intents import detect_intent
+from app.core.states import ChatState
+from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
+from app.services.verification_service import VerificationService
 from app.siga.siga_repository import (
     obtener_venta_por_folio,
     obtener_domicilio_por_movimiento,
     construir_nombre,
+    construir_domicilio,
     construir_producto,
     construir_no_cuenta,
 )
-from app.content.message_builder import MessageBuilder
+from app.utils.fechas import formatear_fecha_larga
 from app.content import messages
-from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
-from app.utils.date_formatter import formatear_fecha_larga
 from app.utils import address_formatter
 from app.services.inconsistencias_service import get_open_inconsistencia
 
@@ -61,6 +63,7 @@ INCONSISTENCIAS_MAP = {
 }
 from app.config.settings import settings
 
+
 @dataclass
 class FlowResult:
     reply: str
@@ -71,16 +74,30 @@ class FlowResult:
     image_id: str | None = None
 
 
-def process_message(
-    session, text: str, intent: str | None = None, db=None
-) -> FlowResult:
-
+def process_message(session, text: str, intent: str | None = None, db=None) -> FlowResult:
     current_state = ChatState(session.state)
     previous_state = session.previous_state
     flow = FLOW.get(current_state)
 
     if not flow:
         return FlowResult("Un asesor te contactará.", ChatState.LLAMADA, [])
+
+    # --------------------------------------
+    # Helpers internos: persistencia best-effort (no rompe flujo si falla)
+    # --------------------------------------
+    logger = logging.getLogger(__name__)
+
+    def _try_mark_step(step_key: str) -> None:
+        if db is None:
+            return
+        folio = getattr(session, "folio", None)
+        if not folio:
+            return
+        try:
+            VerificationService(db).mark_step_from_folio(str(folio), step_key)
+        except Exception as e:
+            logger.exception("No se pudo marcar progreso verificación step=%s folio=%s", step_key, folio)
+            return
 
     # --------------------------------------
     # Detectar intención
@@ -90,11 +107,11 @@ def process_message(
         folio = None
     else:
         detected_intent, folio = detect_intent(text, current_state)
+
     # --------------------------------------
     # Si mandó folio para iniciar
     # --------------------------------------
     if detected_intent == "start_verification":
-
         venta = obtener_venta_por_folio(db, folio)
 
         if not venta:
@@ -106,6 +123,8 @@ def process_message(
 
         session.folio = folio
 
+        _try_mark_step("inicio")
+        _try_mark_step("folio")
         return FlowResult(
             reply=f"🔎 Detecté tu folio: *{folio}*\n\n¿Es correcto?",
             next_state=ChatState.CONFIRMAR_FOLIO,
@@ -117,9 +136,7 @@ def process_message(
     # Cambio manual de folio
     # --------------------------------------
     elif current_state == ChatState.CAMBIAR_FOLIO:
-
         nuevo_folio = text.strip()
-
         venta = obtener_venta_por_folio(db, nuevo_folio)
 
         if not venta:
@@ -132,6 +149,8 @@ def process_message(
 
         # Reemplazamos el folio
         session.folio = nuevo_folio
+
+        _try_mark_step("folio")
 
         next_state = ChatState.CONFIRMAR_FOLIO
 
@@ -162,6 +181,52 @@ def process_message(
     # --------------------------------------
     elif detected_intent in flow.get("options", {}):
         next_state = flow["options"][detected_intent]
+
+        # ---- Detectar "confirmación positiva" tanto por texto como por botón ----
+        options = flow.get("options", {})
+
+        positive_next = options.get("affirmative")  # si existe en el estado actual
+        is_positive_choice = False
+
+        if positive_next is not None:
+            # Cualquier opción (botón o texto) que lleve al mismo next_state que "affirmative"
+            # se considera confirmación positiva.
+            is_positive_choice = (next_state == positive_next)
+        else:
+            # Estados que no definen "affirmative" pero sí tienen botón positivo explícito.
+            # Con tu FLOW, el caso clave es CONFIRMAR_FOLIO.
+            if current_state == ChatState.CONFIRMAR_FOLIO and detected_intent == "FOLIO_SI":
+                is_positive_choice = True
+
+        if is_positive_choice:
+            if current_state == ChatState.CONFIRMAR_FOLIO:
+                _try_mark_step("folio")
+            elif current_state == ChatState.CONFIRMAR_NOMBRE:
+                _try_mark_step("nombre")
+            elif current_state == ChatState.CONFIRMAR_DOMICILIO:
+                _try_mark_step("domicilio")
+            elif current_state == ChatState.CONFIRMAR_FECHA:
+                _try_mark_step("fecha")
+            elif current_state == ChatState.CONFIRMAR_PRODUCTO:
+                _try_mark_step("producto")
+            elif current_state == ChatState.CONFIRMAR_COMPONENTES:
+                _try_mark_step("componentes")
+            elif current_state == ChatState.CONFIRMAR_PAGO_INICIAL:
+                _try_mark_step("pagoInicial")
+            elif current_state == ChatState.INFO_PAGOS:
+                _try_mark_step("pagos")
+
+            elif current_state == ChatState.INFO_PLAN_3_MESES:
+                _try_mark_step("plan3meses")
+
+            elif current_state == ChatState.INFO_OTROS_PLANES:
+                _try_mark_step("planes")
+
+            elif current_state == ChatState.INFO_METODOS_PAGO:
+                _try_mark_step("bancos")
+
+            elif current_state == ChatState.INFO_BENEFICIOS:
+                _try_mark_step("beneficios")
 
         # Guardar estado anterior si vamos a inconsistencia o similares
         if next_state in [
@@ -288,8 +353,7 @@ def process_message(
     
     # --------------------------------------
     # Render dinámico del siguiente estado
-    # --------------------------------------     
-
+    # --------------------------------------
     next_flow = FLOW.get(next_state, {})
     result_patch = None
     reply = next_flow.get("text", "")
@@ -303,9 +367,7 @@ def process_message(
             reply = f"🔎 Detecté tu folio: *{session.folio}*\n\n¿Es correcto?"
 
         elif next_state == ChatState.CONFIRMAR_NOMBRE:
-            reply = MessageBuilder.confirmar_nombre(
-                construir_nombre(venta)
-            )
+            reply = MessageBuilder.confirmar_nombre(construir_nombre(venta))
 
         elif next_state == ChatState.CONFIRMAR_DOMICILIO:
             domicilio = obtener_domicilio_por_movimiento(db, venta.id_movimiento_bv)
@@ -315,15 +377,15 @@ def process_message(
 
         elif next_state == ChatState.CONFIRMAR_FECHA:
             fecha_natural = (
-                formatear_fecha_larga(venta.fecha_venta)
-                if venta.fecha_venta else "No disponible"
+                formatear_fecha_larga(venta.fecha_venta) if venta.fecha_venta else "No disponible"
             )
             reply = MessageBuilder.confirmar_fecha(fecha_natural)
 
         elif next_state == ChatState.CONFIRMAR_PRODUCTO:
-            reply = MessageBuilder.confirmar_producto(
-                construir_producto(venta)
-            )
+            reply = MessageBuilder.confirmar_producto(venta.sku_bitacora_v or "No disponible")
+
+        elif next_state == ChatState.CONFIRMAR_PAGO_INICIAL:
+            reply = MessageBuilder.confirmar_pago(venta.importe or "No disponible")
 
         elif next_state == ChatState.INFO_PAGOS:
             calculos = calcular_info_pagos(venta)
