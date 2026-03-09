@@ -61,6 +61,35 @@ async def send_buttons(phone: str, text: str, buttons: list):
         }
     )
 
+# Funcion para enviar una lista de opciones, si hay más de 3 botones.
+async def send_list(phone: str, text: str, buttons: list):
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "interactive",
+            "interactive": {
+                "type": "list",
+                "body": {"text": text},
+                "action": {
+                    "button": "📋 Ver opciones",
+                    "sections": [
+                        {
+                            "title": "Selecciona una opción",
+                            "rows": [
+                                {
+                                    "id": btn["id"],
+                                    "title": btn["label"][:24],  # límite de WhatsApp
+                                }
+                                for btn in buttons
+                            ],
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
 
 async def send_document(phone: str, url: str, filename="archivo.pdf"):
     return await _send(
@@ -76,11 +105,31 @@ async def send_document(phone: str, url: str, filename="archivo.pdf"):
     )
 
 
+async def send_buttons_with_image(phone: str, text: str, buttons: list, image_id: str):
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": phone,
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "header": {
+                    "type": "image",
+                    "image": {"id": image_id}
+                },
+                "body": {"text": text},
+                "action": {"buttons": build_meta_buttons(buttons)},
+            },
+        }
+    )
+
+
 # ---------------- PUBLIC API ----------------
 
 
 # Esta es la función que se exporta para ser usada en el resto del código. Recibe el teléfono, el texto, los botones y/o el documento a enviar, y llama a las funciones específicas según corresponda.
-async def send_whatsapp_message(phone, text=None, buttons=None, document_url=None):
+async def send_whatsapp_message(phone, text=None, buttons=None, document_url=None, image_id=None):
 
     # print(f"\n📤 Enviando a {phone}")
     # print("Texto:", text)
@@ -91,8 +140,17 @@ async def send_whatsapp_message(phone, text=None, buttons=None, document_url=Non
     if document_url:
         await send_document(phone, document_url)
 
-    # botones o texto
-    if buttons:
-        await send_buttons(phone, text, buttons)
+    # botones con imagen
+    if image_id and buttons:
+        await send_buttons_with_image(phone, text, buttons[:3], image_id)
+
+    # botones sin imagen
+    elif buttons:
+        if len(buttons) > 3:
+            await send_list(phone, text, buttons)
+        else:
+            await send_buttons(phone, text, buttons)
+
+    # solo texto
     elif text:
         await send_text(phone, text)

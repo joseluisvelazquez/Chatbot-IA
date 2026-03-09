@@ -14,7 +14,7 @@ INICIO = (
 )
 
 CONFIRMAR_NOMBRE = "📝 ¿Tu nombre completo es *{nombre_completo}*?"
-CONFIRMAR_DOMICILIO = "🏠 ¿Tu domicilio es:\n\n" "{domicilio_completo}\n"
+CONFIRMAR_DOMICILIO = "🏠 ¿Tu domicilio es *{domicilio_completo}*?"
 CONFIRMAR_FECHA = "📆 ¿El día en que suscribiste tu contrato fue el *{fecha_venta}*?"
 
 CONFIRMAR_PRODUCTO = "🖥️🖨️ ¿El producto que adquiriste es una/un *{nombre_producto}*?"
@@ -81,6 +81,10 @@ FINALIZADO = "✅ Verificación completada. Gracias por tu tiempo."
 INCONSISTENCIA = (
     "💬 Gracias por tu mensaje.\n\n"
     "Un asesor te contactará para resolver la inconsistencia."
+)
+FUERA_DE_FLUJO = (
+    "💬 Gracias por tu mensaje.\n\n"
+    "Fuera de flujo, un asesor te contactará para atender tu caso."
 )
 
 ACLARACION = "💬 Puedo ayudarte a aclarar tu duda o continuar el proceso."

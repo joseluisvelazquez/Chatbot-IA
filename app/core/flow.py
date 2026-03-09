@@ -63,8 +63,8 @@ FLOW = {
         "options": {
             "NOMBRE_SI": ChatState.CONFIRMAR_DOMICILIO,
             "affirmative": ChatState.CONFIRMAR_DOMICILIO,
-            "NOMBRE_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA,
+            "NOMBRE_NO": ChatState.ESCRIBIR_INCONSISTENCIA,
+            "negative": ChatState.ESCRIBIR_INCONSISTENCIA,
         },
     },
     ChatState.CONFIRMAR_DOMICILIO: {
@@ -76,8 +76,8 @@ FLOW = {
         "options": {
             "DOM_SI": ChatState.CONFIRMAR_FECHA,
             "affirmative": ChatState.CONFIRMAR_FECHA,
-            "DOM_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA,
+            "DOM_NO": ChatState.ESCRIBIR_INCONSISTENCIA,
+            "negative": ChatState.ESCRIBIR_INCONSISTENCIA,
         },
     },
     ChatState.CONFIRMAR_FECHA: {
@@ -89,8 +89,8 @@ FLOW = {
         "options": {
             "FECHA_SI": ChatState.CONFIRMAR_PRODUCTO,
             "affirmative": ChatState.CONFIRMAR_PRODUCTO,
-            "FECHA_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA,
+            "FECHA_NO": ChatState.ESCRIBIR_INCONSISTENCIA,
+            "negative": ChatState.ESCRIBIR_INCONSISTENCIA,
         },
     },
     ChatState.CONFIRMAR_PRODUCTO: {
@@ -102,8 +102,8 @@ FLOW = {
         "options": {
             "PROD_SI": ChatState.CONFIRMAR_COMPONENTES,
             "affirmative": ChatState.CONFIRMAR_COMPONENTES,
-            "PROD_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA,
+            "PROD_NO": ChatState.ESCRIBIR_INCONSISTENCIA,
+            "negative": ChatState.ESCRIBIR_INCONSISTENCIA,
         },
     },
     ChatState.CONFIRMAR_COMPONENTES: {
@@ -143,8 +143,8 @@ FLOW = {
     ChatState.COMPONENTES_CONFIRMAR_FALTANTES: {
         "text": "¿Deseas agregar otro componente faltante?",
         "buttons": [
-            {"id": "FALT_AGREGAR", "label": "➕ Agregar otro"},
-            {"id": "FALT_CONFIRMAR", "label": "✅ Confirmar faltantes"},
+            {"id": "FALT_AGREGAR", "label": "✅ Si, agregar otro"},
+            {"id": "FALT_CONFIRMAR", "label": "❌ No, es todo"},
         ],
         "options": {
             "FALT_AGREGAR": ChatState.COMPONENTES_FALTANTES,
@@ -160,8 +160,8 @@ FLOW = {
         "options": {
             "PAGO_SI": ChatState.INFO_PAGOS,
             "affirmative": ChatState.INFO_PAGOS,
-            "PAGO_NO": ChatState.INCONSISTENCIA,
-            "negative": ChatState.INCONSISTENCIA,
+            "PAGO_NO": ChatState.ESCRIBIR_INCONSISTENCIA,
+            "negative": ChatState.ESCRIBIR_INCONSISTENCIA,
         },
     },
     ChatState.INFO_PAGOS: {
@@ -241,7 +241,7 @@ FLOW = {
         },
     },
     ChatState.FUERA_DE_FLUJO: {
-        "text": msg.INCONSISTENCIA,
+        "text": msg.FUERA_DE_FLUJO,
         "buttons": [
             {"id": "REANUDACION", "label": "▶️ Continuar proceso"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar asesor"},
@@ -272,5 +272,10 @@ FLOW = {
             "REANUDACION": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
+    },
+    ChatState.ESCRIBIR_INCONSISTENCIA: {
+        "text": "✏️ Por favor escribe cuál es el error para que podamos revisarlo.",
+        "buttons": [],
+        "options": {}
     },
 }

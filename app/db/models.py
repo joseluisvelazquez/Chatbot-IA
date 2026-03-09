@@ -2,6 +2,7 @@
 import datetime
 import decimal
 import enum
+from sqlalchemy.dialects.mysql import JSON as MYSQL_JSON
 
 from sqlalchemy import (
     Column,
@@ -90,6 +91,32 @@ class AdjuntosSucursalMovil(Base):
     nombre_archivo: Mapped[Optional[str]] = mapped_column(TEXT)
     archivo: Mapped[Optional[str]] = mapped_column(TEXT)
 
+class Inconsistencias(Base):
+    __tablename__ = "inconsistencias"
+    __table_args__ = (
+        Index("idx_folio", "folio"),
+        Index("idx_phone", "phone"),
+        Index("idx_estatus", "estatus"),
+        Index("idx_session_id", "session_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    phone: Mapped[str] = mapped_column(VARCHAR(20), nullable=False)
+    folio: Mapped[str] = mapped_column(VARCHAR(50), nullable=False)
+
+    estatus: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default=text("'ABIERTA'"))
+
+    extra_json: Mapped[dict] = mapped_column(MYSQL_JSON, nullable=False)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
 
 class BitacoraActualizacionPreciosUtilidades(Base):
     __tablename__ = "bitacora_actualizacion_precios_utilidades"
