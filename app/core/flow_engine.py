@@ -13,11 +13,10 @@ from app.siga.siga_repository import (
     obtener_venta_por_folio,
     obtener_domicilio_por_movimiento,
     construir_nombre,
-    construir_domicilio,
     construir_producto,
     construir_no_cuenta,
 )
-from app.utils.fechas import formatear_fecha_larga
+from app.utils.date_formatter import formatear_fecha_larga
 from app.content import messages
 from app.utils import address_formatter
 from app.services.inconsistencias_service import get_open_inconsistencia
@@ -78,6 +77,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     current_state = ChatState(session.state)
     previous_state = session.previous_state
     flow = FLOW.get(current_state)
+    print(f"DEBUG: Processing message for session {session.id} in state {current_state} with text '{text}' and intent '{intent}'")
 
     if not flow:
         return FlowResult("Un asesor te contactará.", ChatState.LLAMADA, [])
@@ -178,7 +178,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         
     # --------------------------------------
     # Transiciones normales
-    # --------------------------------------
+    # --------------------------------------}
     elif detected_intent in flow.get("options", {}):
         next_state = flow["options"][detected_intent]
 
@@ -260,6 +260,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     else:
         next_state = ChatState.FUERA_DE_FLUJO
         previous_state = session.state
+    print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
 
     # --------------------------------------
     # Manejo especial: Salto de Confirmar Componentes

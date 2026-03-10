@@ -273,6 +273,27 @@ FLOW = {
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
+    ChatState.RECORDATORIO_1H : {
+        "text": msg.RECORDATORIO_1H,
+        "buttons": [
+            {"id": "REANUDACION", "label": "▶️ Continuar"},
+        ],
+        "options": {
+            "REANUDACION": "__RESUME__",
+        },
+    },
+
+    ChatState.RECORDATORIO_2H: {
+        "text": msg.RECORDATORIO_2H,
+        "buttons": [
+            {"id": "REANUDACION", "label": "▶️ Continuar"},
+            {"id": "ACLARA_LLAMADA", "label": "📞 Hablar asesor"},
+        ],
+        "options": {
+            "REANUDACION": "__RESUME__",
+            "ACLARA_LLAMADA": ChatState.LLAMADA,
+        },
+    },
     ChatState.ESCRIBIR_INCONSISTENCIA: {
         "text": "✏️ Por favor escribe cuál es el error para que podamos revisarlo.",
         "buttons": [],
