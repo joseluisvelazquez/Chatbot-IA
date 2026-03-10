@@ -7,23 +7,50 @@ from app.db.session import SessionLocal
 from app.db.models import Reminder, ChatSessions
 from app.services.reminder_service import TYPE_1H, TYPE_2H
 from app.adapters.whatsapp_client import send_whatsapp_message
+from app.core.flow import FLOW
+from app.core.states import ChatState
 
-# 🔒 Opcional: limita a un número para pruebas
-TEST_PHONE_ONLY = "5214271227177"  # ejemplo: "5214271227177"
 
-REMINDER_TEXT = {
-    TYPE_1H: "👋 ¿Sigues ahí? Podemos continuar con tu verificación cuando gustes.",
-    TYPE_2H: "⏰ Último recordatorio por ahora. Si quieres continuar, aquí estoy.",
-}
-
-BUTTONS = [{"id": "REANUDACION", "label": "▶️ Continuar"}]
+# 🔒 Opcional: limitar a un número durante pruebas
+TEST_PHONE_ONLY = "5214271227177"
 
 
 def utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# ------------------------------------------------------------
+# ENVÍO DE RECORDATORIO
+# ------------------------------------------------------------
+
+async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
+
+    if reminder_type == TYPE_1H:
+        state = ChatState.RECORDATORIO_1H
+    else:
+        state = ChatState.RECORDATORIO_2H
+
+    node = FLOW[state]
+
+    # guardar estado previo
+    session.previous_state = session.state
+    session.state = state
+
+    # persistir cambio
+    db.flush()
+
+    text = node["text"]
+    buttons = node["buttons"]
+
+    await send_whatsapp_message(session.phone, text, buttons)
+
+
+# ------------------------------------------------------------
+# JOB PRINCIPAL
+# ------------------------------------------------------------
+
 async def _send_due_reminders(db: Session) -> None:
+
     now = utcnow_naive()
 
     due = (
@@ -38,34 +65,27 @@ async def _send_due_reminders(db: Session) -> None:
     )
 
     for r in due:
+
+        # filtro para pruebas
         if TEST_PHONE_ONLY and r.phone != TEST_PHONE_ONLY:
             continue
 
-        session = db.query(ChatSessions).filter(ChatSessions.id == r.session_id).first()
+        session = (
+            db.query(ChatSessions)
+            .filter(ChatSessions.id == r.session_id)
+            .first()
+        )
+
         if not session:
             r.cancelled_at = now
             continue
 
-        # Fix 4: si hubo actividad después de programar -> cancelar
+        # si el usuario respondió después de programar reminder
         if r.created_last_message_id and session.last_message_id != r.created_last_message_id:
             r.cancelled_at = now
             continue
 
-        # Sanidad: si no tenemos last_message_at, no dejamos zombies
-        if session.last_message_at is None:
-            r.cancelled_at = now
-            continue
-
-        # ✅ PRUEBAS: 100s para "1H"
-        elapsed_seconds = (now - session.last_message_at).total_seconds()
-        if r.type == TYPE_1H and elapsed_seconds < 2:
-            continue
-
-        # (Si quieres, para TYPE_2H haces 200s o lo que uses en pruebas)
-        # if r.type == TYPE_2H and elapsed_seconds < 200:
-        #     continue
-
-        # ---------------- Fix 6: claim atómico (Patrón A) ----------------
+        # claim atómico
         claimed = (
             db.query(Reminder)
             .filter(
@@ -75,28 +95,43 @@ async def _send_due_reminders(db: Session) -> None:
             )
             .update({Reminder.sent_at: now}, synchronize_session=False)
         )
-        db.commit()
 
         if claimed != 1:
-            # otro proceso lo tomó
             continue
 
         try:
-            await send_whatsapp_message(r.phone, REMINDER_TEXT[r.type], BUTTONS)
-        except Exception:
-            # Unclaim para permitir reintento
-            db.query(Reminder).filter(Reminder.id == r.id).update(
-                {Reminder.sent_at: None}, synchronize_session=False
+
+            await send_reminder(
+                db=db,
+                session=session,
+                reminder_type=r.type
             )
+
+            # commit después de enviar
+            db.commit()
+
+        except Exception:
+
+            # rollback de claim para permitir reintento
+            db.query(Reminder).filter(Reminder.id == r.id).update(
+                {Reminder.sent_at: None},
+                synchronize_session=False
+            )
+
             db.commit()
             raise
 
-    db.commit()
 
+# ------------------------------------------------------------
+# ENTRYPOINT DEL SCHEDULER
+# ------------------------------------------------------------
 
 def run_inactivity_reminders_job() -> None:
+
     db = SessionLocal()
+
     try:
         asyncio.run(_send_due_reminders(db))
+
     finally:
         db.close()
