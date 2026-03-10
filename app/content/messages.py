@@ -56,7 +56,7 @@ INFO_PLAN_3_MESES_DESCUENTO = (
 
 INFO_PLAN_3_MESES = (
     "💲 El saldo de tu cuenta es de *${saldo_3_meses}*.\n\n"
-    "⏳ Tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) 🪙 por *${importe_semanal_3m}*.\n\n"
+    "⏳ Tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) por *${importe_semanal_3m}*.\n\n"
     "¿Tienes alguna duda respecto al plan de 3 meses?"
 )
 
@@ -71,9 +71,9 @@ INFO_BENEFICIOS = (
     "• 🛡️ Garantía de 3 años sobre defectos de fabricación\n"
     "• 🎓 Programas y aplicaciones gratuitos\n"
     "• 🖨️ Impresora multifuncional de obsequio\n\n"
-    "Recibirás tu multifuncional llega en un plazo máximo de 3 meses.\n"
+    "Recibirás tu multifuncional en un plazo máximo de 3 meses.\n"
     "Es importante que mantengas tu cuenta al corriente para conservar tus beneficios.\n\n"
-    "¿Tienes alguna duda sobre tu contrato o tu PC-Máxica?"
+    "¿Tienes alguna duda sobre tu contrato, póliza de garantía, o sobre el uso y funcionamiento de tu PC-Máxica?"
 )
 
 FINALIZADO = "✅ Verificación completada. Gracias por tu tiempo."
