@@ -47,3 +47,11 @@ class MessageBuilder:
             importe_semanal_3m=importe_semanal_3m,
         ))
         return "".join(partes)
+    
+    @staticmethod
+    def confirmar_estado_producto(producto: str) -> str:
+        return messages.CONFIRMAR_ESTADO_PRODUCTO.format(nombre_producto=producto)
+
+    @staticmethod
+    def info_beneficios_producto(producto: str) -> str:
+        return messages.INFO_BENEFICIOS2.format(producto=producto)

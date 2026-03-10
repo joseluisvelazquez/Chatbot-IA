@@ -119,6 +119,19 @@ FLOW = {
             "negative": ChatState.COMPONENTES_FALTANTES,
         },
     },
+    ChatState.CONFIRMAR_ESTADO_PRODUCTO: {
+        "text": msg.CONFIRMAR_ESTADO_PRODUCTO,
+        "buttons": [
+            {"id": "PROD_ESTADO_SI", "label": "✅ Sí"},
+            {"id": "PROD_ESTADO_NO", "label": "❌ No"},
+        ],
+        "options": {
+            "PROD_ESTADO_SI": ChatState.CONFIRMAR_PAGO_INICIAL,
+            "affirmative": ChatState.CONFIRMAR_PAGO_INICIAL,
+            "PROD_ESTADO_NO": ChatState.ESCRIBIR_INCONSISTENCIA,
+            "negative": ChatState.ESCRIBIR_INCONSISTENCIA,
+        },
+    },
     ChatState.COMPONENTES_FALTANTES: {
         "text": "Selecciona el componente que faltó:",
         "buttons": [
@@ -214,6 +227,18 @@ FLOW = {
     },
     ChatState.INFO_BENEFICIOS: {
         "text": msg.INFO_BENEFICIOS,
+        "buttons": [
+            {"id": "BEN_OK", "label": "✅ No tengo dudas"},
+            {"id": "BEN_DUDA", "label": "❓ Tengo dudas"},
+        ],
+        "options": {
+            "BEN_OK": ChatState.FINALIZADO,
+            "affirmative": ChatState.FINALIZADO,
+            "BEN_DUDA": ChatState.ACLARACION,
+        },
+    },
+    ChatState.INFO_BENEFICIOS2: {
+        "text": msg.INFO_BENEFICIOS2,
         "buttons": [
             {"id": "BEN_OK", "label": "✅ No tengo dudas"},
             {"id": "BEN_DUDA", "label": "❓ Tengo dudas"},

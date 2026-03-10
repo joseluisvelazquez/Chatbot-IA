@@ -22,12 +22,13 @@ def obtener_domicilio_por_movimiento(
         .first()
     )
 
-
 # ===============================
 # CONSTRUIR NOMBRE
 # ===============================
 def construir_nombre(venta: BitacoraVentas) -> str:
     return capitalizar_texto(venta.nombre_completo) or "No disponible"
+def construir_pago_inicial(venta: BitacoraVentas) -> str:
+    return venta.importe or "No disponible"
 
 
 # ===============================

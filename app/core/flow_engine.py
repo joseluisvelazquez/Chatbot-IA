@@ -10,17 +10,24 @@ from app.siga.siga_repository import (
     obtener_venta_por_folio,
     obtener_domicilio_por_movimiento,
     construir_nombre,
+    construir_pago_inicial,
     construir_producto,
     construir_no_cuenta,
 )
-from app.content.message_builder import MessageBuilder
 from app.content import messages
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
 from app.utils.date_formatter import formatear_fecha_larga
 from app.utils import address_formatter
 from app.services.inconsistencias_service import get_open_inconsistencia
 
+# Mapeo de SKU a nombre de producto por que se maneja diferente en SIGA (Ta raro esto ayuda mucho lit good)
+SKU_PRODUCT_MAP = {
+    "14DQ6011DX": "Laptop HP",
+    "MULTI-MX-2": "Impresora multifuncional HP Smart Tank",
+    "MULTI-MX-1": "Multifuncional Brother",
+}
 
+# Mapeo de componentes faltantes para facilitar su registro y manejo Para que salga en el whatsap con emojis y no se registre con simbolos raros en el json tambien good
 COMPONENTES_MAP = {
     "FALT_CPU": {
         "db": "CPU roja",
@@ -202,7 +209,16 @@ def process_message(
     if next_state == ChatState.CONFIRMAR_COMPONENTES and session.folio:
         venta = obtener_venta_por_folio(db, session.folio)
         if venta and venta.sku_bitacora_v != "PC-MAXICA":
-            next_state = ChatState.CONFIRMAR_PAGO_INICIAL
+            next_state = ChatState.CONFIRMAR_ESTADO_PRODUCTO
+
+    # --------------------------------------
+    # Manejo especial: Beneficios según producto
+    # --------------------------------------
+    if next_state == ChatState.INFO_BENEFICIOS and session.folio:
+        venta = obtener_venta_por_folio(db, session.folio)
+
+        if venta and venta.sku_bitacora_v != "PC-MAXICA":
+            next_state = ChatState.INFO_BENEFICIOS2
 
     # --------------------------------------
     # Registrar componente faltante
@@ -306,6 +322,10 @@ def process_message(
             reply = MessageBuilder.confirmar_nombre(
                 construir_nombre(venta)
             )
+        elif next_state == ChatState.CONFIRMAR_PAGO_INICIAL:
+            reply = MessageBuilder.confirmar_pago(
+                construir_pago_inicial(venta)
+            )
 
         elif next_state == ChatState.CONFIRMAR_DOMICILIO:
             domicilio = obtener_domicilio_por_movimiento(db, venta.id_movimiento_bv)
@@ -321,9 +341,16 @@ def process_message(
             reply = MessageBuilder.confirmar_fecha(fecha_natural)
 
         elif next_state == ChatState.CONFIRMAR_PRODUCTO:
-            reply = MessageBuilder.confirmar_producto(
-                construir_producto(venta)
-            )
+            sku = venta.sku_bitacora_v.upper()
+            producto = SKU_PRODUCT_MAP.get(sku, sku)
+
+            reply = MessageBuilder.confirmar_producto(producto)
+        
+        elif next_state == ChatState.CONFIRMAR_ESTADO_PRODUCTO:
+            sku = venta.sku_bitacora_v.upper()
+            producto = SKU_PRODUCT_MAP.get(sku, sku)
+
+            reply = MessageBuilder.confirmar_estado_producto(producto)
 
         elif next_state == ChatState.INFO_PAGOS:
             calculos = calcular_info_pagos(venta)
@@ -350,6 +377,11 @@ def process_message(
                     importe_semanal_3m=calculos_3m["importe_semanal_3m"],
                     subsidio=calculos_3m["subsidio"] if calculos_3m["tiene_subsidio"] else None,
                 )
+        elif next_state == ChatState.INFO_BENEFICIOS2:
+            sku = venta.sku_bitacora_v
+            producto = SKU_PRODUCT_MAP.get(sku, sku)
+
+            reply = MessageBuilder.info_beneficios_producto(producto)
 
 
     #print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
