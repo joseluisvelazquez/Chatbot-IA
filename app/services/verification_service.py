@@ -67,10 +67,15 @@ class VerificationService:
             pass
 
     def update_step_atomic(self, no_cuenta: str, step: str, value: int = 1) -> VerificationResult:
+
         if not no_cuenta:
             raise ValueError("no_cuenta requerido")
+
         if not step:
             raise ValueError("step requerido")
+
+        if value not in (0, 1, 2):
+            raise ValueError("valor inválido de verificación")
 
         assert_valid_step(step)
 
@@ -83,26 +88,29 @@ class VerificationService:
 
         if not row:
             self._create_if_missing(no_cuenta)
+
             row = (
                 self.db.query(VerificacionCuenta)
                 .filter(VerificacionCuenta.no_cuenta == no_cuenta)
                 .with_for_update()
                 .first()
             )
+
             if not row:
                 raise RuntimeError("No se pudo crear/lockear VerificacionCuenta")
 
         progress = normalize_progress_payload(row.json)
-        progress[step] = 1 if value else 0
+
+        progress[step] = value
+
         row.json = progress
 
-        # El commit lo controla el webhook (unidad transaccional).
         self.db.flush()
 
         return VerificationResult(no_cuenta=no_cuenta, progress=progress)
 
-    def mark_step_from_folio(self, folio: str, step: str) -> Optional[VerificationResult]:
+    def mark_step_from_folio(self, folio: str, step: str, value: int) -> Optional[VerificationResult]:
         no_cuenta = self.resolve_no_cuenta_from_folio(folio)
         if not no_cuenta:
             return None
-        return self.update_step_atomic(no_cuenta=no_cuenta, step=step, value=1)
+        return self.update_step_atomic(no_cuenta=no_cuenta, step=step, value=value)

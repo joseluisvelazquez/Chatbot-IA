@@ -9,6 +9,7 @@ from app.core.intents import detect_intent
 from app.core.states import ChatState
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
 from app.services.verification_service import VerificationService
+from app.services.verification_tracker import track_verification
 from app.siga.siga_repository import (
     obtener_venta_por_folio,
     obtener_domicilio_por_movimiento,
@@ -181,53 +182,16 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------}
     elif detected_intent in flow.get("options", {}):
         next_state = flow["options"][detected_intent]
+        
+        track_verification(
+            db=db,
+            session=session,
+            current_state=current_state,
+            detected_intent=detected_intent,
+            next_state=next_state
+        )
 
-        # ---- Detectar "confirmación positiva" tanto por texto como por botón ----
-        options = flow.get("options", {})
-
-        positive_next = options.get("affirmative")  # si existe en el estado actual
-        is_positive_choice = False
-
-        if positive_next is not None:
-            # Cualquier opción (botón o texto) que lleve al mismo next_state que "affirmative"
-            # se considera confirmación positiva.
-            is_positive_choice = (next_state == positive_next)
-        else:
-            # Estados que no definen "affirmative" pero sí tienen botón positivo explícito.
-            # Con tu FLOW, el caso clave es CONFIRMAR_FOLIO.
-            if current_state == ChatState.CONFIRMAR_FOLIO and detected_intent == "FOLIO_SI":
-                is_positive_choice = True
-
-        if is_positive_choice:
-            if current_state == ChatState.CONFIRMAR_FOLIO:
-                _try_mark_step("folio")
-            elif current_state == ChatState.CONFIRMAR_NOMBRE:
-                _try_mark_step("nombre")
-            elif current_state == ChatState.CONFIRMAR_DOMICILIO:
-                _try_mark_step("domicilio")
-            elif current_state == ChatState.CONFIRMAR_FECHA:
-                _try_mark_step("fecha")
-            elif current_state == ChatState.CONFIRMAR_PRODUCTO:
-                _try_mark_step("producto")
-            elif current_state == ChatState.CONFIRMAR_COMPONENTES:
-                _try_mark_step("componentes")
-            elif current_state == ChatState.CONFIRMAR_PAGO_INICIAL:
-                _try_mark_step("pagoInicial")
-            elif current_state == ChatState.INFO_PAGOS:
-                _try_mark_step("pagos")
-
-            elif current_state == ChatState.INFO_PLAN_3_MESES:
-                _try_mark_step("plan3meses")
-
-            elif current_state == ChatState.INFO_OTROS_PLANES:
-                _try_mark_step("planes")
-
-            elif current_state == ChatState.INFO_METODOS_PAGO:
-                _try_mark_step("bancos")
-
-            elif current_state == ChatState.INFO_BENEFICIOS:
-                _try_mark_step("beneficios")
-
+        
         # Guardar estado anterior si vamos a inconsistencia o similares
         if next_state in [
             ChatState.INCONSISTENCIA,
