@@ -26,21 +26,14 @@ def assert_valid_step(step: str) -> None:
         raise ValueError(f"Paso de verificación desconocido: {step}")
 
 
-def normalize_progress_payload(payload: Any) -> Dict[str, int]:
-    """Normaliza el JSON guardado en DB para evitar estados corruptos."""
-    data: Dict[str, int] = {}
+def normalize_progress_payload(payload):
+    if not isinstance(payload, dict):
+        payload = {}
 
-    if isinstance(payload, dict):
-        for k, v in payload.items():
-            if isinstance(k, str):
-                data[k] = 1 if v in (1, True, "1", "true", "True") else 0
+    data = payload.copy()
 
     for k in DEFAULT_VERIFICATION_PROGRESS.keys():
         if k not in data:
             data[k] = 0
-
-    unknown = set(data.keys()) - set(DEFAULT_VERIFICATION_PROGRESS.keys())
-    for k in unknown:
-        data.pop(k, None)
 
     return data
