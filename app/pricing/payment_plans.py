@@ -3,7 +3,7 @@ from decimal import Decimal, ROUND_UP
 from typing import Optional
 
 from app.db.models import BitacoraVentas
-from app.utils.fechas import formatear_fecha_larga, sumar_meses
+from app.utils.date_formatter import formatear_fecha_larga, sumar_meses
 
 
 SEMANAS_POR_MES = Decimal("4.33")
@@ -146,8 +146,8 @@ def calcular_info_plan_3_meses(venta: BitacoraVentas) -> Optional[dict[str, str]
     precio_plan = plan_3_meses["precio"]
 
     # Subsidio y pago desde la venta; NULL o 0 se tratan como 0
-    subsidio_raw = getattr(venta, "subsidio", None)
-    pago_raw = getattr(venta, "pago", None)
+    subsidio_raw = venta.subsidio
+    pago_raw = venta.pago
 
     subsidio = Decimal(str(subsidio_raw)) if subsidio_raw else Decimal("0")
     pago = Decimal(str(pago_raw)) if pago_raw else Decimal("0")

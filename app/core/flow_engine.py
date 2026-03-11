@@ -1,11 +1,15 @@
 from __future__ import annotations
-from app.content.message_builder import MessageBuilder
-from app.core.flow import FLOW, DEFAULT_TRANSITIONS
-from app.core.states import ChatState
-from app.core.intents import detect_intent
-from app.services.ai_module import handle_out_of_flow
+
 from dataclasses import dataclass
-from app.utils.restart_detector import wants_restart
+import logging
+
+from app.content.message_builder import MessageBuilder
+from app.core.flow import DEFAULT_TRANSITIONS, FLOW
+from app.core.intents import detect_intent
+from app.core.states import ChatState
+from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
+from app.services.verification_service import VerificationService
+from app.services.verification_tracker import track_verification
 from app.siga.siga_repository import (
     obtener_venta_por_folio,
     obtener_domicilio_por_movimiento,
@@ -14,6 +18,7 @@ from app.siga.siga_repository import (
     construir_producto,
     construir_no_cuenta,
 )
+from app.utils.date_formatter import formatear_fecha_larga
 from app.content import messages
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
 from app.utils.date_formatter import formatear_fecha_larga
@@ -67,7 +72,17 @@ INCONSISTENCIAS_MAP = {
     ChatState.CONFIRMAR_PRODUCTO: "producto",
     ChatState.CONFIRMAR_PAGO_INICIAL: "pago_inicial",
 }
+TRANSITIONS = [
+            ChatState.INCONSISTENCIA,
+            ChatState.ESCRIBIR_INCONSISTENCIA,
+            ChatState.FUERA_DE_FLUJO,
+            ChatState.ACLARACION,
+            ChatState.LLAMADA,
+            ChatState.RECORDATORIO_1H,
+            ChatState.RECORDATORIO_2H,
+        ]
 from app.config.settings import settings
+
 
 @dataclass
 class FlowResult:
@@ -79,15 +94,31 @@ class FlowResult:
     image_id: str | None = None
 
 
-def process_message(
-    session, text: str, intent: str | None = None, db=None
-) -> FlowResult:
-
+def process_message(session, text: str, intent: str | None = None, db=None) -> FlowResult:
     current_state = ChatState(session.state)
     previous_state = session.previous_state
     flow = FLOW.get(current_state)
+    print(f"DEBUG: Processing message for session {session.id} in state {current_state} with text '{text}' and intent '{intent}'")
+
     if not flow:
         return FlowResult("Un asesor te contactará.", ChatState.LLAMADA, [])
+
+    # --------------------------------------
+    # Helpers internos: persistencia best-effort (no rompe flujo si falla)
+    # --------------------------------------
+    logger = logging.getLogger(__name__)
+
+    def _try_mark_step(step_key: str) -> None:
+        if db is None:
+            return
+        folio = getattr(session, "folio", None)
+        if not folio:
+            return
+        try:
+            VerificationService(db).mark_step_from_folio(str(folio), step_key)
+        except Exception as e:
+            logger.exception("No se pudo marcar progreso verificación step=%s folio=%s", step_key, folio)
+            return
 
     # --------------------------------------
     # Detectar intención
@@ -133,7 +164,6 @@ def process_message(
     # Si mandó folio para iniciar
     # --------------------------------------
     if detected_intent == "start_verification":
-
         venta = obtener_venta_por_folio(db, folio)
 
         if not venta:
@@ -145,6 +175,8 @@ def process_message(
 
         session.folio = folio
 
+        _try_mark_step("inicio")
+        _try_mark_step("folio")
         return FlowResult(
             reply=f"🔎 Detecté tu folio: *{folio}*\n\n¿Es correcto?",
             next_state=ChatState.CONFIRMAR_FOLIO,
@@ -178,6 +210,8 @@ def process_message(
             )
 
         session.folio = nuevo_folio
+        _try_mark_step("folio")
+
 
         return FlowResult(
             reply=f"🔎 Detecté tu folio: *{nuevo_folio}*\n\n¿Es correcto?",
@@ -185,6 +219,7 @@ def process_message(
             buttons=FLOW[ChatState.CONFIRMAR_FOLIO].get("buttons", []),
             previous_state=None
         )
+        
 
     # --------------------------------------
     # Usuario escribe la inconsistencia
@@ -210,18 +245,21 @@ def process_message(
         
     # --------------------------------------
     # Transiciones normales
-    # --------------------------------------
+    # --------------------------------------}
     elif detected_intent in flow.get("options", {}):
         next_state = flow["options"][detected_intent]
+        
+        track_verification(
+            db=db,
+            session=session,
+            current_state=current_state,
+            detected_intent=detected_intent,
+            next_state=next_state
+        )
 
+        
         # Guardar estado anterior si vamos a inconsistencia o similares
-        if next_state in [
-            ChatState.INCONSISTENCIA,
-            ChatState.ESCRIBIR_INCONSISTENCIA,
-            ChatState.FUERA_DE_FLUJO,
-            ChatState.ACLARACION,
-            ChatState.LLAMADA,
-        ]:
+        if next_state in TRANSITIONS and current_state not in TRANSITIONS:
             previous_state = session.state
 
         if next_state == "__RESUME__":
@@ -239,14 +277,17 @@ def process_message(
             else:
                 next_state = ChatState.INICIO
 
-    elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other":
+    elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other" and current_state not in TRANSITIONS:
         next_state = DEFAULT_TRANSITIONS[detected_intent]
         previous_state = session.state
 
     else:
         next_state = ChatState.FUERA_DE_FLUJO
-        #next_state = ChatState.MENU_AYUDA
-        previous_state = session.state
+        if current_state not in TRANSITIONS:
+            previous_state = session.state
+    print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
+
+   
 
     # --------------------------------------
     # Manejo especial: Salto de Confirmar Componentes
@@ -349,8 +390,7 @@ def process_message(
     
     # --------------------------------------
     # Render dinámico del siguiente estado
-    # --------------------------------------     
-
+    # --------------------------------------
     next_flow = FLOW.get(next_state, {})
     result_patch = None
     reply = next_flow.get("text", "")
@@ -380,8 +420,7 @@ def process_message(
 
         elif next_state == ChatState.CONFIRMAR_FECHA:
             fecha_natural = (
-                formatear_fecha_larga(venta.fecha_venta)
-                if venta.fecha_venta else "No disponible"
+                formatear_fecha_larga(venta.fecha_venta) if venta.fecha_venta else "No disponible"
             )
             reply = MessageBuilder.confirmar_fecha(fecha_natural)
 

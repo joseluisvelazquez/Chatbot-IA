@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     # ============================================================
 
     META_API_VERSION: str = "v24.0"
+    METODOS_PAGO_IMAGE_ID: str | None = None
+
 
     # ============================================================
     # Base URL (propiedad dinámica)

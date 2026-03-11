@@ -21,7 +21,15 @@ INICIO = (
 CONFIRMAR_NOMBRE = "📝 ¿Tu nombre completo es *{nombre_completo}*?"
 CONFIRMAR_DOMICILIO = "🏠 ¿Tu domicilio es *{domicilio_completo}*?"
 CONFIRMAR_FECHA = "📆 ¿El día en que suscribiste tu contrato fue el *{fecha_venta}*?"
+RECORDATORIO_1H = (
+    "👋 Solo paso a recordarte que podemos continuar con tu verificación cuando gustes.\n\n"
+    "El proceso tarda menos de 5 minutos."
+)
 
+RECORDATORIO_2H = (
+    "⏰ Último recordatorio por ahora.\n\n"
+    "Cuando estés listo podemos continuar con tu verificación."
+)
 CONFIRMAR_PRODUCTO = "🖥️🖨️ ¿El producto que adquiriste es una/un *{nombre_producto}*?"
 
 CONFIRMAR_ESTADO_PRODUCTO = """

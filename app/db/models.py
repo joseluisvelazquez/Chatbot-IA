@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Double,
     Enum,
+    ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
@@ -19,12 +20,15 @@ from sqlalchemy import (
     Table,
     Text,
     Time,
+    UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.mysql import (
     ENUM,
     FLOAT,
     INTEGER,
+    JSON,
     LONGTEXT,
     MEDIUMTEXT,
     TEXT,
@@ -292,6 +296,29 @@ class Categorias(Base):
     categoria: Mapped[str] = mapped_column(VARCHAR(60), nullable=False)
 
 
+class Reminder(Base):
+    __tablename__ = "reminders"
+
+    id = Column(Integer, primary_key=True)
+
+    session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False)
+    phone = Column(String(20), nullable=False)
+
+    type = Column(String(50), nullable=False)
+
+    scheduled_at = Column(DateTime, nullable=False)
+    created_last_message_id = Column(String(100), nullable=True)
+
+    sent_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+
+    session = relationship("ChatSessions", back_populates="reminders")
+
+    __table_args__ = (
+        Index("idx_reminders_due", "scheduled_at"),
+        Index("idx_reminders_session", "session_id"),
+    )
+
 class ChatSessions(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (
@@ -306,11 +333,13 @@ class ChatSessions(Base):
     folio: Mapped[Optional[str]] = mapped_column(VARCHAR(50))
     previous_state: Mapped[Optional[str]] = mapped_column(VARCHAR(50))
     last_message: Mapped[Optional[str]] = mapped_column(TEXT)
+    last_message_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime, server_default=text("CURRENT_TIMESTAMP")
     )
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     last_message_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
+    reminders = relationship("Reminder", back_populates="session")
 
 
 class Clientes(Base):
@@ -1440,21 +1469,21 @@ class UsuariosXEmpresa(Base):
 class VerificacionCuenta(Base):
     __tablename__ = "verificacion_cuenta"
     __table_args__ = (
+        UniqueConstraint("no_cuenta", name="uq_verificacion_cuentas_no_cuenta"),
         Index("idx_verificacion_no_cuenta", "no_cuenta"),
         Index("uq_verificacion_no_cuenta", "no_cuenta", unique=True),
     )
 
-    id_verificacion: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    no_cuenta: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    )
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime,
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
-    )
-    json: Mapped[Optional[str]] = mapped_column(LONGTEXT)
+    id_verificacion = Column(Integer, primary_key=True, autoincrement=True)
+    no_cuenta = Column(String(50), nullable=False)
+
+    # IMPORTANTE: En MySQL el tipo JSON existe. Si tu columna se llama diferente, ajusta aquí.
+    json = Column(JSON, nullable=False)
+
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    
 
 
 class VentasDocumentos(Base):
