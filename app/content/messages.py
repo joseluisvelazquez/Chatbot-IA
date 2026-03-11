@@ -6,6 +6,11 @@ ESPERA = (
     "En breve te contactaré nuevamente para brindarte más información."
 )
 
+MENU_AYUDA = (
+    "👋 ¿Cómo podemos ayudarte hoy?\n\n"
+    "Selecciona una opción:"
+)
+
 INICIO = (
     "¡Ya volví!\n"
     "Vamos a confirmar algunos datos de tu compra.\n"
@@ -14,10 +19,16 @@ INICIO = (
 )
 
 CONFIRMAR_NOMBRE = "📝 ¿Tu nombre completo es *{nombre_completo}*?"
-CONFIRMAR_DOMICILIO = "🏠 Tu domicilio es:\n\n" "{domicilio_completo}\n"
+CONFIRMAR_DOMICILIO = "🏠 ¿Tu domicilio es *{domicilio_completo}*?"
 CONFIRMAR_FECHA = "📆 ¿El día en que suscribiste tu contrato fue el *{fecha_venta}*?"
 
 CONFIRMAR_PRODUCTO = "🖥️🖨️ ¿El producto que adquiriste es una/un *{nombre_producto}*?"
+
+CONFIRMAR_ESTADO_PRODUCTO = """
+📦 Confirmemos el estado del producto.\n
+Recibiste correctamente tu *{nombre_producto}* y se encuentra en buen estado.\n
+¿Es correcto?
+"""
 
 CONFIRMAR_COMPONENTES = (
     "📋 Corroboremos que hayas recibido todo completo:\n\n"
@@ -74,6 +85,14 @@ INFO_BENEFICIOS = (
     "Recibirás tu multifuncional llega en un plazo máximo de 3 meses.\n"
     "Es importante que mantengas tu cuenta al corriente para conservar tus beneficios.\n\n"
     "¿Tienes alguna duda sobre tu contrato o tu PC-Máxica?"
+)
+
+INFO_BENEFICIOS2 = (
+    "🎉 ¡Felicidades! a partir de ahora puedes disfrutar de tu *{producto}* y de :\n\n"
+    "• 🛠️ Asesoría y Soporte Técnico\n"
+    "• 🛡️ Garantía de 1 año sobre defectos de fabricación\n"
+    "Es importante que mantengas tu cuenta al corriente para conservar tus beneficios.\n\n"
+    "¿Tienes alguna duda sobre tu contrato o tu *{producto}*?"
 )
 
 FINALIZADO = "✅ Verificación completada. Gracias por tu tiempo."
