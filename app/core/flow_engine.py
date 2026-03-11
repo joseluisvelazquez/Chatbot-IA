@@ -14,15 +14,26 @@ from app.siga.siga_repository import (
     obtener_venta_por_folio,
     obtener_domicilio_por_movimiento,
     construir_nombre,
+    construir_pago_inicial,
     construir_producto,
     construir_no_cuenta,
 )
 from app.utils.date_formatter import formatear_fecha_larga
 from app.content import messages
+from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
+from app.utils.date_formatter import formatear_fecha_larga
 from app.utils import address_formatter
 from app.services.inconsistencias_service import get_open_inconsistencia
+from app.utils.folio_parser import extraer_folio
 
+# Mapeo de SKU a nombre de producto por que se maneja diferente en SIGA (Ta raro esto ayuda mucho lit good)
+SKU_PRODUCT_MAP = {
+    "14DQ6011DX": "Laptop HP",
+    "MULTI-MX-2": "Impresora multifuncional HP Smart Tank",
+    "MULTI-MX-1": "Multifuncional Brother",
+}
 
+# Mapeo de componentes faltantes para facilitar su registro y manejo Para que salga en el whatsap con emojis y no se registre con simbolos raros en el json tambien good
 COMPONENTES_MAP = {
     "FALT_CPU": {
         "db": "CPU roja",
@@ -119,6 +130,37 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         detected_intent, folio = detect_intent(text, current_state)
 
     # --------------------------------------
+    # Detectar folio en cualquier mensaje
+    # --------------------------------------
+
+    folio_detectado = extraer_folio(text)
+
+    if folio_detectado and not session.folio:
+
+        venta = obtener_venta_por_folio(db, folio_detectado)
+
+        if venta:
+            session.folio = folio_detectado
+
+            return FlowResult(
+                reply=f"🔎 Detecté tu folio: *{folio_detectado}*\n\n¿Es correcto?",
+                next_state=ChatState.CONFIRMAR_FOLIO,
+                buttons=FLOW[ChatState.CONFIRMAR_FOLIO].get("buttons", []),
+                previous_state=None
+            )
+
+    # --------------------------------------
+    # Mostrar menú principal
+    # --------------------------------------
+
+    if current_state in [ChatState.ESPERA, ChatState.FUERA_DE_FLUJO] and detected_intent != "start_verification":
+        return FlowResult(
+            reply=messages.MENU_AYUDA,
+            next_state=ChatState.MENU_AYUDA,
+            buttons=FLOW[ChatState.MENU_AYUDA]["buttons"]
+        )
+    
+    # --------------------------------------
     # Si mandó folio para iniciar
     # --------------------------------------
     if detected_intent == "start_verification":
@@ -146,23 +188,38 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # Cambio manual de folio
     # --------------------------------------
     elif current_state == ChatState.CAMBIAR_FOLIO:
-        nuevo_folio = text.strip()
-        venta = obtener_venta_por_folio(db, nuevo_folio)
 
-        if not venta:
+        nuevo_folio = extraer_folio(text)
+
+        if not nuevo_folio:
             return FlowResult(
-                "❌ Ese folio no existe. Intenta nuevamente.",
+                "❌ No pude detectar un folio válido.\n\n✏️ Envíalo nuevamente.",
                 current_state,
                 [],
                 previous_state,
             )
 
-        # Reemplazamos el folio
-        session.folio = nuevo_folio
+        venta = obtener_venta_por_folio(db, nuevo_folio)
 
+        if not venta:
+            return FlowResult(
+                "❌ Ese folio no existe.\n\n✏️ Intenta nuevamente.",
+                current_state,
+                [],
+                previous_state,
+            )
+
+        session.folio = nuevo_folio
         _try_mark_step("folio")
 
-        next_state = ChatState.CONFIRMAR_FOLIO
+
+        return FlowResult(
+            reply=f"🔎 Detecté tu folio: *{nuevo_folio}*\n\n¿Es correcto?",
+            next_state=ChatState.CONFIRMAR_FOLIO,
+            buttons=FLOW[ChatState.CONFIRMAR_FOLIO].get("buttons", []),
+            previous_state=None
+        )
+        
 
     # --------------------------------------
     # Usuario escribe la inconsistencia
@@ -230,13 +287,24 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             previous_state = session.state
     print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
 
+   
+
     # --------------------------------------
     # Manejo especial: Salto de Confirmar Componentes
     # --------------------------------------
     if next_state == ChatState.CONFIRMAR_COMPONENTES and session.folio:
         venta = obtener_venta_por_folio(db, session.folio)
         if venta and venta.sku_bitacora_v != "PC-MAXICA":
-            next_state = ChatState.CONFIRMAR_PAGO_INICIAL
+            next_state = ChatState.CONFIRMAR_ESTADO_PRODUCTO
+
+    # --------------------------------------
+    # Manejo especial: Beneficios según producto
+    # --------------------------------------
+    if next_state == ChatState.INFO_BENEFICIOS and session.folio:
+        venta = obtener_venta_por_folio(db, session.folio)
+
+        if venta and venta.sku_bitacora_v != "PC-MAXICA":
+            next_state = ChatState.INFO_BENEFICIOS2
 
     # --------------------------------------
     # Registrar componente faltante
@@ -336,7 +404,13 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply = f"🔎 Detecté tu folio: *{session.folio}*\n\n¿Es correcto?"
 
         elif next_state == ChatState.CONFIRMAR_NOMBRE:
-            reply = MessageBuilder.confirmar_nombre(construir_nombre(venta))
+            reply = MessageBuilder.confirmar_nombre(
+                construir_nombre(venta)
+            )
+        elif next_state == ChatState.CONFIRMAR_PAGO_INICIAL:
+            reply = MessageBuilder.confirmar_pago(
+                construir_pago_inicial(venta)
+            )
 
         elif next_state == ChatState.CONFIRMAR_DOMICILIO:
             domicilio = obtener_domicilio_por_movimiento(db, venta.id_movimiento_bv)
@@ -351,10 +425,16 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply = MessageBuilder.confirmar_fecha(fecha_natural)
 
         elif next_state == ChatState.CONFIRMAR_PRODUCTO:
-            reply = MessageBuilder.confirmar_producto(venta.sku_bitacora_v or "No disponible")
+            sku = venta.sku_bitacora_v.upper()
+            producto = SKU_PRODUCT_MAP.get(sku, sku)
 
-        elif next_state == ChatState.CONFIRMAR_PAGO_INICIAL:
-            reply = MessageBuilder.confirmar_pago(venta.importe or "No disponible")
+            reply = MessageBuilder.confirmar_producto(producto)
+        
+        elif next_state == ChatState.CONFIRMAR_ESTADO_PRODUCTO:
+            sku = venta.sku_bitacora_v.upper()
+            producto = SKU_PRODUCT_MAP.get(sku, sku)
+
+            reply = MessageBuilder.confirmar_estado_producto(producto)
 
         elif next_state == ChatState.INFO_PAGOS:
             calculos = calcular_info_pagos(venta)
@@ -381,6 +461,11 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                     importe_semanal_3m=calculos_3m["importe_semanal_3m"],
                     subsidio=calculos_3m["subsidio"] if calculos_3m["tiene_subsidio"] else None,
                 )
+        elif next_state == ChatState.INFO_BENEFICIOS2:
+            sku = venta.sku_bitacora_v
+            producto = SKU_PRODUCT_MAP.get(sku, sku)
+
+            reply = MessageBuilder.info_beneficios_producto(producto)
 
 
     #print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")

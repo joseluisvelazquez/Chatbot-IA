@@ -11,11 +11,24 @@ DEFAULT_TRANSITIONS = {
 
 
 FLOW = {
+    ChatState.MENU_AYUDA: {
+        "text": msg.MENU_AYUDA,
+        "buttons": [
+            {"id": "MENU_VERIFICACION", "label": "📄 Verificacion"},
+            {"id": "MENU_DUDAS", "label": "❓ Dudas generales"},
+            {"id": "MENU_PAGOS", "label": "💰 Dudas sobre pagos"},
+        ],
+        "options": {
+            "MENU_VERIFICACION": ChatState.CAMBIAR_FOLIO,
+            "MENU_DUDAS": ChatState.ACLARACION,
+            "MENU_PAGOS": ChatState.INFO_PAGOS,
+        },
+    },
     ChatState.ESPERA: {
-        "text": msg.ESPERA,
+        "text": "",
         "buttons": [],
         "options": {
-            "affirmative": ChatState.INICIO,
+            "auto_next": ChatState.MENU_AYUDA,
         },
         "auto_next": ChatState.INICIO,
     },
@@ -47,7 +60,7 @@ FLOW = {
     },
 
     ChatState.CAMBIAR_FOLIO: {
-        "text": "✏️ Por favor envíame nuevamente tu folio.",
+        "text": "✏️ Por favor escribe tu folio.",
         "buttons": [],
         "options": {}
     },
@@ -117,6 +130,19 @@ FLOW = {
             "affirmative": ChatState.CONFIRMAR_PAGO_INICIAL,
             "COMP_NO": ChatState.COMPONENTES_FALTANTES,
             "negative": ChatState.COMPONENTES_FALTANTES,
+        },
+    },
+    ChatState.CONFIRMAR_ESTADO_PRODUCTO: {
+        "text": msg.CONFIRMAR_ESTADO_PRODUCTO,
+        "buttons": [
+            {"id": "PROD_ESTADO_SI", "label": "✅ Sí"},
+            {"id": "PROD_ESTADO_NO", "label": "❌ No"},
+        ],
+        "options": {
+            "PROD_ESTADO_SI": ChatState.CONFIRMAR_PAGO_INICIAL,
+            "affirmative": ChatState.CONFIRMAR_PAGO_INICIAL,
+            "PROD_ESTADO_NO": ChatState.ESCRIBIR_INCONSISTENCIA,
+            "negative": ChatState.ESCRIBIR_INCONSISTENCIA,
         },
     },
     ChatState.COMPONENTES_FALTANTES: {
@@ -224,6 +250,18 @@ FLOW = {
             "BEN_DUDA": ChatState.ACLARACION,
         },
     },
+    ChatState.INFO_BENEFICIOS2: {
+        "text": msg.INFO_BENEFICIOS2,
+        "buttons": [
+            {"id": "BEN_OK", "label": "✅ No tengo dudas"},
+            {"id": "BEN_DUDA", "label": "❓ Tengo dudas"},
+        ],
+        "options": {
+            "BEN_OK": ChatState.FINALIZADO,
+            "affirmative": ChatState.FINALIZADO,
+            "BEN_DUDA": ChatState.ACLARACION,
+        },
+    },
     ChatState.FINALIZADO: {
         "text": msg.FINALIZADO,
         "buttons": [],
@@ -237,6 +275,7 @@ FLOW = {
         ],
         "options": {
             "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
@@ -248,6 +287,7 @@ FLOW = {
         ],
         "options": {
             "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
@@ -259,6 +299,8 @@ FLOW = {
         ],
         "options": {
             "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
+
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
@@ -270,6 +312,7 @@ FLOW = {
         ],
         "options": {
             "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
