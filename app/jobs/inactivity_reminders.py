@@ -12,7 +12,7 @@ from app.core.states import ChatState
 
 
 # 🔒 Opcional: limitar a un número durante pruebas
-TEST_PHONE_ONLY = "5214271227177"
+TEST_PHONE_ONLY = ["5214271227177", "5214271665615", "5214271644542"]
 
 
 def utcnow_naive() -> datetime:

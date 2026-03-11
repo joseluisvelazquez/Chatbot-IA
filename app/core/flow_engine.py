@@ -61,6 +61,15 @@ INCONSISTENCIAS_MAP = {
     ChatState.CONFIRMAR_PRODUCTO: "producto",
     ChatState.CONFIRMAR_PAGO_INICIAL: "pago_inicial",
 }
+TRANSITIONS = [
+            ChatState.INCONSISTENCIA,
+            ChatState.ESCRIBIR_INCONSISTENCIA,
+            ChatState.FUERA_DE_FLUJO,
+            ChatState.ACLARACION,
+            ChatState.LLAMADA,
+            ChatState.RECORDATORIO_1H,
+            ChatState.RECORDATORIO_2H,
+        ]
 from app.config.settings import settings
 
 
@@ -193,13 +202,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         
         # Guardar estado anterior si vamos a inconsistencia o similares
-        if next_state in [
-            ChatState.INCONSISTENCIA,
-            ChatState.ESCRIBIR_INCONSISTENCIA,
-            ChatState.FUERA_DE_FLUJO,
-            ChatState.ACLARACION,
-            ChatState.LLAMADA,
-        ]:
+        if next_state in TRANSITIONS and current_state not in TRANSITIONS:
             previous_state = session.state
 
         if next_state == "__RESUME__":
@@ -217,13 +220,14 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             else:
                 next_state = ChatState.INICIO
 
-    elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other":
+    elif detected_intent in DEFAULT_TRANSITIONS and detected_intent != "other" and current_state not in TRANSITIONS:
         next_state = DEFAULT_TRANSITIONS[detected_intent]
         previous_state = session.state
 
     else:
         next_state = ChatState.FUERA_DE_FLUJO
-        previous_state = session.state
+        if current_state not in TRANSITIONS:
+            previous_state = session.state
     print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
 
     # --------------------------------------
