@@ -9,6 +9,7 @@ from app.services.reminder_service import TYPE_1H, TYPE_2H
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.core.flow import FLOW
 from app.core.states import ChatState
+from app.core.flow_engine import TRANSITIONS
 
 
 # 🔒 Opcional: limitar a un número durante pruebas
@@ -33,7 +34,9 @@ async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
     node = FLOW[state]
 
     # guardar estado previo
-    session.previous_state = session.state
+    if session.state not in TRANSITIONS:
+        session.previous_state = session.state
+    
     session.state = state
 
     # persistir cambio
@@ -67,7 +70,7 @@ async def _send_due_reminders(db: Session) -> None:
     for r in due:
 
         # filtro para pruebas
-        if TEST_PHONE_ONLY and r.phone != TEST_PHONE_ONLY:
+        if TEST_PHONE_ONLY and r.phone not in TEST_PHONE_ONLY:
             continue
 
         session = (

@@ -52,6 +52,9 @@ def construir_fecha(venta: BitacoraVentas) -> str:
 def construir_no_cuenta(venta: BitacoraVentas) -> str:
     return venta.no_cuenta or "No disponible"
 
+def construir_pago_inicial(venta: BitacoraVentas) -> int:
+    return venta.importe or 0
+
 
 
 
