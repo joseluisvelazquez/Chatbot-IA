@@ -1,12 +1,20 @@
 from sqlalchemy.orm import Session
 from app.db.models import BitacoraVentas, DomiciliosHorariosEntrega, Estado
 from app.utils.address_formatter import capitalizar_texto
+from typing import Optional
 
 # ===============================
 # OBTENER VENTA POR FOLIO
 # ===============================
-def obtener_venta_por_folio(db: Session, folio: str) -> BitacoraVentas | None:
-    return db.query(BitacoraVentas).filter(BitacoraVentas.folio == folio).first()
+def obtener_venta_por_folio(db: Session, folio: str) -> Optional[BitacoraVentas]:
+    return (
+        db.query(BitacoraVentas)
+        .filter(
+            BitacoraVentas.folio == folio,
+            BitacoraVentas.id_emp_bv == 1
+        )
+        .first()
+    )
 
 
 # ===============================
@@ -28,6 +36,8 @@ def obtener_domicilio_por_movimiento(
 # ===============================
 def construir_nombre(venta: BitacoraVentas) -> str:
     return capitalizar_texto(venta.nombre_completo) or "No disponible"
+def construir_pago_inicial(venta: BitacoraVentas) -> str:
+    return venta.importe or "No disponible"
 
 
 # ===============================
@@ -45,6 +55,11 @@ def construir_fecha(venta: BitacoraVentas) -> str:
         return "No disponible"
     return venta.fecha_venta.strftime("%d/%m/%Y")
 
+# ===============================
+# CONSTRUIR PAGO INICIAL
+# ===============================
+def construir_pago_inicial(venta: BitacoraVentas) -> str:
+    return venta.importe or "No disponible"
 
 # ===============================
 # CONSTRUIR NÚMERO DE CUENTA

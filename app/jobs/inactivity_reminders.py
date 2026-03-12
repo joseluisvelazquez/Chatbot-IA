@@ -33,15 +33,6 @@ async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
 
     node = FLOW[state]
 
-    # guardar estado previo
-    if session.state not in TRANSITIONS:
-        session.previous_state = session.state
-    
-    session.state = state
-
-    # persistir cambio
-    db.flush()
-
     text = node["text"]
     buttons = node["buttons"]
 
@@ -76,6 +67,7 @@ async def _send_due_reminders(db: Session) -> None:
         session = (
             db.query(ChatSessions)
             .filter(ChatSessions.id == r.session_id)
+            .with_for_update()
             .first()
         )
 
@@ -114,8 +106,8 @@ async def _send_due_reminders(db: Session) -> None:
             db.commit()
 
         except Exception:
+            db.rollback()
 
-            # rollback de claim para permitir reintento
             db.query(Reminder).filter(Reminder.id == r.id).update(
                 {Reminder.sent_at: None},
                 synchronize_session=False

@@ -32,21 +32,17 @@ RECORDATORIO_2H = (
 )
 CONFIRMAR_PRODUCTO = "🖥️🖨️ ¿El producto que adquiriste es una/un *{nombre_producto}*?"
 
-CONFIRMAR_ESTADO_PRODUCTO = """
-📦 Confirmemos el estado del producto.\n
-Recibiste correctamente tu *{nombre_producto}* y se encuentra en buen estado.\n
-¿Es correcto?
-"""
+CONFIRMAR_ESTADO_PRODUCTO = "📦 ¿Recibiste en buen estado tu *{nombre_producto}*?"
 
 CONFIRMAR_COMPONENTES = (
     "📋 Corroboremos que hayas recibido todo completo:\n\n"
-    "• 🔴 CPU de color rojo\n"
-    "• 🖥️ Monitor o pantalla\n"
-    "• ⌨️ Teclado\n"
-    "• 🖱️ Mouse\n"
-    "• 🔊 Par de bocinas\n"
-    "• 🔌 Regulador de voltaje\n"
-    "• 📶 Antena WiFi tipo USB\n\n"
+    "• 🔴 Un CPU de color rojo\n"
+    "• 🖥️ Un Monitor o pantalla\n"
+    "• ⌨️ Un Teclado\n"
+    "• 🖱️ Un Mouse\n"
+    "• 🔊 Un Par de bocinas\n"
+    "• 🔌 Un Regulador de voltaje\n"
+    "• 📶 Una Antena WiFi tipo USB\n\n"
     "¿Recibiste los 7 componentes?"
 )
 
@@ -64,7 +60,7 @@ INFO_PAGOS = (
 
 INFO_METODOS_PAGO = (
     "🏦 Aquí te dejo las opciones para realizar tus pagos.\n\n"
-    "💳 No olvides incluir este número *{numero_cuenta}* como concepto o referencia.\n\n"
+    "💳 No olvides incluir este número *A{numero_cuenta}* como concepto o referencia.\n\n"
     "Cada que hagas uno, deberás enviame tu comprobante por aquí 👇🏻 tan pronto como puedas para que lo aplique a tu estado de cuenta.\n\n"
     "¿Está claro o tienes alguna duda respecto a los métodos de pago?"
 )
@@ -75,7 +71,7 @@ INFO_PLAN_3_MESES_DESCUENTO = (
 
 INFO_PLAN_3_MESES = (
     "💲 El saldo de tu cuenta es de *${saldo_3_meses}*.\n\n"
-    "⏳ Tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) 🪙 por *${importe_semanal_3m}*.\n\n"
+    "⏳ Tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) por *${importe_semanal_3m}*.\n\n"
     "¿Tienes alguna duda respecto al plan de 3 meses?"
 )
 
@@ -90,16 +86,16 @@ INFO_BENEFICIOS = (
     "• 🛡️ Garantía de 3 años sobre defectos de fabricación\n"
     "• 🎓 Programas y aplicaciones gratuitos\n"
     "• 🖨️ Impresora multifuncional de obsequio\n\n"
-    "Recibirás tu multifuncional llega en un plazo máximo de 3 meses.\n"
-    "Es importante que mantengas tu cuenta al corriente para conservar tus beneficios.\n\n"
-    "¿Tienes alguna duda sobre tu contrato o tu PC-Máxica?"
+    "Recibirás tu multifuncional en un plazo máximo de 3 meses.\n"
+    "Es importante que mantengas tu cuenta al corriente para no perder tus beneficios.\n\n"
+    "¿Tienes alguna duda sobre tu contrato, póliza de garantía, o sobre el uso y funcionamiento de tu PC-Máxica?"
 )
 
 INFO_BENEFICIOS2 = (
     "🎉 ¡Felicidades! a partir de ahora puedes disfrutar de tu *{producto}* y de :\n\n"
     "• 🛠️ Asesoría y Soporte Técnico\n"
     "• 🛡️ Garantía de 1 año sobre defectos de fabricación\n"
-    "Es importante que mantengas tu cuenta al corriente para conservar tus beneficios.\n\n"
+    "Es importante que mantengas tu cuenta al corriente para no perder tus beneficios.\n\n"
     "¿Tienes alguna duda sobre tu contrato o tu *{producto}*?"
 )
 

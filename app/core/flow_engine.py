@@ -115,7 +115,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         if not folio:
             return
         try:
-            VerificationService(db).mark_step_from_folio(str(folio), step_key)
+            VerificationService(db).mark_step_from_folio(str(folio), step_key, 1)
         except Exception as e:
             logger.exception("No se pudo marcar progreso verificación step=%s folio=%s", step_key, folio)
             return
@@ -461,20 +461,15 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                     importe_semanal_3m=calculos_3m["importe_semanal_3m"],
                     subsidio=calculos_3m["subsidio"] if calculos_3m["tiene_subsidio"] else None,
                 )
+        
         elif next_state == ChatState.INFO_BENEFICIOS2:
-            sku = venta.sku_bitacora_v
+            sku = venta.sku_bitacora_v.upper()
             producto = SKU_PRODUCT_MAP.get(sku, sku)
 
-            reply = MessageBuilder.info_beneficios_producto(producto)
+            reply = MessageBuilder.info_beneficios2(producto)
 
 
-    #print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
-    print(
-        f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, "
-        f"next_state={next_state}, previous_state={previous_state}, "
-        f"inconsistencia_patch={result_patch}"
-    )
-
+    print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
     return FlowResult(
         reply=reply,
         next_state=next_state,
