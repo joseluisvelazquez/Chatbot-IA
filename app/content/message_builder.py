@@ -10,6 +10,11 @@ class MessageBuilder:
     @staticmethod
     def confirmar_producto(producto: str) -> str:
         return messages.CONFIRMAR_PRODUCTO.format(nombre_producto=producto)
+    
+    @staticmethod
+    def confirmar_estado_producto(producto: str) -> str:
+        return messages.CONFIRMAR_ESTADO_PRODUCTO.format(nombre_producto=producto)
+
     @staticmethod
     def confirmar_pago(pago: str) -> str:
         return messages.CONFIRMAR_PAGO.format(importe_pago_inicial=pago)
@@ -22,7 +27,6 @@ class MessageBuilder:
     def confirmar_domicilio(domicilio: str) -> str:
         return messages.CONFIRMAR_DOMICILIO.format(domicilio_completo=domicilio)
 
-    
     @staticmethod
     def info_pagos(fecha_limite: str, pago_minimo: str, importe_quincenal: str, importe_mensual: str) -> str:
         return messages.INFO_PAGOS.format(
@@ -47,11 +51,7 @@ class MessageBuilder:
             importe_semanal_3m=importe_semanal_3m,
         ))
         return "".join(partes)
-    
-    @staticmethod
-    def confirmar_estado_producto(producto: str) -> str:
-        return messages.CONFIRMAR_ESTADO_PRODUCTO.format(nombre_producto=producto)
 
     @staticmethod
-    def info_beneficios_producto(producto: str) -> str:
+    def info_beneficios2(producto: str) -> str:
         return messages.INFO_BENEFICIOS2.format(producto=producto)

@@ -9,54 +9,50 @@ from app.utils.date_formatter import formatear_fecha_larga, sumar_meses
 SEMANAS_POR_MES = Decimal("4.33")
 PLAZO_MESES_INFO_PAGOS = 18  # se puede ajustar en el futuro
 
-
-# Tabla simple de planes por SKU y meses, basada en la imagen.
-# Valores en pesos mexicanos.
-PLANES_POR_SKU = {
-    "PC-MAXICA": {
-        18: {
-            "precio": Decimal("16999"),
-            "descuento": Decimal("0"),
-            "enganche": Decimal("229"),
-            "semanas": 78,
-            "pago_semanal": Decimal("215"),
-        },
-        15: {
-            "precio": Decimal("15299"),
-            "descuento": Decimal("10"),
-            "enganche": Decimal("349"),
-            "semanas": 65,
-            "pago_semanal": Decimal("230"),
-        },
-        12: {
-            "precio": Decimal("13599"),
-            "descuento": Decimal("20"),
-            "enganche": Decimal("443"),
-            "semanas": 52,
-            "pago_semanal": Decimal("253"),
-        },
-        9: {
-            "precio": Decimal("11899"),
-            "descuento": Decimal("30"),
-            "enganche": Decimal("511"),
-            "semanas": 39,
-            "pago_semanal": Decimal("292"),
-        },
-        6: {
-            "precio": Decimal("10199"),
-            "descuento": Decimal("40"),
-            "enganche": Decimal("605"),
-            "semanas": 26,
-            "pago_semanal": Decimal("369"),
-        },
-        3: {
-            "precio": Decimal("8499"),
-            "descuento": Decimal("50"),
-            "enganche": Decimal("699"),
-            "semanas": 13,
-            "pago_semanal": Decimal("600"),
-        },
-    }
+PLANES_POR_MESES = {
+    
+    18: {
+        "precio": Decimal("16999"),
+        "descuento": Decimal("0"),
+        "enganche": Decimal("229"),
+        "semanas": 78,
+        "pago_semanal": Decimal("215"),
+    },
+    15: {
+        "precio": Decimal("15299"),
+        "descuento": Decimal("10"),
+        "enganche": Decimal("349"),
+        "semanas": 65,
+        "pago_semanal": Decimal("230"),
+    },
+    12: {
+        "precio": Decimal("13599"),
+        "descuento": Decimal("20"),
+        "enganche": Decimal("443"),
+        "semanas": 52,
+        "pago_semanal": Decimal("253"),
+    },
+    9: {
+        "precio": Decimal("11899"),
+        "descuento": Decimal("30"),
+        "enganche": Decimal("511"),
+        "semanas": 39,
+        "pago_semanal": Decimal("292"),
+    },
+    6: {
+        "precio": Decimal("10199"),
+        "descuento": Decimal("40"),
+        "enganche": Decimal("605"),
+        "semanas": 26,
+        "pago_semanal": Decimal("369"),
+    },
+    3: {
+        "precio": Decimal("8499"),
+        "descuento": Decimal("50"),
+        "enganche": Decimal("699"),
+        "semanas": 13,
+        "pago_semanal": Decimal("600"),
+    },
 }
 
 
@@ -67,7 +63,7 @@ def _redondear_importe(importe: Decimal) -> Decimal:
 
 def _redondear_entero_amigable(importe: Decimal) -> int:
     """
-    Redondeo \"amigable\" para montos en pesos:
+    Redondeo "amigable" para montos en pesos:
     - Redondea hacia arriba al entero más cercano.
     - Si el resultado es impar, se suma 1 para dejarlo en número par,
       facilitando que los montos quincenales sean también números cerrados.
@@ -82,26 +78,20 @@ def calcular_info_pagos(venta: BitacoraVentas) -> Optional[dict[str, str]]:
     """
     Calcula los datos necesarios para el mensaje INFO_PAGOS.
 
-    Reglas actuales (solo PC-MAXICA, plan de PLAZO_MESES_INFO_PAGOS meses):
+    Reglas actuales:
     - fecha_limite = fecha_venta + 7 días.
     - pago_minimo = pago_semanal del plan.
     - importe_mensual = pago_minimo * 4.33 (semanas/mes), redondeando hacia arriba.
     - importe_quincenal = importe_mensual / 2, redondeando hacia arriba.
     """
-    if not venta or not venta.fecha_venta or not venta.sku_bitacora_v:
+    if not venta or not venta.fecha_venta:
+        return None
+    
+    plan = PLANES_POR_MESES.get(PLAZO_MESES_INFO_PAGOS)
+    if not plan:
         return None
 
-    sku_normalizado = venta.sku_bitacora_v.strip().upper()
-    planes_sku = PLANES_POR_SKU.get(sku_normalizado)
-    if not planes_sku:
-        return None
-
-    plan_info_pagos = planes_sku.get(PLAZO_MESES_INFO_PAGOS)
-    if not plan_info_pagos:
-        return None
-
-    pago_semanal = plan_info_pagos["pago_semanal"]
-
+    pago_semanal = plan["pago_semanal"]
     fecha_limite = venta.fecha_venta + timedelta(days=7)
 
     # Cálculo base en decimales
@@ -122,7 +112,6 @@ def calcular_info_pagos(venta: BitacoraVentas) -> Optional[dict[str, str]]:
 def calcular_info_plan_3_meses(venta: BitacoraVentas) -> Optional[dict[str, str]]:
     """
     Calcula los datos necesarios para el mensaje INFO_PLAN_3_MESES
-    para el SKU PC-MAXICA a 3 meses.
 
     - saldo = precio_plan_3m - subsidio - pago
       (subsidio y pago: NULL o 0 se tratan como 0)
@@ -131,15 +120,10 @@ def calcular_info_plan_3_meses(venta: BitacoraVentas) -> Optional[dict[str, str]
 
     Tanto saldo como importe semanal se redondean a enteros amigables.
     """
-    if not venta or not venta.fecha_venta or not venta.sku_bitacora_v:
+    if not venta or not venta.fecha_venta:
         return None
 
-    sku_normalizado = venta.sku_bitacora_v.strip().upper()
-    planes_sku = PLANES_POR_SKU.get(sku_normalizado)
-    if not planes_sku:
-        return None
-
-    plan_3_meses = planes_sku.get(3)
+    plan_3_meses = PLANES_POR_MESES.get(3)
     if not plan_3_meses:
         return None
 

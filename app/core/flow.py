@@ -11,11 +11,24 @@ DEFAULT_TRANSITIONS = {
 
 
 FLOW = {
+    ChatState.MENU_AYUDA: {
+        "text": msg.MENU_AYUDA,
+        "buttons": [
+            {"id": "MENU_VERIFICACION", "label": "📄 Verificacion"},
+            {"id": "MENU_DUDAS", "label": "❓ Dudas generales"},
+            {"id": "MENU_PAGOS", "label": "💰 Dudas sobre pagos"},
+        ],
+        "options": {
+            "MENU_VERIFICACION": ChatState.CAMBIAR_FOLIO,
+            "MENU_DUDAS": ChatState.ACLARACION,
+            "MENU_PAGOS": ChatState.INFO_PAGOS,
+        },
+    },
     ChatState.ESPERA: {
-        "text": msg.ESPERA,
+        "text": "",
         "buttons": [],
         "options": {
-            "affirmative": ChatState.INICIO,
+            "auto_next": ChatState.MENU_AYUDA,
         },
         "auto_next": ChatState.INICIO,
     },
@@ -47,7 +60,7 @@ FLOW = {
     },
 
     ChatState.CAMBIAR_FOLIO: {
-        "text": "✏️ Por favor envíame nuevamente tu folio.",
+        "text": "✏️ Por favor escribe tu folio.",
         "buttons": [],
         "options": {}
     },
@@ -262,6 +275,7 @@ FLOW = {
         ],
         "options": {
             "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
@@ -273,6 +287,7 @@ FLOW = {
         ],
         "options": {
             "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
@@ -284,6 +299,8 @@ FLOW = {
         ],
         "options": {
             "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
+
             "ACLARA_LLAMADA": ChatState.LLAMADA,
         },
     },
@@ -291,6 +308,28 @@ FLOW = {
         "text": msg.ACLARACION,
         "buttons": [
             {"id": "REANUDACION", "label": "▶️ Continuar proceso"},
+            {"id": "ACLARA_LLAMADA", "label": "📞 Hablar asesor"},
+        ],
+        "options": {
+            "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
+            "ACLARA_LLAMADA": ChatState.LLAMADA,
+        },
+    },
+    ChatState.RECORDATORIO_1H : {
+        "text": msg.RECORDATORIO_1H,
+        "buttons": [
+            {"id": "REANUDACION", "label": "▶️ Continuar"},
+        ],
+        "options": {
+            "REANUDACION": "__RESUME__",
+        },
+    },
+
+    ChatState.RECORDATORIO_2H: {
+        "text": msg.RECORDATORIO_2H,
+        "buttons": [
+            {"id": "REANUDACION", "label": "▶️ Continuar"},
             {"id": "ACLARA_LLAMADA", "label": "📞 Hablar asesor"},
         ],
         "options": {
