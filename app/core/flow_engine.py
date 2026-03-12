@@ -241,9 +241,21 @@ def process_message(
                     importe_semanal_3m=calculos_3m["importe_semanal_3m"],
                     subsidio=calculos_3m["subsidio"] if calculos_3m["tiene_subsidio"] else None,
                 )
+       
+        elif next_state == ChatState.INFO_BENEFICIOS2:
+            sku = venta.sku_bitacora_v
+            producto = SKU_PRODUCT_MAP.get(sku, sku)
+
+            reply = MessageBuilder.info_beneficios_producto(producto)
 
 
-    print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
+    #print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
+    print(
+        f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, "
+        f"next_state={next_state}, previous_state={previous_state}, "
+        f"inconsistencia_patch={result_patch}"
+    )
+
     return FlowResult(
         reply,
         next_state,
