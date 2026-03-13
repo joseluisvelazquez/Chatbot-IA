@@ -1,7 +1,7 @@
 from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -20,16 +20,6 @@ class VerificationResult:
     no_cuenta: str
     progress: Dict[str, int]
 
-def is_verification_complete(payload: Dict[str, Any]) -> bool:
-    """
-    Determina si la verificación ya fue completada.
-    Se considera completa si se llegó al paso 'beneficios'
-    o si explícitamente se marcó 'finalizado'.
-    """
-
-    data = normalize_progress_payload(payload)
-
-    return data["beneficios"] in [1,2] or data["finalizado"] == 1
 
 class VerificationService:
     """Persistencia del avance de verificación por CUENTA (no por sesión).
@@ -95,14 +85,6 @@ class VerificationService:
             .with_for_update()
             .first()
         )
-        if row and is_verification_complete(row.json):
-
-            send_message(
-                phone,
-                "✅ Esta cuenta ya fue verificada anteriormente."
-            )
-
-            return
 
         if not row:
             self._create_if_missing(no_cuenta)
