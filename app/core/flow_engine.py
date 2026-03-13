@@ -103,7 +103,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     if not flow:
         return FlowResult("Un asesor te contactará.", ChatState.LLAMADA, [])
-    no_cuenta = VerificationService.resolve_no_cuenta_from_folio(folio)
+    no_cuenta = VerificationService(db).resolve_no_cuenta_from_folio(session.folio)
 
     if no_cuenta:
 

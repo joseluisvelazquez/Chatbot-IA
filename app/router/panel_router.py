@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.db.models import ChatSessions
 from app.db.session import get_db
-from app.db.models import ChatSession
 
 router = APIRouter(prefix="/api/panel", tags=["panel"])
 
@@ -15,11 +15,11 @@ def get_conversations(
 ):
 
     sessions = (
-        db.query(ChatSession)
-        .order_by(ChatSession.last_message_at.desc())
+        db.query(ChatSessions)
+        .order_by(ChatSessions.last_message_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
     )
 
-    return sessions
+    return sessions 
