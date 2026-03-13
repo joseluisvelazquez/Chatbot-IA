@@ -8,7 +8,6 @@ from app.core.flow import DEFAULT_TRANSITIONS, FLOW
 from app.core.intents import detect_intent
 from app.core.states import ChatState
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
-from app.services import verification_service
 from app.services.verification_service import VerificationService
 from app.services.verification_tracker import track_verification
 from app.siga.siga_repository import (
@@ -103,20 +102,6 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     if not flow:
         return FlowResult("Un asesor te contactará.", ChatState.LLAMADA, [])
-    no_cuenta = VerificationService.resolve_no_cuenta_from_folio(folio)
-
-    if no_cuenta:
-
-        if verification_service.is_verification_complete(no_cuenta):
-            return {
-                "text": "✅ Esta cuenta ya fue verificada anteriormente.",
-                "buttons": [
-                    {"id": "DUDA", "label": "❓ Tengo una duda"},
-                    {"id": "PAGOS", "label": "💳 Consultar pagos"}
-                ]
-            }
-    
-    
 
     # --------------------------------------
     # Helpers internos: persistencia best-effort (no rompe flujo si falla)
