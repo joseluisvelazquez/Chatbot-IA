@@ -18,6 +18,7 @@ DEFAULT_VERIFICATION_PROGRESS: Dict[str, int] = {
     "plan3meses": 0,
     "planes": 0,
     "beneficios": 0,
+    "finalizado": 0,
 }
 
 
