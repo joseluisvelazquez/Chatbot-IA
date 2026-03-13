@@ -31,6 +31,7 @@ from app.services.reminder_service import upsert_inactivity_reminders
 
 from app.adapters.meta_webhook import parse_meta_payload
 from app.adapters.whatsapp_client import send_whatsapp_message
+from app.services.message_service import save_message
 
 router = APIRouter()
 
@@ -76,6 +77,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     text = data.get("text") or ""
     message_id = data.get("message_id")
     button_id = data.get("button_id")
+    content = text if text else button_id
     print(
         "ABOUT TO PROCESS:",
         {
@@ -88,6 +90,15 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     )
     try:
         chat = get_or_create_session(db, phone)
+
+        save_message(
+            db=db,
+            session_id=chat.id,
+            phone=phone,
+            direction="in",
+            content = text if text else f"[BOTON] {button_id}",
+            message_id=message_id
+        )
 
         # Anti-duplicado
         if message_id and chat.last_message_id == message_id:
@@ -104,6 +115,16 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         next_state = result.next_state
         buttons = result.buttons
         previous_state = result.previous_state
+
+        # Guardar respuesta del bot en la conversación (antes de enviar, para asegurar persistencia aunque falle el envío)
+        if reply:
+            save_message(
+                db=db,
+                session_id=chat.id,
+                phone=phone,
+                direction="out",
+                content=reply
+            )
 
         now = utcnow_naive()
 
@@ -161,7 +182,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         update_session(
             session=chat,
             state=next_state.value,
-            last_message=text,
+            last_message=content,
             previous_state=previous_state,
             message_id=message_id,
             last_message_at=now,  # ✅ clave
