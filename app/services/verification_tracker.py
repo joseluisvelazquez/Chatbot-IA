@@ -17,6 +17,7 @@ STEP_MAP = {
     ChatState.INFO_OTROS_PLANES: "planes",
     ChatState.INFO_METODOS_PAGO: "bancos",
     ChatState.INFO_BENEFICIOS: "beneficios",
+    ChatState.FINALIZADO: "finalizado",
 }
 
 
@@ -33,7 +34,6 @@ NEGATIVE_INTENTS = {
     "PLAN_DUDA",
     "METODOS_DUDA",
     "BEN_DUDA",
-
 }
 
 

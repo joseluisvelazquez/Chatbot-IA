@@ -36,7 +36,7 @@ def create_inactivity_reminders(db: Session, session: ChatSessions) -> None:
             session_id=session.id,
             phone=session.phone,
             type=TYPE_1H,
-            scheduled_at=base + timedelta(hours=0.001),  # para pruebas, 3.6s aprox
+            scheduled_at=base + timedelta(minutes=5),  # para pruebas, 5 min
             created_last_message_id=session.last_message_id,
         )
     )

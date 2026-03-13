@@ -6,10 +6,15 @@ from app.jobs.inactivity_reminders import run_inactivity_reminders_job
 from app.api.panel_sessions import router as panel_sessions_router
 from app.api.panel_messages import router as panel_messages_router
 
+from app.router.panel_router import router as panel_router
+
+
+
 app = FastAPI(title="MXCOMP Chatbot")
 app.include_router(webhook_router)
 app.include_router(panel_sessions_router)
 app.include_router(panel_messages_router)
+app.include_router(panel_router)
 
 scheduler = BackgroundScheduler(timezone="UTC")
 
