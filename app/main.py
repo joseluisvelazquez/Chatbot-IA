@@ -4,8 +4,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.api.webhook import router as webhook_router
 from app.jobs.inactivity_reminders import run_inactivity_reminders_job
 
+from app.router.panel_router import router as panel_router
+
+
+
 app = FastAPI(title="MXCOMP Chatbot")
 app.include_router(webhook_router)
+app.include_router(panel_router)
 
 scheduler = BackgroundScheduler(timezone="UTC")
 
