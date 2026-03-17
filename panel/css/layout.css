@@ -1,0 +1,23 @@
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: var(--background);
+    color: var(--text);
+}
+
+.main-container {
+    display: flex;
+    height: calc(100vh - 60px);
+}
+
+aside {
+    width: 250px;
+    background: #020617;
+    border-right: 1px solid #1e293b;
+}
+
+main {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+}

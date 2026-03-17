@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>MXCOMP Panel</title>
+
+    <link rel="stylesheet" href="css/variables.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/components.css">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+
+<body>
+
+<div id="app">
+
+    <!-- HEADER -->
+    <header id="header"></header>
+
+    <!-- MAIN -->
+    <div class="main-container">
+
+        <!-- SIDEBAR -->
+        <aside id="sidebar"></aside>
+
+        <!-- CONTENT -->
+        <main id="content">
+            <div class="dashboard">
+
+                <h1>Panel Operativo</h1>
+
+                <div class="cards">
+
+                    <div class="card">
+                        <h3>Conversaciones activas</h3>
+                        <p id="activeChats">-</p>
+                    </div>
+
+                    <div class="card">
+                        <h3>Verificaciones en proceso</h3>
+                        <p id="verifications">-</p>
+                    </div>
+
+                    <div class="card">
+                        <h3>Cobranza pendiente</h3>
+                        <p id="collections">-</p>
+                    </div>
+
+                </div>
+
+                <div class="section">
+
+                    <h2>Actividad reciente</h2>
+
+                    <div id="recentActivity" class="table-container">
+                        <!-- dinámico -->
+                    </div>
+
+                </div>
+
+            </div>
+        </main>
+
+    </div>
+
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
