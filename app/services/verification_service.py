@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.panel_send import send_message
 from app.core.verification_schema import (
     DEFAULT_VERIFICATION_PROGRESS,
     assert_valid_step,
@@ -76,7 +77,7 @@ class VerificationService:
             # otro request lo creó primero; aquí NO tumbamos la transacción externa
             pass
 
-    def update_step_atomic(self, no_cuenta: str, step: str, value: int = 1) -> VerificationResult:
+    def update_step_atomic(self, no_cuenta: str, step: str, value: int = 1, phone: str = None) -> VerificationResult:
 
         if not no_cuenta:
             raise ValueError("no_cuenta requerido")
@@ -98,7 +99,7 @@ class VerificationService:
         if row and is_verification_complete(row.json):
 
             send_message(
-                phone,
+               phone,
                 "✅ Esta cuenta ya fue verificada anteriormente."
             )
 
@@ -127,8 +128,8 @@ class VerificationService:
 
         return VerificationResult(no_cuenta=no_cuenta, progress=progress)
 
-    def mark_step_from_folio(self, folio: str, step: str, value: int) -> Optional[VerificationResult]:
+    def mark_step_from_folio(self, folio: str, step: str, value: int, phone: str) -> Optional[VerificationResult]:
         no_cuenta = self.resolve_no_cuenta_from_folio(folio)
         if not no_cuenta:
             return None
-        return self.update_step_atomic(no_cuenta=no_cuenta, step=step, value=value)
+        return self.update_step_atomic(no_cuenta=no_cuenta, step=step, value=value, phone=phone)
