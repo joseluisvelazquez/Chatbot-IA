@@ -7,6 +7,9 @@ from app.jobs.inactivity_reminders import run_inactivity_reminders_job
 from app.router.panel_router import router as panel_router
 
 
+from fastapi.middleware.cors import CORSMiddleware
+
+
 
 app = FastAPI(title="MXCOMP Chatbot")
 app.include_router(webhook_router)
@@ -14,6 +17,14 @@ app.include_router(panel_router)
 
 scheduler = BackgroundScheduler(timezone="UTC")
 
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # en dev
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 def startup():
