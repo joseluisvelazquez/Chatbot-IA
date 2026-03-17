@@ -103,7 +103,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     if not flow:
         return FlowResult("Un asesor te contactará.", ChatState.LLAMADA, [])
-    no_cuenta = VerificationService.resolve_no_cuenta_from_folio(folio)
+    no_cuenta = VerificationService(db).resolve_no_cuenta_from_folio(session.folio)
 
     if no_cuenta:
 
@@ -130,7 +130,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         if not folio:
             return
         try:
-            VerificationService(db).mark_step_from_folio(str(folio), step_key, 1)
+            VerificationService(db).mark_step_from_folio(str(folio), step_key, 1, session.phone)
         except Exception as e:
             logger.exception("No se pudo marcar progreso verificación step=%s folio=%s", step_key, folio)
             return

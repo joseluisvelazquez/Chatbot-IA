@@ -75,5 +75,6 @@ def track_verification(
     VerificationService(db).mark_step_from_folio(
         str(folio),
         step,
-        value=value
+        value=value,
+        phone=session.phone,
     )
