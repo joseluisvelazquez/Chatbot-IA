@@ -14,8 +14,6 @@ from app.router.panel_router import router as panel_router
 
 app = FastAPI(title="MXCOMP Chatbot")
 app.include_router(webhook_router)
-app.include_router(panel_sessions_router)
-app.include_router(panel_messages_router)
 app.include_router(panel_router)
 app.include_router(panel_send_router)
 app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
