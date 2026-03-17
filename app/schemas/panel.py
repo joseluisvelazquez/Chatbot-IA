@@ -1,24 +1,33 @@
-# app/schemas/panel.py
-
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional, List
 from datetime import datetime
 
 
+# =========================
+# REQUEST
+# =========================
+class SendMessageRequest(BaseModel):
+    session_id: int
+    content: str = Field(min_length=1, max_length=1000)
+
+
+# =========================
+# RESPONSES
+# =========================
 class ConversationResponse(BaseModel):
+    id: int
     phone: str
-    state: str
-    last_message: str | None
-    last_message_at: datetime | None
+    last_message_at: Optional[datetime]
 
 
 class MessageResponse(BaseModel):
     id: int
-    phone: str
     direction: str
-    text: str | None
+    content: str
     created_at: datetime
 
 
-class SendMessageRequest(BaseModel):
-    phone: str
-    text: str
+class PaginatedMessagesResponse(BaseModel):
+    data: List[MessageResponse]
+    total: int
+    has_more: bool

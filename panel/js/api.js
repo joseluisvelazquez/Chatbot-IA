@@ -1,27 +1,37 @@
-const API_BASE = "/api/panel"
+const API_URL = "http://localhost:5500";
 
-export async function getConversations(){
-    const res = await fetch(`${API_BASE}/conversations`)
-    return await res.json()
+async function apiRequest(endpoint, options = {}) {
+    try {
+        const res = await fetch(`${API_URL}${endpoint}`, {
+            headers: {
+                "Content-Type": "application/json"
+            },
+            ...options
+        });
+
+        if (!res.ok) {
+            throw new Error(`Error ${res.status}`);
+        }
+
+        return await res.json();
+
+    } catch (error) {
+        console.error("API ERROR:", error);
+        return null;
+    }
 }
 
-export async function getMessages(sessionId){
-    const res = await fetch(`${API_BASE}/messages/${sessionId}`)
-    return await res.json()
+export async function getConversations() {
+    return apiRequest("/conversations");
 }
 
-export async function sendMessage(sessionId,message){
+export async function getMessages(sessionId) {
+    return apiRequest(`/messages/${sessionId}`);
+}
 
-    const res = await fetch(`${API_BASE}/send`,{
-        method:"POST",
-        headers:{
-            "Content-Type":"application/json"
-        },
-        body:JSON.stringify({
-            session_id:sessionId,
-            message:message
-        })
-    })
-
-    return await res.json()
+export async function sendMessage(payload) {
+    return apiRequest("/messages", {
+        method: "POST",
+        body: JSON.stringify(payload)
+    });
 }
