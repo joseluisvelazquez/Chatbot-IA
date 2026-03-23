@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.message_service import save_message
+from app.websockets.manager import manager
 
 router = APIRouter()
 
@@ -91,6 +92,17 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             content = text if text else f"[BOTON] {button_id}",
             message_id=message_id
         )
+        chat.unread_count = (chat.unread_count or 0) + 1
+
+        await manager.send_to_all({
+            "type": "new_message",
+            "session_id": chat.id,
+            "message": {
+                "content": text if text else f"[BOTON] {button_id}",
+                "direction": "in"
+            },
+            "unread_count": chat.unread_count
+        })
 
         
 
@@ -114,6 +126,15 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 direction="out",
                 content=reply
             )
+            await manager.send_to_all({
+                "type": "new_message",
+                "session_id": chat.id,
+                "message": {
+                    "content": reply,
+                    "direction": "out", 
+                },
+                "unread_count": chat.unread_count 
+            })
 
         now = utcnow_naive()
 

@@ -1,0 +1,109 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Conversaciones</title>
+
+<link rel="stylesheet" href="../css/styles.css">
+<link rel="stylesheet" href="../css/conversaciones.css">
+
+</head>
+
+<body>
+<audio id="notificationSound" src="../sounds/notification.mp3"></audio>
+
+<div class="container">
+
+    <!-- SIDEBAR -->
+    <div class="sidebar" id="conversationList"></div>
+
+    <!-- CHAT -->
+    <div class="chat">
+
+        <div class="chat-header" id="chatHeader">
+            Bienvenido a tu chat, selecciona una conversación o inicia una nueva. :D
+        </div>
+
+        <!-- MENSAJES -->
+        <div id="messages"></div>
+
+        <!-- INPUT -->
+        <div class="input">
+            <input 
+                id="messageInput" 
+                placeholder="Escribe un mensaje..." 
+                oninput="handleTyping()" 
+                onkeydown="handleKeyDown(event)"
+            />
+            
+            <button onclick="send()">Enviar</button>
+        </div>
+
+    </div>
+
+</div>
+
+<script type="module">
+
+import { getConversations } from "../js/api.js"
+import { loadChat, send, initWebSocket } from "../js/chat.js"
+
+window.send = send
+
+//función para formatear el número de teléfono en formato internacional
+function formatPhone(phone) {
+    return "+" + phone.replace(/(\d{2})(\d{3})(\d{3})(\d{4})/, "$1 $2 $3 $4")
+}
+
+//INICIAS EL WS
+initWebSocket()
+
+// Función para formatear la hora de la última conversación
+function formatTime(dateString) {
+    if (!dateString) return ""
+
+    const date = new Date(dateString)
+    return date.toLocaleTimeString("es-MX", {
+        hour: "2-digit",
+        minute: "2-digit"
+    })
+}
+
+async function loadSidebar(){
+    const sessions = await getConversations()
+    const container = document.getElementById("conversationList")
+    container.innerHTML = ""
+
+    sessions.forEach(s => {
+        const div = document.createElement("div")
+
+        div.className = "conversation-item"
+
+        div.innerHTML = `
+            <div class="chat-row">
+                <div class="chat-info">
+                    <b>${formatPhone(s.phone)}</b><br>
+                    <small>${formatTime(s.last_message_at)}</small>
+                </div>
+
+                ${
+                    s.unread_count > 0
+                    ? `<span class="badge">${s.unread_count}</span>`
+                    : ""
+                }
+            </div>
+        `
+
+        div.onclick = () => loadChat(s.id, s.phone)
+
+        container.appendChild(div)
+    })
+}
+
+loadSidebar()
+
+</script>
+
+</body>
+</html>

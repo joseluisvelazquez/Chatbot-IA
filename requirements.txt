@@ -12,3 +12,4 @@ sentry-sdk
 httpx
 pydantic_settings
 apscheduler
+uvicorn[standard]

@@ -8,21 +8,21 @@ export async function loadSidebar(){
 
     const list = document.getElementById("conversationList")
 
-    list.innerHTML=""
+    list.innerHTML = ""
 
-    sessions.forEach(s=>{
+    sessions.forEach(s => {
 
         const item = document.createElement("div")
 
-        item.className="conversation"
+        item.className = "conversation"
 
         item.innerHTML = `
         <b>${s.phone}</b>
         <br>
-        <small>${s.last_message ?? ""}</small>
+        <small>${s.last_message_at ?? ""}</small>
         `
 
-        item.onclick = ()=>loadChat(s.id)
+        item.onclick = () => loadChat(s.id)
 
         list.appendChild(item)
 

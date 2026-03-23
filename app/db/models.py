@@ -284,6 +284,7 @@ class ChatSessions(Base):
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     last_message_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
     reminders = relationship("Reminder", back_populates="session")
+    unread_count = Column(Integer, nullable=False, default=0)
 
 
 class Clientes(Base):
