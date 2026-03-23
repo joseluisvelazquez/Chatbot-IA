@@ -1,26 +1,33 @@
-const API_URL = "http://localhost:5500";
+const API_BASE_URL = "http://localhost:8000/api/panel";
 
 async function apiRequest(endpoint, options = {}) {
-    try {
-        const res = await fetch(`${API_URL}${endpoint}`, {
-            headers: {
-                "Content-Type": "application/json"
-            },
-            ...options
-        });
+    const config = {
+        method: "GET",
+        headers: {
+            "Content-Type": "application/json"
+            // "x-api-key": "tu_api_key" // si aplica
+        },
+        ...options
+    };
 
-        if (!res.ok) {
-            throw new Error(`Error ${res.status}`);
-        }
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
 
-        return await res.json();
-
-    } catch (error) {
-        console.error("API ERROR:", error);
-        return null;
+    if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try {
+            const errorData = await response.json();
+            detail = errorData.detail || detail;
+        } catch (_) {}
+        throw new Error(detail);
     }
+
+    return await response.json();
 }
 
+export async function fetchVerifications(status = "") {
+    const query = status ? `?status=${encodeURIComponent(status)}` : "";
+    return apiRequest(`/verifications${query}`);
+}
 export async function getConversations() {
     return apiRequest("/conversations");
 }

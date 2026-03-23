@@ -4,8 +4,6 @@ from app.api.panel_send import router as panel_send_router
 
 from app.api.webhook import router as webhook_router
 from app.jobs.inactivity_reminders import run_inactivity_reminders_job
-from app.api.panel_sessions import router as panel_sessions_router
-from app.api.panel_messages import router as panel_messages_router
 from fastapi.staticfiles import StaticFiles
 
 from app.router.panel_router import router as panel_router
@@ -24,9 +22,12 @@ app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
 scheduler = BackgroundScheduler(timezone="UTC")
 
 
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # en dev
+    allow_origins=[
+        "http://localhost:5500",  # tu frontend
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

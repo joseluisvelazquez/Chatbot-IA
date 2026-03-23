@@ -1,23 +1,65 @@
-body {
+/* RESET */
+* {
+    box-sizing: border-box;
     margin: 0;
-    font-family: Arial, sans-serif;
-    background: var(--background);
-    color: var(--text);
+    padding: 0;
+    font-family: "Segoe UI", sans-serif;
 }
 
-.main-container {
+body {
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
+/* APP */
+#app {
+    height: 100vh;
+}
+
+/* HEADER */
+#header {
+    height: 60px;
+    background: linear-gradient(90deg, #0f172a, #1e293b);
+    border-bottom: 1px solid #1e293b;
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    z-index: 1000;
+}
+
+/* SIDEBAR CONTENEDOR */
+#sidebar {
+    position: fixed;
+    top: 60px;
+    left: 0;
+    width: 260px;
     height: calc(100vh - 60px);
+    transition: width 0.3s ease;
+    z-index: 999;
 }
 
-aside {
-    width: 250px;
-    background: #020617;
-    border-right: 1px solid #1e293b;
+/* SIDEBAR COLAPSADO */
+#sidebar.collapsed {
+    width: 80px;
 }
 
-main {
-    flex: 1;
-    padding: 20px;
+/* CONTENIDO */
+#content {
+    margin-left: 260px;
+    margin-top: 60px;
+    padding: 24px;
+    height: calc(100vh - 60px);
     overflow-y: auto;
+    transition: margin-left 0.3s ease;
+}
+
+/* CUANDO COLAPSA */
+#sidebar.collapsed + #content {
+    margin-left: 80px;
 }

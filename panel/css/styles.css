@@ -1,15 +1,9 @@
-.dashboard h1 {
+h1 {
+    font-size: 28px;
+    margin-bottom: 10px;
+}
+
+.subtitle {
+    color: #94a3b8;
     margin-bottom: 20px;
-}
-
-.cards {
-    display: flex;
-    gap: 20px;
-}
-
-.card {
-    background: #1e293b;
-    padding: 20px;
-    border-radius: 10px;
-    width: 200px;
 }
