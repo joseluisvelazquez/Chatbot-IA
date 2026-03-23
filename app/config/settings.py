@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     DB_USER: str
     DB_PASSWORD: str
     DB_NAME: str
+    TEST_PHONE_ONLY: list[str]
 
     @property
     def DATABASE_URL(self) -> str:

@@ -1,0 +1,16 @@
+STEP_ORDER = [
+    "inicio",
+    "folio",
+    "nombre",
+    "domicilio",
+    "fecha",
+    "producto",
+    "componentes",
+    "pagoInicial",
+    "pagos",
+    "bancos",
+    "plan3meses",
+    "planes",
+    "beneficios",
+    "finalizado",
+]

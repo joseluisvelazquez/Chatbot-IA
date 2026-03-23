@@ -1,3 +1,4 @@
+from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, desc
@@ -12,7 +13,20 @@ from app.schemas.panel import (
 
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.db.session import get_db
-from app.db.models import ChatSessions, Message
+
+from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message
+from app.siga.siga_repository import obtener_venta_por_folio
+
+
+from app.services.verification_panel_service import (
+    classify_panel_status,
+    compute_verification,
+    group_inconsistencias_by_folio,
+    has_open_inconsistencia,
+    resolve_cuentas_from_folios,
+)
+
+
 
 # from app.core.security import verify_api_key  # opcional
 
@@ -22,6 +36,246 @@ router = APIRouter(
 )
 
 
+def serialize_inconsistencias(inconsistencias: list[Inconsistencias]) -> list[dict]:
+    result: list[dict] = []
+
+    for inc in inconsistencias:
+        extra = inc.extra_json or {}
+        estatus = inc.estatus or "ABIERTA"
+
+        # 1) Campos normales con mensaje del cliente
+        for field_name, field_data in extra.items():
+            if not isinstance(field_data, dict):
+                continue
+
+            if field_name == "evento":
+                continue
+
+            # Caso: campos tipo nombre/domicilio/producto/fecha_venta
+            mensaje_cliente = field_data.get("mensaje_cliente")
+            confirmado = field_data.get("confirmado")
+
+            if confirmado is False or mensaje_cliente:
+                result.append({
+                    "campo": field_name,
+                    "mensaje": mensaje_cliente or "Sin detalle",
+                    "estado": estatus,
+                })
+                continue
+
+            # Caso: componentes faltantes
+            faltantes = field_data.get("faltantes")
+            if isinstance(faltantes, list) and faltantes:
+                result.append({
+                    "campo": field_name,
+                    "mensaje": f"Faltantes: {', '.join(str(x) for x in faltantes)}",
+                    "estado": estatus,
+                })
+
+    return result
+def resolve_cuentas_from_folios(folios: list[str], db: Session) -> dict:
+    result = {}
+
+    for folio in folios:
+        try:
+            venta = obtener_venta_por_folio(db, folio)
+
+            if not venta:
+                result[folio] = None
+                continue
+
+            no_cuenta = getattr(venta, "no_cuenta", None)
+
+            if not no_cuenta:
+                result[folio] = None
+                continue
+
+            result[folio] = str(no_cuenta)
+
+        except Exception:
+            result[folio] = None
+
+    return result
+
+# =========================================
+# Endpoints para los dashboard (PAGINADO + DTO + LÓGICA DE NEGOCIO)
+# =========================================
+@router.get("/dashboard/summary")
+def dashboard_summary(db: Session = Depends(get_db)):
+
+    total_sessions = db.query(ChatSessions).count()
+
+    active_sessions = db.query(ChatSessions)\
+        .filter(ChatSessions.last_message_at >= func.now() - text("INTERVAL 1 DAY"))\
+        .count()
+
+    total_messages_in = db.query(Message)\
+        .filter(Message.direction == "in")\
+        .count()
+
+    total_messages_out = db.query(Message)\
+        .filter(Message.direction == "out")\
+        .count()
+
+    inconsistencias_abiertas = db.query(Inconsistencias)\
+        .filter(Inconsistencias.estatus == "abierta")\
+        .count()
+
+    return {
+        "total_sessions": total_sessions,
+        "active_sessions": active_sessions,
+        "messages_in": total_messages_in,
+        "messages_out": total_messages_out,
+        "issues_open": inconsistencias_abiertas
+    }
+
+# =========================================
+# Obtener verificaciones (PAGINADO + DTO + LÓGICA DE NEGOCIO)
+# =========================================
+@router.get("/verifications")
+def get_verifications(
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
+    flow_states = {
+        "INCONSISTENCIA",
+        "ESCRIBIR_INCONSISTENCIA",
+        "FUERA_DE_FLUJO",
+        "ACLARACION",
+        "LLAMADA",
+        "RECORDATORIO_1H",
+        "RECORDATORIO_2H",
+    }
+
+
+    valid_statuses = {
+        None,
+        "in_progress",
+        "inconsistent",
+        "human_required",
+        "stalled",
+        "completed",
+    }
+    if status not in valid_statuses:
+        raise HTTPException(status_code=400, detail="status inválido")
+
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit inválido")
+
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset inválido")
+
+    sessions = (
+        db.query(ChatSessions)
+        .filter(ChatSessions.folio.isnot(None))
+        .order_by(ChatSessions.last_message_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    total = (
+        db.query(ChatSessions)
+        .filter(ChatSessions.folio.isnot(None))
+        .count()
+    )
+    
+
+    if not sessions:
+        return {
+            "data": [],
+            "total": total,
+            "has_more": False,
+        }
+
+    folios = [str(session.folio) for session in sessions if session.folio]
+
+    folio_to_no_cuenta = resolve_cuentas_from_folios(folios, db)
+
+    no_cuentas = [
+        no_cuenta
+        for no_cuenta in folio_to_no_cuenta.values()
+        if no_cuenta is not None
+    ]
+
+    verificaciones = []
+    if no_cuentas:
+        verificaciones = (
+            db.query(VerificacionCuenta)
+            .filter(VerificacionCuenta.no_cuenta.in_(no_cuentas))
+            .all()
+        )
+
+    verification_map = {
+        str(item.no_cuenta): item
+        for item in verificaciones
+        if getattr(item, "no_cuenta", None) is not None
+    }
+
+    inconsistencias = (
+        db.query(Inconsistencias)
+        .filter(Inconsistencias.folio.in_(folios))
+        .all()
+    )
+
+    inconsistencias_by_folio = group_inconsistencias_by_folio(inconsistencias)
+
+    result = []
+
+    for session in sessions:
+        folio = str(session.folio)
+        no_cuenta = folio_to_no_cuenta.get(folio)
+
+        verification = verification_map.get(no_cuenta) if no_cuenta else None
+        progress = verification.json if verification else {}
+        verification_data = compute_verification(progress)
+
+        current_step = verification_data["current_step"]
+
+        if session.state in flow_states and session.previous_state:
+            current_step = session.previous_state.lower()
+
+        
+
+        inconsistencias_folio = inconsistencias_by_folio.get(folio, [])
+        open_inconsistencia = has_open_inconsistencia(inconsistencias_folio)
+
+        panel_status = classify_panel_status(
+            verification_data=verification_data,
+            has_open_inconsistencia=open_inconsistencia,
+            last_activity=session.last_message_at,
+            requires_human=False,
+        )
+
+
+        serialized_inconsistencias = serialize_inconsistencias(inconsistencias_folio)
+
+        item = {
+            "folio": folio,
+            "no_cuenta": no_cuenta,
+            "phone": session.phone,
+            "status": panel_status,
+            "progress_pct": verification_data["progress_pct"],
+            "current_step": current_step,
+            "inconsistencias": serialized_inconsistencias,
+            "inconsistencias_count": len(serialized_inconsistencias),
+            "confirmed_count": verification_data["progress_count"],
+            "total_steps": verification_data["total_steps"],
+            "last_activity": session.last_message_at,
+        }
+
+        if status and item["status"] != status:
+            continue
+
+        result.append(item)
+
+    return {
+        "data": result,
+        "total": total,
+        "has_more": (offset + limit) < total,
+    }
 # =========================================
 # Obtener conversaciones (PAGINADO + DTO)
 # =========================================
@@ -103,6 +357,8 @@ def get_messages(
         total=total,
         has_more=(offset + limit) < total
     )
+
+
 
 
 # =========================================
