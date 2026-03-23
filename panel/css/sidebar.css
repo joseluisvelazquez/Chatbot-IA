@@ -1,17 +1,26 @@
-.sidebar {
+/* =========================
+   SIDEBAR GLOBAL
+========================= */
+
+#sidebar .sidebar {
     width: 100%;
     height: 100%;
     background: #0b1a2b;
+
     display: flex;
     flex-direction: column;
+
     box-shadow: 2px 0 10px rgba(0,0,0,0.4);
 }
 
-/* HEADER */
+/* =========================
+   HEADER SIDEBAR
+========================= */
 .sidebar-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+
     padding: 20px;
 }
 
@@ -19,12 +28,14 @@
     justify-content: center;
 }
 
+/* LOGO */
 .logo {
     font-weight: bold;
     font-size: 18px;
     color: #38bdf8;
 }
 
+/* BOTÓN */
 #toggleSidebar {
     background: none;
     border: none;
@@ -33,23 +44,34 @@
     font-size: 18px;
 }
 
-/* MENU */
+/* =========================
+   MENU
+========================= */
 .sidebar-menu {
     margin-top: 10px;
 }
 
+/* ITEMS */
 .nav-item {
     display: flex;
     align-items: center;
     gap: 12px;
+
     padding: 14px 20px;
+
     color: #9fb3c8;
     cursor: pointer;
+
     transition: all 0.2s ease;
 }
 
 .nav-item:hover {
     background: #12263a;
+    color: white;
+}
+
+.nav-item.active {
+    background: #1e3a5f;
     color: white;
 }
 
@@ -65,7 +87,9 @@
     transition: opacity 0.2s;
 }
 
-/* COLAPSADO */
+/* =========================
+   COLAPSADO
+========================= */
 #sidebar.collapsed .nav-item span {
     display: none;
 }
@@ -76,4 +100,87 @@
 
 #sidebar.collapsed .nav-item {
     justify-content: center;
+}
+
+/* =========================
+   🔥 NAVBAR MODE (CHAT)
+========================= */
+
+/* contenedor horizontal */
+.layout-chat .nav-horizontal {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* items como iconos */
+.layout-chat .nav-horizontal .nav-item {
+    padding: 8px;
+    border-radius: 8px;
+    transition: background 0.2s ease;
+}
+
+/* hover navbar */
+.layout-chat .nav-horizontal .nav-item:hover {
+    background: rgba(255,255,255,0.08);
+}
+
+/* ocultar texto en navbar */
+.layout-chat .nav-horizontal .nav-item span {
+    display: none;
+}
+
+/* centrar iconos */
+.layout-chat .nav-horizontal .nav-item {
+    justify-content: center;
+}
+
+/* =========================
+   🔥 AISLAR SIDEBAR DE CHAT
+========================= */
+
+/* ⚠️ MUY IMPORTANTE
+   esto evita conflicto con sidebar global */
+.container .sidebar {
+    width: 30%;
+    min-width: 280px;
+    max-width: 350px;
+
+    background: #ffffff;
+
+    display: flex;
+    flex-direction: column;
+
+    border-right: 1px solid #ddd;
+}
+
+/* items de conversaciones */
+.conversation-item {
+    padding: 12px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background 0.2s ease;
+}
+
+.conversation-item:hover {
+    background: #f5f5f5;
+}
+
+.conversation-item.active {
+    background: #e9f5ff;
+}
+
+/* badge chats */
+.container .badge {
+    background: #25d366;
+    color: white;
+
+    font-size: 12px;
+    padding: 4px 8px;
+
+    border-radius: 50%;
+    min-width: 20px;
+
+    text-align: center;
+    font-weight: bold;
 }

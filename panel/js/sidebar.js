@@ -29,29 +29,28 @@ export async function loadSidebar(){
     })
 }
 
-export function initSidebar() {
+
+export function initSidebar(activePage = "") {
     const toggle = document.getElementById("toggleSidebar");
     const sidebar = document.getElementById("sidebar");
 
-    if (!toggle || !sidebar) return;
+    if (toggle && sidebar) {
+        toggle.onclick = () => {
+            sidebar.classList.toggle("collapsed");
+        };
+    }
 
-    // 🔥 COLAPSO
-    toggle.addEventListener("click", () => {
-        sidebar.classList.toggle("collapsed");
-    });
+    document.querySelectorAll("#sidebar .nav-item").forEach(item => {
+        const page = item.dataset.page || "";
 
-    // 🔥 NAVEGACIÓN
-    document.querySelectorAll(".nav-item").forEach(item => {
-        item.addEventListener("click", () => {
+        item.classList.toggle("active", page === activePage);
 
-            const page = item.dataset.page;
+        item.onclick = () => {
+            document.querySelectorAll("#sidebar .nav-item")
+                .forEach(i => i.classList.remove("active"));
 
-            // activar estilo
-            document.querySelectorAll(".nav-item").forEach(i => i.classList.remove("active"));
             item.classList.add("active");
-
-            // cambiar contenido
             navigateTo(page);
-        });
+        };
     });
 }
