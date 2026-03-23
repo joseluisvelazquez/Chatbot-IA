@@ -551,26 +551,42 @@ class EstadosCuentaDuplicate(Base):
     id_suc_estado_cuenta: Mapped[Optional[int]] = mapped_column(Integer)
     usuario: Mapped[Optional[str]] = mapped_column(TEXT)
     fecha_corte: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
-    
+
 class FlowEvent(Base):
     __tablename__ = "flow_events"
+    __table_args__ = (
+        Index("idx_flow_events_session_id", "session_id"),
+        Index("idx_flow_events_phone", "phone"),
+        Index("idx_flow_events_folio", "folio"),
+        Index("idx_flow_events_created_at", "created_at"),
+        Index("idx_flow_events_states", "from_state", "to_state"),
+    )
 
-    id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, index=True)
-    phone = Column(String(20))
-    folio = Column(Integer)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    from_state = Column(String(50))
-    to_state = Column(String(50))
+    session_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
 
-    event_type = Column(String(50))
+    phone: Mapped[Optional[str]] = mapped_column(String(20))
+    folio: Mapped[Optional[int]] = mapped_column(Integer)
 
-    trigger_text = Column(Text)
-    detected_intent = Column(String(50))
+    from_state: Mapped[Optional[str]] = mapped_column(String(50))
+    to_state: Mapped[Optional[str]] = mapped_column(String(50))
 
-    metadata = Column(JSON)
+    event_type: Mapped[Optional[str]] = mapped_column(String(50))
+    trigger_text: Mapped[Optional[str]] = mapped_column(Text)
+    detected_intent: Mapped[Optional[str]] = mapped_column(String(50))
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    event_payload: Mapped[Optional[dict[str, any]]] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("UTC_TIMESTAMP()"),
+    )
 
 class MotivosCancelacion(Base):
     __tablename__ = "motivos_cancelacion"

@@ -1,4 +1,6 @@
-/* RESET */
+/* =========================
+   RESET
+========================= */
 * {
     box-sizing: border-box;
     margin: 0;
@@ -11,55 +13,206 @@ body {
     color: #e2e8f0;
 }
 
-/* APP */
+/* =========================
+   APP BASE
+========================= */
 #app {
     height: 100vh;
+    display: flex;
+    flex-direction: column;
 }
 
-/* HEADER */
+/* =========================
+   HEADER (DEFAULT)
+========================= */
 #header {
     height: 60px;
     background: linear-gradient(90deg, #0f172a, #1e293b);
     border-bottom: 1px solid #1e293b;
+
     display: flex;
     align-items: center;
     justify-content: space-between;
+
     padding: 0 20px;
 
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
+
     z-index: 1000;
 }
 
-/* SIDEBAR CONTENEDOR */
+/* =========================
+   MAIN CONTAINER
+========================= */
+.main-container {
+    display: flex;
+    height: calc(100vh - 60px);
+    margin-top: 60px;
+}
+
+/* =========================
+   SIDEBAR GLOBAL
+========================= */
 #sidebar {
     position: fixed;
     top: 60px;
     left: 0;
+
     width: 260px;
     height: calc(100vh - 60px);
+
     transition: width 0.3s ease;
     z-index: 999;
 }
 
-/* SIDEBAR COLAPSADO */
 #sidebar.collapsed {
     width: 80px;
 }
 
-/* CONTENIDO */
+/* =========================
+   CONTENT
+========================= */
 #content {
     margin-left: 260px;
-    margin-top: 60px;
     padding: 24px;
+
+    width: 100%;
     height: calc(100vh - 60px);
     overflow-y: auto;
+
     transition: margin-left 0.3s ease;
 }
 
-/* CUANDO COLAPSA */
+/* cuando sidebar colapsa */
 #sidebar.collapsed + #content {
     margin-left: 80px;
+}
+
+/* =========================
+   DEFAULT LAYOUT
+========================= */
+.layout-default #sidebar {
+    display: block;
+}
+
+.layout-default #content {
+    margin-left: 260px;
+    padding: 24px;
+}
+
+/* =========================
+   CHAT MODE (🔥 CLAVE)
+========================= */
+
+/* quitar sidebar global */
+.layout-chat #sidebar {
+    display: none;
+}
+
+/* content ocupa todo */
+.layout-chat #content {
+    margin-left: 0;
+    padding: 0;
+    height: calc(100vh - 60px);
+}
+
+/* main container ya no usa flex con sidebar */
+.layout-chat .main-container {
+    display: block;
+}
+
+/* =========================
+   HEADER COMO NAVBAR
+========================= */
+.layout-chat #header {
+    background: #0b1a2b;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+/* lado izquierdo */
+.layout-chat .header-left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+/* NAVBAR HORIZONTAL */
+.layout-chat .nav-horizontal {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* items navbar */
+.layout-chat .nav-horizontal .nav-item {
+    padding: 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.layout-chat .nav-horizontal .nav-item:hover {
+    background: rgba(255,255,255,0.08);
+}
+
+/* ocultar texto en navbar */
+.layout-chat .nav-horizontal .nav-item span {
+    display: none;
+}
+
+/* =========================
+   CHAT CONTAINER FIX
+========================= */
+.layout-chat .container {
+    display: flex;
+    height: calc(100vh - 60px);
+}
+
+/* =========================
+   DRAWER
+========================= */
+.drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+
+    width: 420px;
+    height: 100%;
+
+    background: #0b1220;
+    border-left: 1px solid #1f2a44;
+
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+
+    z-index: 1000;
+}
+
+.drawer.open {
+    transform: translateX(0);
+}
+
+.drawer-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+
+    width: 100%;
+    height: 100%;
+
+    background: rgba(0,0,0,0.5);
+
+    opacity: 0;
+    pointer-events: none;
+
+    transition: opacity 0.3s ease;
+    z-index: 999;
+}
+
+.drawer-overlay.active {
+    opacity: 1;
+    pointer-events: all;
 }

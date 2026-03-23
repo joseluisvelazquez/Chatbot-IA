@@ -1,127 +1,183 @@
 import { renderHeader, renderSidebar } from "./ui.js";
 import { initVerificationsPage } from "./verifications.js";
+import { initConversationsPage } from "./chat.js";
 import { initSidebar } from "./sidebar.js";
+import { setLayout } from "./layoutmanager.js";
 
-export async function loadView(path) {
+// =========================
+// CONFIG DE VISTAS
+// =========================
+const PAGE_CONFIG = {
+    dashboard: {
+        path: "/pages/dashboard.html",
+        layout: "default",
+        init: null
+    },
+    conversations: {
+        path: "/pages/conversaciones.html",
+        layout: "chat",
+        init: initConversationsPage
+    },
+    verifications: {
+        path: "/pages/verificaciones.html",
+        layout: "default",
+        init: initVerificationsPage
+    },
+    cobranza: {
+        path: "/pages/cobranza.html",
+        layout: "default",
+        init: null
+    }
+};
+
+// =========================
+// LOAD VIEW
+// =========================
+async function loadView(path) {
     const content = document.getElementById("content");
+    if (!content) {
+        throw new Error("No se encontró el contenedor #content");
+    }
 
     const res = await fetch(path);
-    const html = await res.text();
 
+    if (!res.ok) {
+        throw new Error(`No se pudo cargar la vista: ${path}`);
+    }
+
+    const html = await res.text();
     content.innerHTML = html;
 }
 
-async function loadPage(pageName) {
-    const response = await fetch(`/pages/${pageName}.html`);
+// =========================
+// NAVEGACIÓN CENTRAL
+// =========================
+export async function navigateTo(page) {
+    const config = PAGE_CONFIG[page];
 
-    if (!response.ok) {
-        throw new Error(`No se pudo cargar la página ${pageName}`);
+    if (!config) {
+        console.warn(`Página no registrada: ${page}`);
+        return;
     }
 
-    document.getElementById("content").innerHTML = await response.text();
-
-    bindSidebar(pageName);
-
-    if (pageName === "verificaciones") {
-        initVerificationsPage();
-    }
-}
-
-function bindSidebar(activePage) {
-    const navLinks = document.querySelectorAll(".nav-link");
-
-    navLinks.forEach(btn => {
-        const page = btn.dataset.page;
-
-        btn.classList.toggle("active", page === activePage);
-
-        btn.onclick = () => loadPage(page);
-    });
-}
-
-
-
-async function initApp() {
     try {
+        // 1) aplicar layout
+        setLayout(config.layout);
 
-        await loadPage("verificaciones");
+        // 2) renderizar header según layout
+        renderHeader(config.layout);
+
+        // 3) sidebar global solo se mantiene en layout default
+        if (config.layout === "default") {
+            renderSidebar();
+            initSidebar(page);
+        }
+
+        // 4) cargar vista
+        await loadView(config.path);
+
+        // 5) inicializar vista si aplica
+        if (typeof config.init === "function") {
+            config.init();
+        }
+
+        // 6) re-render iconos
+        if (window.lucide) {
+            lucide.createIcons();
+        }
 
     } catch (error) {
-        document.getElementById("content").innerHTML = `
-            <div class="table-state error">
-                Error cargando el panel: ${error.message}
-            </div>
-        `;
+        console.error("Error navegando:", error);
+
+        const content = document.getElementById("content");
+        if (content) {
+            content.innerHTML = `
+                <div class="table-state error">
+                    Error cargando el panel: ${error.message}
+                </div>
+            `;
+        }
     }
 }
 
-export async function navigateTo(page) {
-
-    const content = document.getElementById("content");
-
-    if (page === "verifications") {
-        await loadView("/pages/verificaciones.html");
-        initVerificationsPage(); // 🔥 ahora sí
-    }
-
-    if (page === "dashboard") {
-        await loadView("/pages/dashboard.html");
-        
-    }
-
-    if (page === "conversations") {
-        await loadView("/pages/conversaciones.html");
-    }
-
-    if (page === "cobranza") {
-        await loadView("/pages/cobranza.html");
-    }
-}
+// =========================
+// DRAWER
+// =========================
 function closeDrawer() {
     const drawer = document.getElementById("drawer");
     const overlay = document.getElementById("drawerOverlay");
 
-    drawer.classList.remove("open");
-    overlay.classList.remove("active");
+    if (drawer) drawer.classList.remove("open");
+    if (overlay) overlay.classList.remove("active");
 }
-document.addEventListener("DOMContentLoaded", initApp);
+
+// =========================
+// EVENTOS GLOBALES
+// =========================
+function bindGlobalEvents() {
+    document.addEventListener("click", (e) => {
+        const conversationBtn = e.target.closest(".btn-primary");
+        if (conversationBtn) {
+            const phone = conversationBtn.dataset.phone || null;
+            window.selectedPhone = phone;
+            navigateTo("conversations");
+            return;
+        }
+
+        if (e.target.closest("#closeDrawer")) {
+            closeDrawer();
+            return;
+        }
+
+        if (e.target.id === "drawerOverlay") {
+            closeDrawer();
+        }
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            closeDrawer();
+        }
+    });
+
+    window.toggleSidebar = function () {
+        const sidebar = document.getElementById("sidebar");
+        if (!sidebar) return;
+        sidebar.classList.toggle("collapsed");
+    };
+}
+
+// =========================
+// APP INIT
+// =========================
+async function initApp() {
+    try {
+        // layout inicial
+        setLayout("default");
+
+        // render base
+        renderHeader("default");
+        renderSidebar();
+        initSidebar("verifications");
+
+        // vista inicial
+        await navigateTo("verifications");
+
+    } catch (error) {
+        console.error("Error inicializando app:", error);
+
+        const content = document.getElementById("content");
+        if (content) {
+            content.innerHTML = `
+                <div class="table-state error">
+                    Error cargando el panel: ${error.message}
+                </div>
+            `;
+        }
+    }
+}
 
 document.addEventListener("DOMContentLoaded", () => {
-
-    renderHeader();
-
-    renderSidebar();
-
-    initSidebar();
-    
-
-    if (window.lucide) {
-        lucide.createIcons();
-    }
-
-});
-// 🔥 COLAPSAR SIDEBAR GLOBAL
-window.toggleSidebar = function () {
-    document.body.classList.toggle("sidebar-collapsed");
-};
-document.addEventListener("click", (e) => {
-    if (e.target.closest(".btn-primary")) {
-        const phone = e.target.closest(".btn-primary").dataset.phone;
-
-        window.selectedPhone = phone;
-        navigateTo("conversations");
-    }
-    // cerrar drawer
-    if (e.target.closest("#closeDrawer")) {
-        closeDrawer();
-    }
-    if (e.target.id === "drawerOverlay") {
-        closeDrawer();
-    }
-    
-});
-document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-        closeDrawer();
-    }
+    bindGlobalEvents();
+    initApp();
 });

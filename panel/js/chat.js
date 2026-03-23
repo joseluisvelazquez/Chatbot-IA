@@ -2,7 +2,63 @@ let currentSessionId = null
 let socket = null
 let lastTyping = 0
 let typingTimeout = null
+import { getConversations } from "../js/api.js"
+export function initConversationsPage() {
+    
+    window.send = send
 
+    //función para formatear el número de teléfono en formato internacional
+    function formatPhone(phone) {
+        return "+" + phone.replace(/(\d{2})(\d{3})(\d{3})(\d{4})/, "$1 $2 $3 $4")
+    }
+
+    //INICIAS EL WS
+    initWebSocket()
+
+    // Función para formatear la hora de la última conversación
+    function formatTime(dateString) {
+        if (!dateString) return ""
+
+        const date = new Date(dateString)
+        return date.toLocaleTimeString("es-MX", {
+            hour: "2-digit",
+            minute: "2-digit"
+        })
+    }
+
+    async function loadSidebar(){
+        const sessions = await getConversations()
+        const container = document.getElementById("conversationList")
+        container.innerHTML = ""
+
+        sessions.forEach(s => {
+            const div = document.createElement("div")
+
+            div.className = "conversation-item"
+
+            div.innerHTML = `
+                <div class="chat-row">
+                    <div class="chat-info">
+                        <b>${formatPhone(s.phone)}</b><br>
+                        <small>${formatTime(s.last_message_at)}</small>
+                    </div>
+
+                    ${
+                        s.unread_count > 0
+                        ? `<span class="badge">${s.unread_count}</span>`
+                        : ""
+                    }
+                </div>
+            `
+
+            div.onclick = () => loadChat(s.id, s.phone)
+
+            container.appendChild(div)
+        })
+    }
+
+    loadSidebar()}
+    
 // Mapeo de claves a etiquetas y emojis para mensajes de botón
 const BUTTON_LABELS = {
     // verificación

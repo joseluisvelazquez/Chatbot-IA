@@ -1,3 +1,6 @@
+// =========================
+// UTILIDADES
+// =========================
 function escapeHtml(str) {
     if (!str) return "";
     return str
@@ -7,33 +10,84 @@ function escapeHtml(str) {
         .replace(/"/g, "&quot;");
 }
 
-// 🔥 HEADER
-export function renderHeader() {
-    const header = document.getElementById("header");
+// =========================
+// NAV ITEMS (FUENTE ÚNICA)
+// =========================
+const NAV_ITEMS = [
+    { page: "dashboard", icon: "home", label: "Dashboard" },
+    { page: "conversations", icon: "message-circle", label: "Conversaciones" },
+    { page: "verifications", icon: "clipboard-list", label: "Verificaciones" },
+    { page: "cobranza", icon: "wallet", label: "Cobranza" }
+];
 
-    if (!header) {
-        console.warn("Header no encontrado en DOM");
-        return;
+// =========================
+// HEADER DINÁMICO
+// =========================
+export function renderHeader(layout = "default") {
+    const header = document.getElementById("header");
+    if (!header) return;
+
+    // =====================
+    // DEFAULT (HEADER NORMAL)
+    // =====================
+    if (layout === "default") {
+        header.innerHTML = `
+            <div class="header-left">
+                <div class="logo">MXCOMP</div>
+                <div class="subtitle">Sistema Operativo</div>
+            </div>
+
+            <div class="header-right">
+                <div class="icon-btn">🔍</div>
+                <div class="icon-btn">🔔</div>
+                <div class="icon-btn">👤 Admin</div>
+            </div>
+        `;
     }
 
-    header.innerHTML = `
-        <div class="header-left">
-            <div class="logo">MXCOMP</div>
-            <div class="subtitle">Sistema Operativo</div>
-        </div>
+    // =====================
+    // CHAT MODE (🔥 NAVBAR)
+    // =====================
+    if (layout === "chat") {
+        header.innerHTML = `
+            <div class="header-left">
 
-        <div class="header-right">
-            <div class="icon-btn">🔍</div>
-            <div class="icon-btn">🔔</div>
-            <div class="icon-btn">👤 Admin</div>
-        </div>
-    `;
+                <div class="logo">MXCOMP</div>
 
+                <div class="nav-horizontal">
+                    ${NAV_ITEMS.map(item => `
+                        <div class="nav-item" data-page="${item.page}">
+                            <i data-lucide="${item.icon}"></i>
+                            <span>${item.label}</span>
+                        </div>
+                    `).join("")}
+                </div>
+
+            </div>
+
+            <div class="header-right">
+                <div class="icon-btn">🔍</div>
+                <div class="icon-btn">🔔</div>
+                <div class="icon-btn">👤</div>
+            </div>
+        `;
+    }
+
+    // 🔥 re-render iconos
+    if (window.lucide) {
+        lucide.createIcons();
+    }
+
+    // 🔥 bind navegación
+    bindHeaderNavigation();
 }
 
-// 🔥 SIDEBAR
+// =========================
+// SIDEBAR GLOBAL
+// =========================
 export function renderSidebar() {
     const sidebar = document.getElementById("sidebar");
+    if (!sidebar) return;
 
     sidebar.innerHTML = `
         <div class="sidebar">
@@ -43,39 +97,44 @@ export function renderSidebar() {
                 <button id="toggleSidebar">☰</button>
             </div>
 
-            <div class="sidebar-menu" d>
-
-                <div class="nav-item" data-page="dashboard">
-                    <i data-lucide="home"></i>
-                    <span>Dashboard</span>
-                </div>
-
-                <div class="nav-item"  data-page="conversations">
-                    <i data-lucide="message-circle"></i>
-                    <span>Conversaciones</span>
-                </div>
-
-                <div class="nav-item"  data-page="verifications">
-                    <i data-lucide="clipboard-list"></i>
-                    <span>Verificaciones</span>
-                </div>
-
-                <div class="nav-item" data-page="cobranza">
-                    <i data-lucide="wallet"></i>
-                    <span>Cobranza</span>
-                </div>
-
+            <div class="sidebar-menu">
+                ${NAV_ITEMS.map(item => `
+                    <div class="nav-item" data-page="${item.page}">
+                        <i data-lucide="${item.icon}"></i>
+                        <span>${item.label}</span>
+                    </div>
+                `).join("")}
             </div>
 
         </div>
     `;
 
-    // 🔥 render iconos
     if (window.lucide) {
         lucide.createIcons();
     }
 }
-// 🔥 UTILIDADES UI
+
+// =========================
+// NAVIGATION (HEADER + SIDEBAR)
+// =========================
+function bindHeaderNavigation() {
+    const items = document.querySelectorAll(".nav-item");
+
+    items.forEach(item => {
+        item.onclick = () => {
+            const page = item.dataset.page;
+
+            // lazy import para evitar circular deps
+            import("./app.js").then(({ navigateTo }) => {
+                navigateTo(page);
+            });
+        };
+    });
+}
+
+// =========================
+// UTILIDADES UI
+// =========================
 function formatDateTime(value) {
     if (!value) return "-";
     const date = new Date(value);
@@ -118,6 +177,9 @@ function renderProgressBar(percent) {
     `;
 }
 
+// =========================
+// EXPORT GLOBAL UI
+// =========================
 window.ui = {
     escapeHtml,
     formatDateTime,
