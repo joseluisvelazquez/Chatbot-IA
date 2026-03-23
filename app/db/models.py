@@ -39,8 +39,6 @@ from sqlalchemy.dialects.mysql import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-class Base(DeclarativeBase):
-    pass
 
 class SolicitudesCambioUrgencia(str, enum.Enum):
     MUY_URGENTE = "Muy Urgente"
