@@ -98,6 +98,8 @@ class FlowResult:
 def process_message(session, text: str, intent: str | None = None, db=None) -> FlowResult:
     current_state = ChatState(session.state)
     previous_state = session.previous_state
+    next_state = current_state
+    
     flow = FLOW.get(current_state)
     print(f"DEBUG: Processing message for session {session.id} in state {current_state} with text '{text}' and intent '{intent}'")
 
@@ -108,13 +110,14 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     if no_cuenta:
 
         if verification_service.is_verification_complete(no_cuenta):
-            return {
-                "text": "✅ Esta cuenta ya fue verificada anteriormente.",
-                "buttons": [
+            return FlowResult(
+                reply="✅ Esta cuenta ya fue verificada anteriormente.",
+                next_state=ChatState.FUERA_DE_FLUJO,
+                buttons=[
                     {"id": "DUDA", "label": "❓ Tengo una duda"},
                     {"id": "PAGOS", "label": "💳 Consultar pagos"}
                 ]
-            }
+            )
     
     
 
@@ -242,6 +245,14 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     if current_state == ChatState.ESCRIBIR_INCONSISTENCIA:
 
+        if not previous_state:
+            return FlowResult(
+                reply="⚠️ Ocurrió un error. Regresando al flujo principal.",
+                next_state=ChatState.FUERA_DE_FLUJO,
+                buttons=FLOW[ChatState.FUERA_DE_FLUJO].get("buttons", []),
+                previous_state=None
+            )
+
         campo = INCONSISTENCIAS_MAP.get(ChatState(previous_state))
 
         if campo:
@@ -257,6 +268,14 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                     }
                 }
             )
+
+        # 🔥 CASO FALLBACK (EL QUE TE FALTABA)
+        return FlowResult(
+            reply="⚠️ No pude procesar tu mensaje. Intenta nuevamente.",
+            next_state=ChatState.FUERA_DE_FLUJO,
+            buttons=FLOW[ChatState.FUERA_DE_FLUJO].get("buttons", []),
+            previous_state=None
+        )
         
     # --------------------------------------
     # Transiciones normales

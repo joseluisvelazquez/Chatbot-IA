@@ -13,6 +13,8 @@ from app.schemas.panel import (
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.db.session import get_db
 from app.db.models import ChatSessions, Message
+from fastapi import WebSocket, APIRouter
+from app.websockets.manager import manager
 
 # from app.core.security import verify_api_key  # opcional
 
@@ -21,13 +23,68 @@ router = APIRouter(
     tags=["panel"]
 )
 
+# =========================================
+# Obtener Mensajes con el websocket
+# =========================================
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+
+    import json
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            payload = json.loads(data)
+
+            if payload.get("type") == "typing":
+                await manager.send_to_all({
+                    "type": "typing",
+                    "session_id": payload.get("session_id")
+                })
+
+    except:
+        manager.disconnect(websocket)
+
+# =========================================
+# Panel API: Marcar conversación como leída (RESET UNREAD COUNT)
+# =========================================
+
+@router.post("/conversations/{session_id}/read")
+def mark_as_read(session_id: int, db: Session = Depends(get_db)):
+    session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
+
+    if session:
+        session.unread_count = 0
+        db.commit()
+
+    return {"status": "ok"}
+
+@router.post("/conversations/{session_id}/read")
+async def mark_as_read(session_id: int, db: Session = Depends(get_db)):
+    session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
+
+    if not session:
+        raise HTTPException(404, "Sesión no encontrada")
+
+    session.unread_count = 0
+    db.commit()
+
+    await manager.send_to_all({
+        "type": "update_unread",
+        "session_id": session.id,
+        "unread_count": 0
+    })
+
+    return {"status": "ok"}
 
 # =========================================
 # Obtener conversaciones (PAGINADO + DTO)
 # =========================================
 @router.get("/conversations", response_model=list[ConversationResponse])
 def get_conversations(
-    limit: int = 50,
+    limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
     # _: str = Depends(verify_api_key)
@@ -37,6 +94,7 @@ def get_conversations(
 
     sessions = (
         db.query(ChatSessions)
+
         .order_by(desc(ChatSessions.last_message_at))
         .offset(offset)
         .limit(limit)
@@ -47,7 +105,8 @@ def get_conversations(
         ConversationResponse(
             id=s.id,
             phone=s.phone,
-            last_message_at=s.last_message_at
+            last_message_at=s.last_message_at,
+            unread_count=s.unread_count
         )
         for s in sessions
     ]
@@ -109,7 +168,7 @@ def get_messages(
 # Enviar mensaje desde panel (SEGURO + CONSISTENTE)
 # =========================================
 @router.post("/messages")
-def send_agent_message(
+async def send_agent_message(
     payload: SendMessageRequest,
     db: Session = Depends(get_db),
     # _: str = Depends(verify_api_key)
@@ -137,7 +196,7 @@ def send_agent_message(
 
     try:
         # ENVÍO EXTERNO
-        send_whatsapp_message(phone, content)
+        await send_whatsapp_message(phone, content)
 
         # PERSISTENCIA
         message = Message(
@@ -153,6 +212,15 @@ def send_agent_message(
         session.last_message_at = datetime.utcnow()
 
         db.commit()
+
+        await manager.send_to_all({
+            "type": "new_message",
+            "session_id": session.id,
+            "message": {
+                "content": content,
+                "direction": "agent"
+            }
+        })
 
     except Exception as e:
         db.rollback()

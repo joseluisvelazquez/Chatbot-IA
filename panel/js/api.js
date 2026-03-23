@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:5500";
+const API_URL = "http://localhost:8000/api/panel";
 
 async function apiRequest(endpoint, options = {}) {
     try {
