@@ -86,17 +86,11 @@ export async function loadChat(sessionId, phone) {
         method: "POST"
     })
 
-    // refrescar sidebar
-    if (window.loadSidebar) {
-        window.loadSidebar()
-    }
-
     const res = await fetch(`http://localhost:8000/api/panel/messages/${sessionId}`)
     const messages = await res.json()
 
     const container = document.getElementById("messages")
 
-    // 🔥 SOLO limpiar si cambiaste de chat
     if (!isSameChat) {
         container.innerHTML = ""
     }
@@ -113,13 +107,18 @@ export async function loadChat(sessionId, phone) {
         list = messages.items
     }
 
-    list.forEach(msg => {
+    const existing = new Set(
+        [...container.children].map(el => el.dataset.id)
+    )
 
-        // 🔥 evitar duplicados
-        if (container.innerHTML.includes(msg.content)) return
+    list.forEach(msg => {
+        const id = msg.id || msg.content + msg.created_at
+
+        if (existing.has(id)) return
 
         const div = document.createElement("div")
         div.classList.add("message")
+        div.dataset.id = id
 
         if (msg.direction === "in") div.classList.add("incoming")
         else if (msg.direction === "out") div.classList.add("outgoing")
@@ -142,7 +141,6 @@ export async function loadChat(sessionId, phone) {
                 ${label ? `${label} · ${time}` : time}
             </div>
         `
-
         container.appendChild(div)
     })
 
@@ -226,61 +224,64 @@ export function initWebSocket() {
 
     socket.onmessage = (event) => {
         const data = JSON.parse(event.data)
+
         console.log("WS recibido:", data)
+
+        // 🔥 actualizar sidebar SIEMPRE en eventos clave
+        if (data.type === "new_message" || data.type === "update_unread") {
+            if (window.loadSidebar) {
+                window.loadSidebar()
+            }
+        }
+
+        if (data.type === "update_unread") {
+            return
+        }
 
         if (data.type === "typing") {
             if (data.session_id === currentSessionId) {
                 showTyping()
 
                 if (typingTimeout) clearTimeout(typingTimeout)
-                typingTimeout = setTimeout(() => {
-                    removeTyping()
-                }, 2000)
+                typingTimeout = setTimeout(removeTyping, 2000)
             }
             return
         }
 
         if (data.type === "new_message") {
 
-            const msg = data.message   // 🔥 PRIMERO define esto
-
-            // 🔥 siempre refrescar sidebar
-            if (window.loadSidebar) {
-                window.loadSidebar()
-            }
+            const msg = data.message
 
             if (msg.direction === "agent") return
 
-            if (msg.direction === "in" || msg.direction === "out") {
-                removeTyping()
-            }
+            if (data.session_id !== currentSessionId) return
+
+            removeTyping()
 
             if (msg.direction === "in") {
                 const audio = document.getElementById("notificationSound")
                 if (audio) audio.play().catch(() => {})
             }
 
-            if (data.session_id !== currentSessionId) return
-
             const container = document.getElementById("messages")
+
+            const id = msg.id || msg.content + msg.created_at
+
+            if ([...container.children].some(el => el.dataset.id === id)) return
+
             const div = document.createElement("div")
             div.classList.add("message")
+            div.dataset.id = id
 
             const time = msg.created_at
                 ? formatTime(msg.created_at)
                 : formatTime(new Date())
 
-            if (msg.direction === "in") {
-                div.classList.add("incoming")
-            } else if (msg.direction === "out") {
-                div.classList.add("outgoing")
-            } else if (msg.direction === "agent") {
-                div.classList.add("agent")
-            }
+            if (msg.direction === "in") div.classList.add("incoming")
+            else if (msg.direction === "out") div.classList.add("outgoing")
 
             const label =
                 msg.direction === "out" ? "Bot 🤖" :
-                msg.direction === "agent" ? "Tú 🧑‍💻" :
                 msg.direction === "in" ? "Cliente 👤" :
                 ""
 
@@ -289,12 +290,11 @@ export function initWebSocket() {
 
             div.innerHTML = `
                 <div class="text">${finalText}</div>
-                <div class="meta">
-                    ${label ? `${label} · ${time}` : time}
-                </div>
+                <div class="meta">${label} · ${time}</div>
             `
 
             container.appendChild(div)
+
             container.scrollTo({
                 top: container.scrollHeight,
                 behavior: "smooth"

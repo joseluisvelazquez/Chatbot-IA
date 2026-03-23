@@ -159,13 +159,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------
 
     if current_state in [ChatState.ESPERA, ChatState.FUERA_DE_FLUJO] and detected_intent != "start_verification":
-        log_flow_event(
-            session=session,
-            from_state=previous_state,
-            to_state=next_state,
-            trigger=detected_intent,
-            event_type="message"
-        )
+        
         return FlowResult(
             reply=messages.MENU_AYUDA,
             next_state=ChatState.MENU_AYUDA,
@@ -210,13 +204,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         _try_mark_step("inicio")
         _try_mark_step("folio")
 
-        log_flow_event(
-            session=session,
-            from_state=previous_state,
-            to_state=next_state,
-            trigger=detected_intent,
-            event_type="message"
-        )
+        
 
         return FlowResult(
             reply=f"🔎 Detecté tu folio: *{folio}*\n\n¿Es correcto?",
@@ -260,13 +248,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
 
         
-        log_flow_event(
-            session=session,
-            from_state=previous_state,
-            to_state=next_state,
-            trigger=detected_intent,
-            event_type="message"
-        )
+        
         return FlowResult(
             reply=f"🔎 Detecté tu folio: *{nuevo_folio}*\n\n¿Es correcto?",
             next_state=ChatState.CONFIRMAR_FOLIO,
@@ -294,13 +276,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         campo = INCONSISTENCIAS_MAP.get(ChatState(previous_state))
 
         if campo:
-            log_flow_event(
-                session=session,
-                from_state=previous_state,
-                to_state=next_state,
-                trigger=detected_intent,
-                event_type="message"
-            )
+            
             return FlowResult(
                 reply="Gracias, un asesor revisará la información.",
                 next_state=ChatState.INCONSISTENCIA,
@@ -398,13 +374,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         next_state = ChatState.COMPONENTES_CONFIRMAR_FALTANTES
 
         reply = f"✅ Agregado: *{componente_label}*\n\n¿Deseas agregar otro componente faltante?"
-        log_flow_event(
-            session=session,
-            from_state=previous_state,
-            to_state=next_state,
-            trigger=detected_intent,
-            event_type="message"
-        )
+        
 
         return FlowResult(
             reply=reply,
@@ -456,13 +426,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply = f"""📋 Registramos estos componentes faltantes:
             {faltantes_texto}
             🔧 Un asesor revisará tu caso."""
-            log_flow_event(
-                session=session,
-                from_state=previous_state,
-                to_state=next_state,
-                trigger=detected_intent,
-                event_type="message"
-            )
+           
 
             return FlowResult(
                 reply=reply,
@@ -475,13 +439,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             {"id": k, "label": v["label"]}
             for k, v in componentes_disponibles.items()
         ]
-        log_flow_event(
-            session=session,
-            from_state=previous_state,
-            to_state=next_state,
-            trigger=detected_intent,
-            event_type="message"
-        )
+        
 
         return FlowResult(
             reply="Selecciona el componente que faltó:",
@@ -582,13 +540,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
 
-    log_flow_event(
-        session=session,
-        from_state=previous_state,
-        to_state=next_state,
-        trigger=detected_intent,
-        event_type="message"
-    )
+    
     return FlowResult(
         reply=reply,
         next_state=next_state,

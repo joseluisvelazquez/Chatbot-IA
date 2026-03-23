@@ -65,16 +65,6 @@ async def websocket_endpoint(websocket: WebSocket):
 # =========================================
 
 @router.post("/conversations/{session_id}/read")
-def mark_as_read(session_id: int, db: Session = Depends(get_db)):
-    session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
-
-    if session:
-        session.unread_count = 0
-        db.commit()
-
-    return {"status": "ok"}
-
-@router.post("/conversations/{session_id}/read")
 async def mark_as_read(session_id: int, db: Session = Depends(get_db)):
     session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
 
