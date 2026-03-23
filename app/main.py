@@ -22,9 +22,12 @@ app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
 scheduler = BackgroundScheduler(timezone="UTC")
 
 
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # en dev
+    allow_origins=[
+        "http://localhost:5500",  # tu frontend
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

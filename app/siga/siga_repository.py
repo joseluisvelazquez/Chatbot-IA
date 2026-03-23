@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from app.db.models import BitacoraVentas, DomiciliosHorariosEntrega, Estado
+from app.db.models import BitacoraVentas, DomiciliosHorariosEntrega, Estado, VerificacionCuenta
 from app.utils.address_formatter import capitalizar_texto
 from typing import Optional
 
@@ -12,6 +12,14 @@ def obtener_venta_por_folio(db: Session, folio: str) -> Optional[BitacoraVentas]
         .filter(
             BitacoraVentas.folio == folio,
             BitacoraVentas.id_emp_bv == 1
+        )
+        .first()
+    )
+def obtener_verificacion_por_no_cuenta(db: Session, no_cuenta: str) -> Optional[VerificacionCuenta]:
+    return (
+        db.query(VerificacionCuenta)
+        .filter(
+            VerificacionCuenta.no_cuenta == no_cuenta
         )
         .first()
     )

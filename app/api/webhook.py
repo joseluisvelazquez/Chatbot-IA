@@ -16,21 +16,9 @@ from app.services.inconsistencias_service import (
 from app.core.states import ChatState
 
 router = APIRouter()
-import asyncio
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import PlainTextResponse
-from sqlalchemy.orm import Session
-
-from app.config.settings import settings
-from app.db.session import get_db
-from app.core.flow_engine import process_message
-from app.services.session_service import get_or_create_session, update_session
 from app.services.reminder_service import upsert_inactivity_reminders
-
-from app.adapters.meta_webhook import parse_meta_payload
-from app.adapters.whatsapp_client import send_whatsapp_message
 from app.services.message_service import save_message
 from app.websockets.manager import manager
 
@@ -91,6 +79,10 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     )
     try:
         chat = get_or_create_session(db, phone)
+        # Anti-duplicado
+        if message_id and chat.last_message_id == message_id:
+            db.rollback()
+            return {"status": "duplicate"}
 
         save_message(
             db=db,
@@ -112,10 +104,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             "unread_count": chat.unread_count
         })
 
-        # Anti-duplicado
-        if message_id and chat.last_message_id == message_id:
-            db.rollback()
-            return {"status": "duplicate"}
+        
 
         result = process_message(
             session=chat,

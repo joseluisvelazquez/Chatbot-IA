@@ -9,6 +9,30 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from app.db.models import ChatSessions
 from app.core.states import ChatState
 
+def attach_folio_to_session(db, session, folio):
+    
+    # ya existe una sesión con ese folio?
+    existing = db.query(ChatSessions).filter(
+        ChatSessions.phone == session.phone,
+        ChatSessions.folio == folio
+    ).first()
+
+    if existing:
+        return existing
+
+    # 🔥 crear nueva sesión con folio
+    new_session = ChatSessions(
+        phone=session.phone,
+        folio=folio,
+        state=session.state,
+        last_message=session.last_message,
+        last_message_at=session.last_message_at,
+    )
+
+    db.add(new_session)
+    db.flush()
+
+    return new_session
 
 def utcnow_naive() -> datetime:
     """

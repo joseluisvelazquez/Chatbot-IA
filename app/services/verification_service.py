@@ -12,7 +12,7 @@ from app.core.verification_schema import (
     assert_valid_step,
     normalize_progress_payload,
 )
-from app.db.models import VerificacionCuenta
+from app.db.models import FlowEvent, VerificacionCuenta
 from app.siga.siga_repository import obtener_venta_por_folio
 
 
@@ -21,16 +21,33 @@ class VerificationResult:
     no_cuenta: str
     progress: Dict[str, int]
 
+def log_flow_event(db, session, from_state, to_state, trigger, event_type):
+
+    event = FlowEvent(
+        session_id=session.id,
+        phone=session.phone,
+        folio=session.folio,
+        from_state=from_state,
+        to_state=to_state,
+        trigger=trigger,
+        event_type=event_type
+    )
+
+    db.add(event)
+    db.commit()
+
 def is_verification_complete(payload: Dict[str, Any]) -> bool:
     """
     Determina si la verificación ya fue completada.
     Se considera completa si se llegó al paso 'beneficios'
     o si explícitamente se marcó 'finalizado'.
     """
+    print(f"DEBUG: Verificación recibida para check completo: {payload}")
 
     data = normalize_progress_payload(payload)
+    print(f"DEBUG: Verificación normalizada para check completo: {data}")
 
-    return data["beneficios"] in [1,2] or data["finalizado"] == 1
+    return data["finalizado"] == 1
 
 class VerificationService:
     """Persistencia del avance de verificación por CUENTA (no por sesión).
@@ -85,7 +102,7 @@ class VerificationService:
         if not step:
             raise ValueError("step requerido")
 
-        if value not in (0, 1, 2):
+        if value not in (0, 1, 2, 3):
             raise ValueError("valor inválido de verificación")
 
         assert_valid_step(step)
@@ -96,14 +113,6 @@ class VerificationService:
             .with_for_update()
             .first()
         )
-        if row and is_verification_complete(row.json):
-
-            send_message(
-               phone,
-                "✅ Esta cuenta ya fue verificada anteriormente."
-            )
-
-            return
 
         if not row:
             self._create_if_missing(no_cuenta)

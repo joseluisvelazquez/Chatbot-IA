@@ -551,6 +551,26 @@ class EstadosCuentaDuplicate(Base):
     id_suc_estado_cuenta: Mapped[Optional[int]] = mapped_column(Integer)
     usuario: Mapped[Optional[str]] = mapped_column(TEXT)
     fecha_corte: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
+    
+class FlowEvent(Base):
+    __tablename__ = "flow_events"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, index=True)
+    phone = Column(String(20))
+    folio = Column(Integer)
+
+    from_state = Column(String(50))
+    to_state = Column(String(50))
+
+    event_type = Column(String(50))
+
+    trigger_text = Column(Text)
+    detected_intent = Column(String(50))
+
+    metadata = Column(JSON)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class MotivosCancelacion(Base):
     __tablename__ = "motivos_cancelacion"
