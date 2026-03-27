@@ -4,25 +4,31 @@ let lastTyping = 0
 let typingTimeout = null
 
 import { getConversations } from "../js/api.js"
-
+import { EMOJIS } from "./emojis.js" 
 export function initConversationsPage() {
-    window.send = send;
-    window.handleTyping = handleTyping;
-    window.handleKeyDown = handleKeyDown;
+    window.send = send
+    window.handleTyping = handleTyping
+    window.handleKeyDown = handleKeyDown
+    window.autoResize = autoResize
 
-    initWebSocket();
+    initWebSocket()
 
     loadSidebar().then((sessions) => {
-        openConversationFromURL(sessions);
-    });
+        openConversationFromURL(sessions)
+    })
+
     if (window.selectedSession) {
-        const { sessionId, phone } = window.selectedSession;
-
-        loadChat(sessionId, phone);
-
-        window.selectedSession = null;
+        const { sessionId, phone } = window.selectedSession
+        loadChat(sessionId, phone)
+        window.selectedSession = null
     }
+
+    requestAnimationFrame(() => {
+        setupInputHandler()
+        setupEmojiPicker()
+    })
 }
+
 // --------------------
 // SIDEBAR
 // --------------------
@@ -411,4 +417,145 @@ function openConversationFromURL(conversations) {
     const url = new URL(window.location);
     url.searchParams.delete("session_id");
     window.history.replaceState({}, "", url);
+}
+
+// --------------------
+// EMOJIS
+// --------------------
+function setupInputHandler() {
+    const input = document.getElementById("messageInput")
+
+    if (!input) {
+        console.warn("No existe #messageInput")
+        return
+    }
+
+    if (input._handleKeyDownRef) {
+        input.removeEventListener("keydown", input._handleKeyDownRef)
+    }
+
+    const handler = function (event) {
+        if (event.key !== "Enter") return
+
+        // Shift + Enter = salto de línea
+        if (event.shiftKey) return
+
+        event.preventDefault()
+        send()
+    }
+
+    input._handleKeyDownRef = handler
+    input.addEventListener("keydown", handler)
+}
+function setupEmojiPicker() {
+    const btn = document.getElementById("emojiBtn")
+    const container = document.getElementById("emojiPickerContainer")
+    const input = document.getElementById("messageInput")
+
+    if (!btn || !container || !input) return
+
+    if (!container.dataset.init) {
+        container.innerHTML = `
+            <input
+                id="emojiSearch"
+                placeholder="Buscar emoji..."
+                class="h-8 mb-3 px-2 rounded border border-gray-600 bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600 text-black dark:text-white text-sm outline-none focus:border-green-500"
+            />
+            <div
+                id="emojiGrid"
+                class="flex-1 grid grid-cols-8 gap-1 overflow-y-auto"
+            ></div>
+        `
+        container.dataset.init = "true"
+    }
+
+    const grid = container.querySelector("#emojiGrid")
+    const search = container.querySelector("#emojiSearch")
+
+    if (!grid || !search) return
+
+    container.classList.add("hidden")
+
+    function render(list) {
+        grid.innerHTML = ""
+
+        list.forEach((e) => {
+            const btnEmoji = document.createElement("button")
+            btnEmoji.type = "button"
+            btnEmoji.className = `
+                flex items-center justify-center text-xl cursor-pointer
+                rounded-lg 
+                hover:bg-gray-200 dark:hover:bg-slate-700
+                transition
+            `
+            btnEmoji.textContent = e.emoji
+
+            btnEmoji.onclick = () => {
+                const start = input.selectionStart ?? input.value.length
+                const end = input.selectionEnd ?? input.value.length
+
+                input.value =
+                    input.value.slice(0, start) +
+                    e.emoji +
+                    input.value.slice(end)
+
+                const pos = start + e.emoji.length
+                input.focus()
+                input.selectionStart = input.selectionEnd = pos
+
+                autoResize(input)
+                container.classList.add("hidden")
+            }
+
+            grid.appendChild(btnEmoji)
+        })
+    }
+
+    render(EMOJIS.slice(0, 200))
+
+    search.oninput = () => {
+        const term = search.value.toLowerCase().trim()
+
+        const filtered = EMOJIS.filter((e) =>
+            e.annotation?.toLowerCase().includes(term) ||
+            e.tags?.some((t) => t.toLowerCase().includes(term))
+        ).slice(0, 200)
+
+        render(filtered)
+    }
+
+    btn.onclick = (e) => {
+        e.stopPropagation()
+        container.classList.toggle("hidden")
+
+        if (!container.classList.contains("hidden")) {
+            search.focus()
+        }
+    }
+
+    container.onclick = (e) => {
+        e.stopPropagation()
+    }
+
+    input.addEventListener("focus", () => {
+        container.classList.add("hidden")
+    })
+
+    if (!container.dataset.outsideCloseBound) {
+        document.addEventListener("click", () => {
+            container.classList.add("hidden")
+        })
+        container.dataset.outsideCloseBound = "true"
+    }
+}
+function autoResize(el) {
+    if (!el) return
+
+    // reset
+    el.style.height = "auto"
+
+    // limitar a 120px (como tu diseño)
+    const newHeight = Math.min(el.scrollHeight, 120)
+
+    el.style.height = newHeight + "px"
 }
