@@ -42,3 +42,18 @@ export async function sendMessage(payload) {
         body: JSON.stringify(payload)
     });
 }
+// --------------------
+// DASHBOARD
+// --------------------
+
+export async function getDashboardSummary() {
+    return apiRequest("/dashboard/summary");
+}
+
+export async function getDashboardFunnel(days = 7) {
+    return apiRequest(`/dashboard/funnel?days=${days}`);
+}
+
+export async function getDashboardStateTimes(days = 7) {
+    return apiRequest(`/dashboard/state-times?days=${days}`);
+}

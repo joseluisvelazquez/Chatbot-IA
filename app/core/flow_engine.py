@@ -128,6 +128,46 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         except Exception as e:
             logger.exception("No se pudo marcar progreso verificación step=%s folio=%s", step_key, folio)
             return
+    # --------------------------------------
+    # Si mandó folio para iniciar
+    # --------------------------------------
+    def _check_verification_complete(folio: str) -> FlowResult | None:    
+        no_cuenta = VerificationService(db).resolve_no_cuenta_from_folio(folio)
+        verificacion = obtener_verificacion_por_no_cuenta(db,no_cuenta)
+        print(f"DEBUG: Folio detectado {folio_detectado} con no_cuenta {no_cuenta}")
+
+        if no_cuenta and verificacion and (session.phone not in settings.TEST_PHONE_ONLY):
+
+            print(verification_service.is_verification_complete(verificacion.json))
+
+            if verification_service.is_verification_complete(verificacion.json):
+                return FlowResult(
+                    reply="✅ Esta cuenta ya fue verificada anteriormente.",
+                    next_state=ChatState.MENU_AYUDA,
+                    buttons= FLOW[ChatState.MENU_AYUDA].get("buttons", []),
+                    previous_state=None,
+                )
+    # --------------------------------------
+    # 🔥 LOG FLOW EVENT (CLAVE)
+    # --------------------------------------
+    def _log():
+        
+        if db:
+            try:
+                log_flow_event(
+                    db=db,
+                    session=session,
+                    from_state=current_state.value if current_state else None,
+                    to_state=next_state.value if next_state else None,
+                    trigger_text=text if text else intent,
+                    event_type="message" if text else "button",
+                    detected_intent=detected_intent,
+                    event_payload={
+                        "buttons": [b.get("id") for b in (FLOW.get(next_state, {}).get("buttons", []))],
+                    },
+                )
+            except Exception:
+                pass
 
     # --------------------------------------
     # Detectar intención
@@ -159,6 +199,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------
 
     if current_state in [ChatState.ESPERA, ChatState.FUERA_DE_FLUJO] and detected_intent != "start_verification":
+
+        _log()
         
         return FlowResult(
             reply=messages.MENU_AYUDA,
@@ -166,25 +208,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             buttons=FLOW[ChatState.MENU_AYUDA]["buttons"]
         )
     
-    # --------------------------------------
-    # Si mandó folio para iniciar
-    # --------------------------------------
-    def _check_verification_complete(folio: str) -> FlowResult | None:    
-        no_cuenta = VerificationService(db).resolve_no_cuenta_from_folio(folio)
-        verificacion = obtener_verificacion_por_no_cuenta(db,no_cuenta)
-        print(f"DEBUG: Folio detectado {folio_detectado} con no_cuenta {no_cuenta}")
-
-        if no_cuenta and verificacion and (session.phone not in settings.TEST_PHONE_ONLY):
-
-            print(verification_service.is_verification_complete(verificacion.json))
-
-            if verification_service.is_verification_complete(verificacion.json):
-                return FlowResult(
-                    reply="✅ Esta cuenta ya fue verificada anteriormente.",
-                    next_state=ChatState.MENU_AYUDA,
-                    buttons= FLOW[ChatState.MENU_AYUDA].get("buttons", []),
-                    previous_state=None,
-                )
+    
     if detected_intent == "start_verification":
         venta = obtener_venta_por_folio(db, folio)
 
@@ -204,7 +228,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         _try_mark_step("inicio")
         _try_mark_step("folio")
 
-        
+        _log()
 
         return FlowResult(
             reply=f"🔎 Detecté tu folio: *{folio}*\n\n¿Es correcto?",
@@ -246,9 +270,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         session.folio = nuevo_folio
         _try_mark_step("folio")
 
+        _log()
 
-        
-        
         return FlowResult(
             reply=f"🔎 Detecté tu folio: *{nuevo_folio}*\n\n¿Es correcto?",
             next_state=ChatState.CONFIRMAR_FOLIO,
@@ -266,6 +289,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     if current_state == ChatState.ESCRIBIR_INCONSISTENCIA:
 
         if not previous_state:
+            _log()
             return FlowResult(
                 reply="⚠️ Ocurrió un error. Regresando al flujo principal.",
                 next_state=ChatState.FUERA_DE_FLUJO,
@@ -276,7 +300,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         campo = INCONSISTENCIAS_MAP.get(ChatState(previous_state))
 
         if campo:
-            
+            _log()
             return FlowResult(
                 reply="Gracias, un asesor revisará la información.",
                 next_state=ChatState.INCONSISTENCIA,
@@ -291,6 +315,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             )
 
         # 🔥 CASO FALLBACK (EL QUE TE FALTABA)
+        _log()
         return FlowResult(
             reply="⚠️ No pude procesar tu mensaje. Intenta nuevamente.",
             next_state=ChatState.FUERA_DE_FLUJO,
@@ -374,8 +399,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         next_state = ChatState.COMPONENTES_CONFIRMAR_FALTANTES
 
         reply = f"✅ Agregado: *{componente_label}*\n\n¿Deseas agregar otro componente faltante?"
-        
-
+        _log()
         return FlowResult(
             reply=reply,
             next_state=next_state,
@@ -426,6 +450,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply = f"""📋 Registramos estos componentes faltantes:
             {faltantes_texto}
             🔧 Un asesor revisará tu caso."""
+            _log()
            
 
             return FlowResult(
@@ -539,8 +564,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
 
     print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")
-
-    
+    _log()
     return FlowResult(
         reply=reply,
         next_state=next_state,

@@ -21,21 +21,36 @@ class VerificationResult:
     no_cuenta: str
     progress: Dict[str, int]
 
-def log_flow_event(db, session, from_state, to_state, trigger, event_type):
+def log_flow_event(
+    db: Session,
+    session,
+    from_state: str | None,
+    to_state: str | None,
+    trigger_text: str | None,
+    event_type: str,
+    detected_intent: str | None = None,
+    event_payload: dict | None = None,
+):
+    try:
+        event = FlowEvent(
+            session_id=session.id,
+            phone=session.phone,
+            folio=session.folio,
+            from_state=from_state,
+            to_state=to_state,
+            trigger_text=trigger_text,
+            event_type=event_type,
+            detected_intent=detected_intent,
+            event_payload=event_payload,
+        )
 
-    event = FlowEvent(
-        session_id=session.id,
-        phone=session.phone,
-        folio=session.folio,
-        from_state=from_state,
-        to_state=to_state,
-        trigger=trigger,
-        event_type=event_type
-    )
+        db.add(event)
+        db.flush()  # 🔥 NO commit aquí
 
-    db.add(event)
-    db.commit()
-
+    except Exception:
+        # 🔥 nunca romper el flujo del chatbot
+        pass
+    
 def is_verification_complete(payload: Dict[str, Any]) -> bool:
     """
     Determina si la verificación ya fue completada.

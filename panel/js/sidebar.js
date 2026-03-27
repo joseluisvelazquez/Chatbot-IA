@@ -36,20 +36,30 @@ export function initSidebar(activePage = "") {
 
     if (toggle && sidebar) {
         toggle.onclick = () => {
-            sidebar.classList.toggle("collapsed");
+            sidebar.classList.toggle("w-64");
+            sidebar.classList.toggle("w-20");
+
+            sidebar.querySelectorAll("span").forEach((el) => {
+                el.classList.toggle("hidden");
+            });
         };
     }
 
     document.querySelectorAll("#sidebar .nav-item").forEach(item => {
         const page = item.dataset.page || "";
+        const isActive = page === activePage;
 
-        item.classList.toggle("active", page === activePage);
+        item.classList.remove(
+            "bg-blue-500",
+            "text-white",
+            "dark:bg-blue-600"
+        );
+
+        if (isActive) {
+            item.classList.add("bg-blue-500", "text-white", "dark:bg-blue-600");
+        }
 
         item.onclick = () => {
-            document.querySelectorAll("#sidebar .nav-item")
-                .forEach(i => i.classList.remove("active"));
-
-            item.classList.add("active");
             navigateTo(page);
         };
     });

@@ -1,17 +1,42 @@
+import { navigateTo } from "./app.js";
+
 // =========================
 // UTILIDADES
 // =========================
 function escapeHtml(str) {
     if (!str) return "";
-    return str
+    return String(str)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
 }
 
+function loadTheme() {
+    const saved = localStorage.getItem("theme");
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+    if (saved === "dark" || (!saved && prefersDark)) {
+        document.documentElement.classList.add("dark");
+    } else {
+        document.documentElement.classList.remove("dark");
+    }
+}
+
+function toggleTheme() {
+    const root = document.documentElement;
+    const isDark = root.classList.toggle("dark");
+    localStorage.setItem("theme", isDark ? "dark" : "light");
+}
+
+// hacerlo global porque lo llamas inline desde header
+window.toggleTheme = toggleTheme;
+
+// cargar tema al importar módulo
+loadTheme();
+
 // =========================
-// NAV ITEMS (FUENTE ÚNICA)
+// NAV ITEMS
 // =========================
 const NAV_ITEMS = [
     { page: "dashboard", icon: "home", label: "Dashboard" },
@@ -21,91 +46,114 @@ const NAV_ITEMS = [
 ];
 
 // =========================
-// HEADER DINÁMICO
+// HEADER
 // =========================
 export function renderHeader(layout = "default") {
     const header = document.getElementById("header");
     if (!header) return;
 
-    // =====================
-    // DEFAULT (HEADER NORMAL)
-    // =====================
-    if (layout === "default") {
-        header.innerHTML = `
-            <div class="header-left">
-                <div class="logo">MXCOMP</div>
-                <div class="subtitle">Sistema Operativo</div>
-            </div>
-
-            <div class="header-right">
-                <div class="icon-btn">🔍</div>
-                <div class="icon-btn">🔔</div>
-                <div class="icon-btn">👤 Admin</div>
-            </div>
-        `;
-    }
-
-    // =====================
-    // CHAT MODE (🔥 NAVBAR)
-    // =====================
     if (layout === "chat") {
+        header.className =
+            "h-14 flex items-center justify-between px-4 md:px-6 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-700 text-gray-900 dark:text-white transition-colors duration-300";
+
         header.innerHTML = `
-            <div class="header-left">
+            <div class="flex items-center gap-6">
+                <div class="font-bold text-sky-500 transition-transform duration-200 hover:scale-105">MXCOMP</div>
 
-                <div class="logo">MXCOMP</div>
-
-                <div class="nav-horizontal">
+                <nav class="flex items-center gap-3">
                     ${NAV_ITEMS.map(item => `
-                        <div class="nav-item" data-page="${item.page}">
-                            <i data-lucide="${item.icon}"></i>
-                            <span>${item.label}</span>
-                        </div>
+                        <button
+                            type="button"
+                            data-page="${item.page}"
+                            class="flex items-center justify-center rounded-lg p-2
+                            hover:bg-gray-100 dark:hover:bg-slate-700
+                            active:scale-95 transition-all duration-200"
+                            title="${item.label}"
+                        >
+                            <i data-lucide="${item.icon}" class="w-5 h-5"></i>
+                        </button>
                     `).join("")}
-                </div>
-
+                </nav>
             </div>
 
-            <div class="header-right">
-                <div class="icon-btn">🔍</div>
-                <div class="icon-btn">🔔</div>
-                <div class="icon-btn">👤</div>
+            <div class="flex items-center gap-3">
+                <button
+                    type="button"
+                    onclick="toggleTheme()"
+                    class="inline-flex h-8 w-10 items-center justify-center rounded-md
+                    hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95
+                    transition-all duration-200"
+                >
+                    🌙
+                </button>
+
+                <div class="text-sm text-gray-700 dark:text-slate-300">
+                    Admin
+                </div>
+            </div>
+        `;
+    } else {
+        header.className =
+            "h-14 flex items-center justify-between px-6 bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 transition-colors duration-300";
+
+        header.innerHTML = `
+            <div class="flex items-center gap-4">
+                <div class="font-bold text-blue-500 transition-transform duration-200 hover:scale-105">MXCOMP</div>
+                <div class="text-sm text-gray-500 dark:text-slate-400">Sistema Operativo</div>
+            </div>
+
+            <div class="flex items-center gap-3">
+                <button onclick="toggleTheme()"
+                    class="inline-flex h-8 w-10 items-center justify-center rounded-md
+                    text-gray-700 dark:text-slate-200
+                        hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition-all duration-200">
+                    🌙
+                </button>
+                <div class="text-sm text-gray-700 dark:text-slate-200">Admin</div>
             </div>
         `;
     }
 
-    // 🔥 re-render iconos
-    if (window.lucide) {
-        lucide.createIcons();
-    }
-
-    // 🔥 bind navegación
+    if (window.lucide) lucide.createIcons();
     bindHeaderNavigation();
 }
 
 // =========================
-// SIDEBAR GLOBAL
+// SIDEBAR
 // =========================
 export function renderSidebar() {
     const sidebar = document.getElementById("sidebar");
     if (!sidebar) return;
 
     sidebar.innerHTML = `
-        <div class="sidebar">
-
-            <div class="sidebar-header">
-                <span class="logo">MXCOMP</span>
-                <button id="toggleSidebar">☰</button>
+        <div class="h-full flex flex-col p-4 gap-2 bg-white dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 transition-colors duration-300">
+            <div class="mb-2 flex items-center justify-between">
+                <span class="font-bold text-sky-500 transition-transform duration-200 hover:scale-105">MXCOMP</span>
+                <button
+                    id="toggleSidebar"
+                    type="button"
+                    class="rounded-lg p-2 hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition-all duration-200"
+                >
+                    <i data-lucide="panel-left-close" class="w-5 h-5"></i>
+                </button>
             </div>
 
-            <div class="sidebar-menu">
+            <nav class="flex flex-col gap-1">
                 ${NAV_ITEMS.map(item => `
-                    <div class="nav-item" data-page="${item.page}">
-                        <i data-lucide="${item.icon}"></i>
+                    <button
+                        type="button"
+                        class="nav-item flex items-center gap-3 rounded-lg px-3 py-2 text-left
+                        text-gray-700 dark:text-slate-200
+                        hover:bg-gray-100 dark:hover:bg-slate-700
+                        active:scale-[0.98]
+                        transition-all duration-200"
+                        data-page="${item.page}"
+                    >
+                        <i data-lucide="${item.icon}" class="w-5 h-5"></i>
                         <span>${item.label}</span>
-                    </div>
+                    </button>
                 `).join("")}
-            </div>
-
+            </nav>
         </div>
     `;
 
@@ -113,21 +161,14 @@ export function renderSidebar() {
         lucide.createIcons();
     }
 }
-
 // =========================
-// NAVIGATION (HEADER + SIDEBAR)
+// NAVIGATION
 // =========================
 function bindHeaderNavigation() {
-    const items = document.querySelectorAll(".nav-item");
-
-    items.forEach(item => {
+    document.querySelectorAll("[data-page]").forEach((item) => {
         item.onclick = () => {
             const page = item.dataset.page;
-
-            // lazy import para evitar circular deps
-            import("./app.js").then(({ navigateTo }) => {
-                navigateTo(page);
-            });
+            if (page) navigateTo(page);
         };
     });
 }
@@ -155,31 +196,38 @@ function statusLabel(status) {
 
 function statusClass(status) {
     const map = {
-        in_progress: "badge warning",
-        inconsistent: "badge danger",
-        human_required: "badge info",
-        stalled: "badge muted",
-        completed: "badge success"
+        in_progress: "bg-yellow-500/20 text-yellow-400",
+        inconsistent: "bg-red-500/20 text-red-400",
+        human_required: "bg-blue-500/20 text-blue-400",
+        stalled: "bg-gray-500/20 text-gray-400",
+        completed: "bg-green-500/20 text-green-400"
     };
-    return map[status] || "badge";
+
+    return `inline-flex items-center px-2.5 py-1 text-xs rounded-full font-medium ${map[status] || "bg-gray-400/20 text-gray-300"}`;
+}
+function kpiCard(icon, id, label) {
+    return `
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-4 flex flex-col gap-2">
+            <i data-lucide="${icon}" class="w-5 h-5 text-blue-500"></i>
+            <h3 id="${id}" class="text-xl font-semibold">0</h3>
+            <p class="text-sm text-gray-500 dark:text-slate-400">${label}</p>
+        </div>
+    `;
 }
 
 function renderProgressBar(percent) {
     const safe = Math.max(0, Math.min(100, percent || 0));
 
     return `
-        <div class="progress-cell">
-            <div class="progress-track">
-                <div class="progress-fill" style="width: ${safe}%"></div>
+        <div class="flex items-center gap-2 min-w-[160px]">
+            <div class="w-full h-2 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                <div class="h-full bg-blue-500 transition-all" style="width: ${safe}%"></div>
             </div>
-            <span>${safe}%</span>
+            <span class="text-xs text-gray-500 dark:text-slate-400">${safe}%</span>
         </div>
     `;
 }
 
-// =========================
-// EXPORT GLOBAL UI
-// =========================
 window.ui = {
     escapeHtml,
     formatDateTime,
@@ -187,3 +235,5 @@ window.ui = {
     statusClass,
     renderProgressBar
 };
+
+window.ui.kpiCard = kpiCard;

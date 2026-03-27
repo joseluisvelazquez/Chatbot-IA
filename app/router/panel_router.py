@@ -1,8 +1,8 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from sqlalchemy.orm import Session
-from sqlalchemy import asc, desc
-from datetime import datetime
+from sqlalchemy import asc, desc, func, text
+from datetime import datetime, timedelta
 
 from app.schemas.panel import (
     SendMessageRequest,
@@ -13,9 +13,8 @@ from app.schemas.panel import (
 
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.db.session import get_db
-
 from app.websockets.manager import manager
-from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message
+from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message, FlowEvent
 from app.siga.siga_repository import obtener_venta_por_folio
 
 
@@ -27,10 +26,24 @@ from app.services.verification_panel_service import (
     resolve_cuentas_from_folios,
 )
 
-
-
-# from app.core.security import verify_api_key  # opcional
-
+# ORDEN REAL DEL FLOW (ajústalo si cambias estados)
+FUNNEL_ORDER = [
+    "INICIO",
+    "CONFIRMAR_FOLIO",
+    "CONFIRMAR_NOMBRE",
+    "CONFIRMAR_DOMICILIO",
+    "CONFIRMAR_FECHA",
+    "CONFIRMAR_PRODUCTO",
+    "CONFIRMAR_ESTADO_PRODUCTO",
+    "CONFIRMAR_COMPONENTES",
+    "COMPONENTES_FALTANTES",
+    "CONFIRMAR_PAGO_INICIAL",
+    "INFO_PAGOS",
+    "INFO_METODOS_PAGO",
+    "INFO_PLAN_3_MESES",
+    "INFO_BENEFICIOS",
+    "FINALIZADO",
+]
 router = APIRouter(
     prefix="/api/panel",
     tags=["panel"]
@@ -146,35 +159,204 @@ def resolve_cuentas_from_folios(folios: list[str], db: Session) -> dict:
 # =========================================
 # Endpoints para los dashboard (PAGINADO + DTO + LÓGICA DE NEGOCIO)
 # =========================================
+
+@router.get("/dashboard/state-times")
+def dashboard_state_times(
+    days: int = 7,
+    db: Session = Depends(get_db)
+):
+    # --------------------------------------
+    # 🧠 FILTRO DE TIEMPO
+    # --------------------------------------
+    date_from = datetime.utcnow() - timedelta(days=days)
+
+    # --------------------------------------
+    # 🔥 SUBQUERY: ordenar eventos por sesión
+    # --------------------------------------
+    events = (
+        db.query(
+            FlowEvent.session_id,
+            FlowEvent.from_state,
+            FlowEvent.to_state,
+            FlowEvent.created_at
+        )
+        .filter(
+            FlowEvent.created_at >= date_from,
+            FlowEvent.from_state.isnot(None),
+            FlowEvent.to_state.isnot(None),
+        )
+        .order_by(FlowEvent.session_id, FlowEvent.created_at)
+        .all()
+    )
+
+    # --------------------------------------
+    # 🧠 CALCULAR TIEMPOS ENTRE TRANSICIONES
+    # --------------------------------------
+    transitions = {}
+
+    last_event_per_session = {}
+
+    for e in events:
+        session_id = e.session_id
+
+        if session_id in last_event_per_session:
+            prev = last_event_per_session[session_id]
+
+            # transición real
+            key = f"{prev.to_state} → {e.to_state}"
+
+            time_diff = (e.created_at - prev.created_at).total_seconds()
+
+            if key not in transitions:
+                transitions[key] = {
+                    "from_state": prev.to_state,
+                    "to_state": e.to_state,
+                    "times": []
+                }
+
+            # evitar tiempos absurdos
+            if 0 < time_diff < 86400:  # max 24h
+                transitions[key]["times"].append(time_diff)
+
+        last_event_per_session[session_id] = e
+
+    # --------------------------------------
+    # 🔥 AGREGAR MÉTRICAS
+    # --------------------------------------
+    result = []
+
+    for key, data in transitions.items():
+        times = data["times"]
+
+        if not times:
+            continue
+
+        avg_time = sum(times) / len(times)
+        max_time = max(times)
+        min_time = min(times)
+
+        result.append({
+            "transition": key,
+            "from_state": data["from_state"],
+            "to_state": data["to_state"],
+            "count": len(times),
+            "avg_seconds": round(avg_time, 2),
+            "avg_minutes": round(avg_time / 60, 2),
+            "max_minutes": round(max_time / 60, 2),
+            "min_minutes": round(min_time / 60, 2),
+        })
+
+    # --------------------------------------
+    # 🔥 ORDENAR POR TIEMPO PROMEDIO (cuellos de botella)
+    # --------------------------------------
+    result_sorted = sorted(result, key=lambda x: x["avg_seconds"], reverse=True)
+
+    return {
+        "range_days": days,
+        "data": result_sorted
+    }
+
+@router.get("/dashboard/funnel")
+def dashboard_funnel(
+    days: int = 7,  # 🔥 filtro de tiempo (últimos N días)
+    db: Session = Depends(get_db)
+):
+    # --------------------------------------
+    #  FILTRO DE TIEMPO
+    # --------------------------------------
+    date_from = datetime.utcnow() - timedelta(days=days)
+
+    # --------------------------------------
+    #  SUBQUERY: PRIMERA VEZ POR ESTADO
+    # --------------------------------------
+    subquery = (
+        db.query(
+            FlowEvent.session_id,
+            FlowEvent.to_state,
+            func.min(FlowEvent.created_at).label("first_time")
+        )
+        .filter(
+            FlowEvent.to_state.isnot(None),
+            FlowEvent.created_at >= date_from
+        )
+        .group_by(FlowEvent.session_id, FlowEvent.to_state)
+        .subquery()
+    )
+
+    # --------------------------------------
+    #  AGREGACIÓN FINAL
+    # --------------------------------------
+    results = (
+        db.query(
+            subquery.c.to_state,
+            func.count(func.distinct(subquery.c.session_id)).label("total")
+        )
+        .group_by(subquery.c.to_state)
+        .all()
+    )
+
+    # --------------------------------------
+    #  MAPA PARA ACCESO RÁPIDO
+    # --------------------------------------
+    result_map = {r.to_state: r.total for r in results}
+
+    # --------------------------------------
+    #  ORDENAR SEGÚN FLUJO
+    # --------------------------------------
+    funnel = []
+
+    for state in FUNNEL_ORDER:
+        funnel.append({
+            "state": state,
+            "total": result_map.get(state, 0)
+        })
+
+    # --------------------------------------
+    #  DROP-OFF (SUPER IMPORTANTE)
+    # --------------------------------------
+    for i in range(len(funnel)):
+        current = funnel[i]["total"]
+        next_val = funnel[i + 1]["total"] if i + 1 < len(funnel) else 0
+
+        drop_off = current - next_val if current > 0 else 0
+        conversion = (next_val / current * 100) if current > 0 else 0
+
+        funnel[i]["drop_off"] = drop_off
+        funnel[i]["conversion_pct"] = round(conversion, 2)
+
+    return {
+        "range_days": days,
+        "data": funnel
+    }
+
 @router.get("/dashboard/summary")
 def dashboard_summary(db: Session = Depends(get_db)):
 
-    total_sessions = db.query(ChatSessions).count()
+    total_sessions = db.query(func.count(ChatSessions.id)).scalar()
 
-    active_sessions = db.query(ChatSessions)\
+    active_sessions = db.query(func.count(ChatSessions.id))\
         .filter(ChatSessions.last_message_at >= func.now() - text("INTERVAL 1 DAY"))\
-        .count()
+        .scalar()
 
-    total_messages_in = db.query(Message)\
+    total_messages_in = db.query(func.count(Message.id))\
         .filter(Message.direction == "in")\
-        .count()
+        .scalar()
 
-    total_messages_out = db.query(Message)\
+    total_messages_out = db.query(func.count(Message.id))\
         .filter(Message.direction == "out")\
-        .count()
+        .scalar()
 
-    inconsistencias_abiertas = db.query(Inconsistencias)\
+    inconsistencias_abiertas = db.query(func.count(Inconsistencias.id))\
         .filter(Inconsistencias.estatus == "abierta")\
-        .count()
+        .scalar()
 
     return {
-        "total_sessions": total_sessions,
-        "active_sessions": active_sessions,
-        "messages_in": total_messages_in,
-        "messages_out": total_messages_out,
-        "issues_open": inconsistencias_abiertas
+        "total_sessions": total_sessions or 0,
+        "active_sessions": active_sessions or 0,
+        "messages_in": total_messages_in or 0,
+        "messages_out": total_messages_out or 0,
+        "issues_open": inconsistencias_abiertas or 0
     }
-
 # =========================================
 # Obtener verificaciones (PAGINADO + DTO + LÓGICA DE NEGOCIO)
 # =========================================
@@ -299,6 +481,7 @@ def get_verifications(
         serialized_inconsistencias = serialize_inconsistencias(inconsistencias_folio)
 
         item = {
+            "session_id": session.id,
             "folio": folio,
             "no_cuenta": no_cuenta,
             "phone": session.phone,
