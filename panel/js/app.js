@@ -1,17 +1,20 @@
 import { renderHeader, renderSidebar } from "./ui.js";
 import { initVerificationsPage } from "./verifications.js";
-import { initConversationsPage } from "./chat.js";
+import { initConversationsPage, loadChat } from "./chat.js";
+import { initDashboardPage } from "./dashboard.js";
 import { initSidebar } from "./sidebar.js";
 import { setLayout } from "./layoutmanager.js";
 
+
 // =========================
-// CONFIG DE VISTAS
+// CONFIG
 // =========================
+
 const PAGE_CONFIG = {
     dashboard: {
         path: "/pages/dashboard.html",
         layout: "default",
-        init: null
+        init: initDashboardPage
     },
     conversations: {
         path: "/pages/conversaciones.html",
@@ -31,12 +34,63 @@ const PAGE_CONFIG = {
 };
 
 // =========================
+// STATE
+// =========================
+
+const viewCache = {};
+let isNavigating = false;
+// ====== ESTADO TEMPORAL ======
+let selectedSessionId = null
+
+export function setSelectedSession(sessionId) {
+    selectedSessionId = sessionId
+}
+
+export function consumeSelectedSession() {
+    const id = selectedSessionId
+    selectedSessionId = null
+    return id
+}
+
+// =========================
+// HELPERS
+// =========================
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// =========================
+// ANIMACIONES
+// =========================
+
+async function animateContentOut(content) {
+    content.classList.add(
+        "opacity-0",
+        "translate-y-1",
+        "transition-all",
+        "duration-200"
+    );
+    await sleep(180);
+}
+
+async function animateContentIn(content) {
+    content.classList.remove("opacity-0", "translate-y-1");
+    content.classList.add("opacity-100");
+}
+
+// =========================
 // LOAD VIEW
 // =========================
+
 async function loadView(path) {
     const content = document.getElementById("content");
-    if (!content) {
-        throw new Error("No se encontró el contenedor #content");
+    if (!content) throw new Error("No se encontró #content");
+
+    if (viewCache[path]) {
+        content.innerHTML = "";
+        content.appendChild(viewCache[path].cloneNode(true));
+        return;
     }
 
     const res = await fetch(path);
@@ -46,138 +100,137 @@ async function loadView(path) {
     }
 
     const html = await res.text();
-    content.innerHTML = html;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "w-full h-full flex flex-col min-w-0 min-h-0";
+    wrapper.innerHTML = html;
+
+    viewCache[path] = wrapper.cloneNode(true);
+
+    content.innerHTML = "";
+    content.appendChild(wrapper);
 }
 
 // =========================
-// NAVEGACIÓN CENTRAL
+// NAVEGACIÓN
 // =========================
-export async function navigateTo(page) {
-    const config = PAGE_CONFIG[page];
 
+export async function navigateTo(page, push = true) {
+
+    if (isNavigating) return;
+
+    const config = PAGE_CONFIG[page];
     if (!config) {
         console.warn(`Página no registrada: ${page}`);
         return;
     }
 
-    try {
-        // 1) aplicar layout
-        setLayout(config.layout);
+    const content = document.getElementById("content");
+    if (!content) return;
 
-        // 2) renderizar header según layout
+    try {
+        isNavigating = true;
+
+        const url = new URL(window.location);
+
+        // 🔥 SIEMPRE SET VIEW
+        url.searchParams.set("view", page);
+
+        // 🔥 LIMPIAR PARAMS SOLO SI NO ES CHAT
+        if (page !== "conversations") {
+            url.searchParams.delete("session_id");
+            url.searchParams.delete("phone");
+        }
+
+        if (push) {
+            window.history.pushState({}, "", url);
+        }
+
+        await animateContentOut(content);
+
+        setLayout(config.layout);
         renderHeader(config.layout);
 
-        // 3) sidebar global solo se mantiene en layout default
         if (config.layout === "default") {
             renderSidebar();
             initSidebar(page);
         }
 
-        // 4) cargar vista
         await loadView(config.path);
 
-        // 5) inicializar vista si aplica
         if (typeof config.init === "function") {
             config.init();
         }
+        
 
-        // 6) re-render iconos
         if (window.lucide) {
             lucide.createIcons();
         }
 
+        await animateContentIn(content);
+
     } catch (error) {
         console.error("Error navegando:", error);
 
-        const content = document.getElementById("content");
-        if (content) {
-            content.innerHTML = `
-                <div class="table-state error">
-                    Error cargando el panel: ${error.message}
-                </div>
-            `;
-        }
+        content.innerHTML = `
+            <div class="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-red-300">
+                Error cargando el panel: ${error.message}
+            </div>
+        `;
+    } finally {
+        isNavigating = false;
     }
 }
 
 // =========================
-// DRAWER
+// EVENTS
 // =========================
-function closeDrawer() {
-    const drawer = document.getElementById("drawer");
-    const overlay = document.getElementById("drawerOverlay");
 
-    if (drawer) drawer.classList.remove("open");
-    if (overlay) overlay.classList.remove("active");
-}
+function bindEvents() {
 
-// =========================
-// EVENTOS GLOBALES
-// =========================
-function bindGlobalEvents() {
     document.addEventListener("click", (e) => {
-        const conversationBtn = e.target.closest(".btn-primary");
-        if (conversationBtn) {
-            const phone = conversationBtn.dataset.phone || null;
-            window.selectedPhone = phone;
-            navigateTo("conversations");
+
+        const btn = e.target.closest(".btn-primary");
+
+        if (btn) {
+
+            const sessionId = btn.dataset.sessionId;
+
+            const url = new URL(window.location);
+
+            url.searchParams.set("view", "conversations");
+
+            if (sessionId) {
+                url.searchParams.set("session_id", sessionId);
+            }
+
+            window.history.pushState({}, "", url);
+
+            navigateTo("conversations", false);
             return;
         }
-
-        if (e.target.closest("#closeDrawer")) {
-            closeDrawer();
-            return;
-        }
-
-        if (e.target.id === "drawerOverlay") {
-            closeDrawer();
-        }
     });
-
-    document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") {
-            closeDrawer();
-        }
-    });
-
-    window.toggleSidebar = function () {
-        const sidebar = document.getElementById("sidebar");
-        if (!sidebar) return;
-        sidebar.classList.toggle("collapsed");
-    };
 }
 
 // =========================
-// APP INIT
+// INIT
 // =========================
-async function initApp() {
-    try {
-        // layout inicial
-        setLayout("default");
 
-        // render base
-        renderHeader("default");
-        renderSidebar();
-        initSidebar("verifications");
+function initApp() {
 
-        // vista inicial
-        await navigateTo("verifications");
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get("view") || "verifications";
 
-    } catch (error) {
-        console.error("Error inicializando app:", error);
-
-        const content = document.getElementById("content");
-        if (content) {
-            content.innerHTML = `
-                <div class="table-state error">
-                    Error cargando el panel: ${error.message}
-                </div>
-            `;
-        }
-    }
+    navigateTo(view, false);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-    bindGlobalEvents();
+    bindEvents();
     initApp();
+});
+
+window.addEventListener("popstate", () => {
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get("view") || "verifications";
+    navigateTo(view, false);
 });

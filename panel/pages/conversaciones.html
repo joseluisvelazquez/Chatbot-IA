@@ -1,48 +1,84 @@
-
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<title>Conversaciones</title>
-
-
-</head>
-
-<body>
-<audio id="notificationSound" src="../sounds/notification.mp3"></audio>
-
-<div class="container">
+<div class="flex flex-1 h-full min-w-0 min-h-0 overflow-hidden">
 
     <!-- SIDEBAR -->
-    <div class="sidebar" id="conversationList"></div>
+    <div
+        id="conversationList"
+        class="w-80 shrink-0 overflow-y-auto 
+        bg-white dark:bg-slate-800 
+        border-r border-gray-200 dark:border-slate-700"
+    ></div>
 
     <!-- CHAT -->
-    <div class="chat">
+    <div class="flex-1 flex flex-col min-w-0 min-h-0">
 
-        <div class="chat-header" id="chatHeader">
-            Bienvenido a tu chat, selecciona una conversación o inicia una nueva. :D
+        <!-- HEADER CHAT -->
+        <div
+            id="chatHeader"
+            class="shrink-0 px-4 py-3 font-semibold
+            bg-white dark:bg-slate-800
+            border-b border-gray-200 dark:border-slate-700"
+        >
+            Selecciona una conversación
         </div>
 
         <!-- MENSAJES -->
-        <div id="messages"></div>
+        <div
+            id="messages"
+            class="flex-1 min-h-0 w-full overflow-y-auto 
+            p-4 flex flex-col gap-3
+            bg-gray-100 dark:bg-slate-900"
+        ></div>
 
         <!-- INPUT -->
-        <div class="input">
-            <input 
-                id="messageInput" 
-                placeholder="Escribe un mensaje..." 
-                oninput="handleTyping()" 
-                onkeydown="handleKeyDown(event)"
-            />
-            
-            <button onclick="send()">Enviar</button>
+        <div
+            class="relative shrink-0 p-3 flex gap-2
+            bg-gray-50 dark:bg-slate-800
+            border-t border-gray-200 dark:border-slate-700"
+        >
+        
+           <!-- BOTON EMOJI -->
+            <button id="emojiBtn"
+                class="h-[42px] w-[42px] flex items-center justify-center 
+                    rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
+                    transition text-xl shrink-0">
+                😊
+            </button>
+
+            <!-- TEXTAREA -->
+            <textarea 
+                id="messageInput"
+                placeholder="Escribe un mensaje..."
+                class="flex-1 px-3 py-2 border rounded-lg text-sm outline-none resize-none max-h-[120px] overflow-y-auto
+                       bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600 text-black dark:text-white"
+                oninput="handleTyping(); autoResize(this)"
+            ></textarea>
+
+            <!-- BOTON ENVIAR -->
+            <button onclick="send()"
+                class="h-[42px] px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg">
+                Enviar
+            </button>
+
+            <!-- EMOJI PICKER -->
+            <div id="emojiPickerContainer"
+                class="hidden absolute bottom-16 left-2 w-[260px] h-[340px]
+                    bg-white dark:bg-slate-800
+                    border border-gray-200 dark:border-slate-700
+                    rounded-xl shadow-lg
+                    flex flex-col p-2 z-30">
+
+                <input id="emojiSearch"
+                    placeholder="Buscar emoji..."
+                    class="h-8 mb-3 px-2 rounded border 
+                        border-gray-300 dark:border-slate-600
+                        bg-white dark:bg-slate-900
+                        text-black dark:text-white
+                        text-sm outline-none focus:border-green-500">
+                <div id="emojiGrid"
+                    class="flex-1 grid grid-cols-8 gap-1 overflow-y-auto">
+                </div>
+            </div>
         </div>
-
+        
     </div>
-
 </div>
-
-
-
-</body>
-</html>

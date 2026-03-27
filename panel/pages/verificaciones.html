@@ -1,67 +1,66 @@
-<section class="page">
-    <div class="page-header">
-        <div>
-            <h1>Verificaciones</h1>
-            <p class="page-description">
-                Estado operativo de las verificaciones registradas en el sistema.
-            </p>
+<section class="flex flex-col gap-6 text-gray-900 dark:text-white">
+
+    <div>
+        <h1 class="text-2xl font-semibold">Verificaciones</h1>
+        <p class="text-sm text-gray-500 dark:text-slate-400">
+            Estado operativo de las verificaciones registradas en el sistema.
+        </p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5">
+            <span class="text-sm text-gray-500 dark:text-slate-400">Total</span>
+            <div id="kpiTotal" class="mt-2 text-2xl font-semibold">0</div>
+        </div>
+
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5">
+            <span class="text-sm text-gray-500 dark:text-slate-400">En proceso</span>
+            <div id="kpiInProgress" class="mt-2 text-2xl font-semibold">0</div>
+        </div>
+
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5">
+            <span class="text-sm text-gray-500 dark:text-slate-400">Inconsistencias</span>
+            <div id="kpiInconsistent" class="mt-2 text-2xl font-semibold">0</div>
+        </div>
+
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5">
+            <span class="text-sm text-gray-500 dark:text-slate-400">Finalizadas</span>
+            <div id="kpiCompleted" class="mt-2 text-2xl font-semibold">0</div>
         </div>
     </div>
 
-    <div class="stats-grid">
-        <div class="stat-card">
-            <span class="stat-label">Total</span>
-            <strong id="kpiTotal">0</strong>
+    <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-4 md:p-5 flex flex-col gap-4">
+        <div class="flex flex-wrap gap-2">
+            <button class="filter-btn px-3 py-2 rounded-lg bg-blue-500 text-white transition" data-status="">Todas</button>
+            <button class="filter-btn px-3 py-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition" data-status="in_progress">En proceso</button>
+            <button class="filter-btn px-3 py-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition" data-status="inconsistent">Inconsistencias</button>
+            <button class="filter-btn px-3 py-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition" data-status="human_required">Asesor</button>
+            <button class="filter-btn px-3 py-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition" data-status="stalled">Inactivas</button>
+            <button class="filter-btn px-3 py-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition" data-status="completed">Finalizadas</button>
         </div>
 
-        <div class="stat-card">
-            <span class="stat-label">En proceso</span>
-            <strong id="kpiInProgress">0</strong>
-        </div>
+        <div id="verificationLoading" class="hidden text-gray-500 dark:text-slate-400">Cargando verificaciones...</div>
+        <div id="verificationError" class="hidden text-red-500"></div>
+        <div id="verificationEmpty" class="hidden text-gray-500 dark:text-slate-400">No hay registros para mostrar.</div>
 
-        <div class="stat-card">
-            <span class="stat-label">Con inconsistencias</span>
-            <strong id="kpiInconsistent">0</strong>
-        </div>
-
-        <div class="stat-card">
-            <span class="stat-label">Finalizadas</span>
-            <strong id="kpiCompleted">0</strong>
-        </div>
-    </div>
-
-    <div class="panel-card">
-        <div class="toolbar">
-            <div class="filter-group">
-                <button class="filter-btn active" data-status="">Todas</button>
-                <button class="filter-btn" data-status="in_progress">En proceso</button>
-                <button class="filter-btn" data-status="inconsistent">Inconsistencias</button>
-                <button class="filter-btn" data-status="human_required">Asesor</button>
-                <button class="filter-btn" data-status="stalled">Inactivas</button>
-                <button class="filter-btn" data-status="completed">Finalizadas</button>
-            </div>
-        </div>
-
-        <div id="verificationLoading" class="table-state hidden">Cargando verificaciones...</div>
-        <div id="verificationError" class="table-state error hidden"></div>
-        <div id="verificationEmpty" class="table-state hidden">No hay registros para mostrar.</div>
-
-        <div class="table-wrapper">
-            <table class="data-table">
+        <div id="verificationTableWrapper" class="overflow-x-auto">
+            <table class="w-full min-w-[980px] text-sm">
                 <thead>
-                    <tr>
-                        <th>No. cuenta</th>
-                        <th>Folio</th>
-                        <th>Teléfono</th>
-                        <th>Estado</th>
-                        <th>Progreso</th>
-                        <th>Paso actual</th>
-                        <th>Errores</th>
-                        <th>Última actividad</th>
+                    <tr class="border-b border-gray-200 dark:border-slate-700 text-gray-500 dark:text-slate-400">
+                        <th class="px-4 py-3 text-left font-medium">No. cuenta</th>
+                        <th class="px-4 py-3 text-left font-medium">Folio</th>
+                        <th class="px-4 py-3 text-left font-medium">Teléfono</th>
+                        <th class="px-4 py-3 text-left font-medium">Estado</th>
+                        <th class="px-4 py-3 text-left font-medium">Progreso</th>
+                        <th class="px-4 py-3 text-left font-medium">Paso actual</th>
+                        <th class="px-4 py-3 text-left font-medium">Errores</th>
+                        <th class="px-4 py-3 text-left font-medium">Última actividad</th>
                     </tr>
                 </thead>
+
                 <tbody id="verificationTableBody"></tbody>
             </table>
         </div>
     </div>
+
 </section>
