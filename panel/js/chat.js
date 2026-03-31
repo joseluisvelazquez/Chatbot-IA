@@ -1,27 +1,29 @@
+
 let currentSessionId = null
 let socket = null
 let lastTyping = 0
 let typingTimeout = null
+let selectedSidebarItem = null
+let isLoadingChat = false
+let lastLoadedSessionId = null
+let messageIds = new Set()
 
 import { getConversations } from "../js/api.js"
 import { EMOJIS } from "./emojis.js" 
 export function initConversationsPage() {
+    
     window.send = send
     window.handleTyping = handleTyping
     window.handleKeyDown = handleKeyDown
     window.autoResize = autoResize
 
-    initWebSocket()
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        initWebSocket()
+    }
 
     loadSidebar().then((sessions) => {
         openConversationFromURL(sessions)
     })
-
-    if (window.selectedSession) {
-        const { sessionId, phone } = window.selectedSession
-        loadChat(sessionId, phone)
-        window.selectedSession = null
-    }
 
     requestAnimationFrame(() => {
         setupInputHandler()
@@ -38,16 +40,19 @@ export async function loadSidebar() {
 
     if (!list) return
 
+    const scroll = list.scrollTop
     list.innerHTML = ""
 
     sessions.forEach(s => {
         const div = document.createElement("div")
+        const isActive = s.id === currentSessionId
 
         div.className = `
-            px-4 py-3 cursor-pointer border-b
+            px-4 py-3 cursor-pointer border-b flex justify-between items-center
             border-gray-200 dark:border-slate-700
             hover:bg-gray-100 dark:hover:bg-slate-700
             transition
+            ${isActive ? "bg-blue-100 dark:bg-slate-700" : ""}
         `
 
         div.innerHTML = `
@@ -61,10 +66,16 @@ export async function loadSidebar() {
             }
         `
 
-        div.onclick = () => loadChat(s.id, s.phone)
+        div.onclick = () => {
+            if (currentSessionId === s.id) return
+            lastLoadedSessionId = null
+            loadChat(s.id, s.phone)
+        }
 
         list.appendChild(div)
     })
+    list.scrollTop = scroll
+
     return sessions
 }
 
@@ -91,12 +102,54 @@ function formatButtonMessage(text) {
 
     const match = text.match(/\[BOTON\]\s*(.+)/)
     if (!match) return text
-
     const key = match[1].trim()
-    const label = BUTTON_LABELS[key] || key
+
+    if (BUTTON_LABELS[key]) {
+        return `
+            <span class="
+                inline-flex items-center gap-1
+
+                bg-gray-100 dark:bg-slate-500
+                text-gray-800 dark:text-white
+
+                border border-gray-200 dark:border-slate-400
+
+                px-3 py-1 rounded-md text-xs font-medium
+
+                shadow-none dark:shadow-sm
+            ">
+                🔘 ${BUTTON_LABELS[key]}
+            </span>
+        `
+    }
+
+    let label = key
+
+    if (key.endsWith("_SI")) {
+        label = "✔️ Confirmó " + key.replace("_SI", "").toLowerCase()
+    } else if (key.endsWith("_NO")) {
+        label = "❌ Rechazó " + key.replace("_NO", "").toLowerCase()
+    } else if (key.endsWith("_DUDA")) {
+        label = "❓ Tiene dudas"
+    } else if (key.endsWith("_OK")) {
+        label = "✅ Confirmó"
+    } else {
+        label = key.replaceAll("_", " ").toLowerCase()
+    }
 
     return `
-        <span class="inline-block bg-gray-200 px-2 py-1 rounded text-xs">
+        <span class="
+            inline-flex items-center gap-1
+
+            bg-gray-100 dark:bg-slate-500
+            text-gray-800 dark:text-white
+
+            border border-gray-200 dark:border-slate-400
+
+            px-3 py-1 rounded-md text-xs font-medium
+
+            shadow-none dark:shadow-sm
+        ">
             🔘 ${label}
         </span>
     `
@@ -114,6 +167,7 @@ function formatWhatsAppText(text) {
     if (!text) return ""
 
     return text
+        .replace(/\n/g, "<br>")
         .replace(/\*(.*?)\*/g, "<b>$1</b>")
         .replace(/_(.*?)_/g, "<i>$1</i>")
         .replace(/~(.*?)~/g, "<s>$1</s>")
@@ -137,8 +191,10 @@ function createMessageNode(msg, timeOverride = "") {
     
 
     if (msg.direction === "in") {
-        wrapper.classList.add("justify-start")
-        bubbleClass += " bg-white text-black"
+    wrapper.classList.add("justify-start")
+    bubbleClass += `
+        bg-gray-200 text-black
+        dark:bg-slate-700 dark:text-white`
     } else if (msg.direction === "out") {
         wrapper.classList.add("justify-end")
         bubbleClass += " bg-blue-100 text-black"
@@ -163,9 +219,14 @@ function createMessageNode(msg, timeOverride = "") {
     const content = formatButtonMessage(msg.content)
     const finalText = formatWhatsAppText(content)
 
+    const metaClass =
+    msg.direction === "in"
+        ? "text-gray-900 dark:text-gray-300"
+        : "text-gray-800 dark:!text-black"
+
     bubble.innerHTML = `
         <div>${finalText}</div>
-        <div class="text-[10px] text-gray-500 mt-1 text-right">
+        <div class="text-[10px] ${metaClass} mt-1 text-right">
             ${label ? `${label} · ${time}` : time}
         </div>
     `
@@ -178,56 +239,103 @@ function createMessageNode(msg, timeOverride = "") {
 // LOAD CHAT
 // --------------------
 export async function loadChat(sessionId, phone) {
-    const isSameChat = currentSessionId === sessionId
+    if (isLoadingChat) return
+
+    let lastDate = null
+    let firstUnreadInserted = false
     currentSessionId = sessionId
+    isLoadingChat = true
+    lastLoadedSessionId = sessionId
 
-    const header = document.getElementById("chatHeader")
+    try {
+        const header = document.getElementById("chatHeader")
+        if (header) {
+            header.innerHTML = `
+                <div class="flex flex-col">
+                    <span class="font-semibold">+${phone}</span>
+                    <span class="text-xs text-gray-500">En conversación</span>
+                </div>
+            `
+        }
 
-    if (header) {
-        header.innerHTML = `
-            <div class="flex flex-col">
-                <span class="font-semibold">+${phone}</span>
-                <span class="text-xs text-gray-500">En conversación</span>
-            </div>
-        `
-    }
+        const container = document.getElementById("messages")
+        if (!container) return
 
-    await fetch(`http://localhost:8000/api/panel/conversations/${sessionId}/read`, {
-        method: "POST"
-    })
-
-    const res = await fetch(`http://localhost:8000/api/panel/messages/${sessionId}`)
-    const messages = await res.json()
-
-    const container = document.getElementById("messages")
-    if (!container) return
-
-    if (!isSameChat) {
         container.innerHTML = ""
+        messageIds.clear()
+
+        await fetch(`http://localhost:8000/api/panel/conversations/${sessionId}/read`, {
+            method: "POST"
+        })
+
+        const res = await fetch(`http://localhost:8000/api/panel/messages/${sessionId}?limit=300`)
+        const messages = await res.json()
+
+        let list = Array.isArray(messages) ? messages :
+            messages.messages || messages.data || messages.items || []
+        
+        let lastDate = null
+
+        list.forEach(msg => {
+            const safeDate = msg.created_at ? new Date(msg.created_at) : new Date()
+            const currentDate = safeDate.toDateString()
+
+            // --------------------
+            // 📅 SEPARADOR DE FECHA
+            // --------------------
+            if (lastDate !== currentDate) {
+                const separator = document.createElement("div")
+                separator.className = "flex justify-center my-2"
+
+                separator.innerHTML = `
+                    <div class="text-xs px-3 py-1 rounded-full bg-gray-300 dark:bg-slate-700 text-gray-700 dark:text-gray-200">
+                        ${msg.created_at ? formatDateSeparator(msg.created_at) : ""}
+                    </div>
+                `
+
+                container.appendChild(separator)
+                lastDate = currentDate
+            }
+
+            // --------------------
+            // 🆕 NUEVOS MENSAJES (AL ENTRAR AL CHAT)
+            // --------------------
+            if (!firstUnreadInserted && msg.unread) {
+                firstUnreadInserted = true
+
+                const separator = document.createElement("div")
+                separator.className = "flex justify-center my-2"
+
+                separator.innerHTML = `
+                    <div class="
+                        text-xs px-3 py-1 rounded-full 
+                        bg-blue-500 text-white
+                    ">
+                        Nuevos mensajes
+                    </div>
+                `
+
+                container.appendChild(separator)
+            }
+
+            const id = msg.id ? String(msg.id) : `temp-${Math.random()}`
+
+            if (messageIds.has(id)) return
+            messageIds.add(id)
+
+            const node = createMessageNode(msg)
+            node.dataset.id = id
+            node.dataset.date = currentDate
+
+            container.appendChild(node)
+        })
+        lastLoadedSessionId = sessionId
+
+        container.scrollTop = container.scrollHeight
+
+    } finally {
+        isLoadingChat = false
     }
-
-    let list = []
-
-    if (Array.isArray(messages)) list = messages
-    else if (Array.isArray(messages.messages)) list = messages.messages
-    else if (Array.isArray(messages.data)) list = messages.data
-    else if (Array.isArray(messages.items)) list = messages.items
-
-    const existing = new Set([...container.children].map(el => el.dataset.id))
-
-    list.forEach(msg => {
-        const id = msg.id || msg.content + msg.created_at
-        if (existing.has(id)) return
-
-        const node = createMessageNode(msg)
-        node.dataset.id = id
-        container.appendChild(node)
-    })
-
-    container.scrollTo({
-        top: container.scrollHeight,
-        behavior: "smooth"
-    })
 }
 
 // --------------------
@@ -318,7 +426,10 @@ export function initWebSocket() {
         const data = JSON.parse(event.data)
 
         if (data.type === "new_message" || data.type === "update_unread") {
-            loadSidebar()
+            const prev = currentSessionId
+            loadSidebar().then(() => {
+                currentSessionId = prev
+            })
         }
 
         if (data.type === "typing") {
@@ -332,35 +443,95 @@ export function initWebSocket() {
 
         if (data.type === "new_message") {
             const msg = data.message
+            console.log("📡 WS:", {
+                id: msg.id,
+                content: msg.content,
+                session: data.session_id
+            })
+
+            if (isLoadingChat) return
 
             if (msg.direction === "agent") return
-            if (data.session_id !== currentSessionId) return
 
-            removeTyping()
+            if (data.session_id !== currentSessionId) {
+                if (msg.direction === "in") {
+                    const audio = document.getElementById("notificationSound")
+                    if (audio) audio.play().catch(() => {})
+                }
+                return
+            }
 
             const container = document.getElementById("messages")
             if (!container) return
 
-            const id = msg.id || msg.content + msg.created_at
+            const id = msg.id ? String(msg.id) : `temp-${Math.random()}`
 
-            if ([...container.children].some(el => el.dataset.id === id)) return
+            if (messageIds.has(id)) return
+            messageIds.add(id)
 
-            if (msg.direction === "in") {
-                const audio = document.getElementById("notificationSound")
-                if (audio) audio.play().catch(() => {})
+            removeTyping()
+
+            const currentDate = new Date(msg.created_at).toDateString()
+            let lastDate = null
+
+            for (let i = container.children.length - 1; i >= 0; i--) {
+                const el = container.children[i]
+                if (el.dataset?.date) {
+                    lastDate = el.dataset.date
+                    break
+                }
+            }
+
+            // separador si cambia el día
+            if (lastDate !== currentDate) {
+
+                const isNearBottom =
+                    container.scrollHeight - container.scrollTop - container.clientHeight < 100
+
+                const separator = document.createElement("div")
+                    separator.id = "newMessagesSeparator"
+                    separator.className = "flex justify-center my-2"
+
+                // SI NO ESTÁ ABAJO → mostrar "Nuevos mensajes"
+                const isDifferentDay = lastDate !== currentDate
+                if (!isNearBottom && isDifferentDay) {
+                    separator.innerHTML = `
+                        <div class="
+                            text-xs px-3 py-1 rounded-full 
+                            bg-blue-500 text-white
+                        ">
+                            Nuevos mensajes
+                        </div>
+                    `
+                } else {
+                    // comportamiento normal
+                    separator.innerHTML = `
+                        <div class="text-xs px-3 py-1 rounded-full bg-gray-300 dark:bg-slate-700 text-gray-700 dark:text-gray-200">
+                            ${msg.created_at ? formatDateSeparator(msg.created_at) : "Mensajes nuevos"}
+                        </div>
+                    `
+                }
+
+                container.appendChild(separator)
             }
 
             const node = createMessageNode(msg)
             node.dataset.id = id
+            node.dataset.date = currentDate
+
             container.appendChild(node)
 
-            container.scrollTo({
-                top: container.scrollHeight,
-                behavior: "smooth"
-            })
+            const isNearBottom =
+                container.scrollHeight - container.scrollTop - container.clientHeight < 100
+
+            if (isNearBottom) {
+                container.scrollTo({
+                    top: container.scrollHeight,
+                    behavior: "smooth"
+                })
+            }
         }
     }
-
     socket.onclose = () => setTimeout(initWebSocket, 2000)
 }
 
@@ -558,4 +729,24 @@ function autoResize(el) {
     const newHeight = Math.min(el.scrollHeight, 120)
 
     el.style.height = newHeight + "px"
+}
+function formatDateSeparator(dateString) {
+    const date = new Date(dateString)
+    const today = new Date()
+
+    const isToday = date.toDateString() === today.toDateString()
+
+    const yesterday = new Date()
+    yesterday.setDate(today.getDate() - 1)
+
+    const isYesterday = date.toDateString() === yesterday.toDateString()
+
+    if (isToday) return "Hoy"
+    if (isYesterday) return "Ayer"
+
+    return date.toLocaleDateString("es-MX", {
+        weekday: "long",
+        day: "numeric",
+        month: "long"
+    })
 }

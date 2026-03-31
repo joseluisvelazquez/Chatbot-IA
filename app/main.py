@@ -10,14 +10,17 @@ from app.router.panel_router import router as panel_router
 
 
 from fastapi.middleware.cors import CORSMiddleware
+from app.router.media_router import router as media_router
 
 
 
 app = FastAPI(title="MXCOMP Chatbot")
 app.include_router(webhook_router)
+app.include_router(media_router)
 app.include_router(panel_router)
 app.include_router(panel_send_router)
 app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
+app.mount("/media", StaticFiles(directory="media"), name="media")
 
 scheduler = BackgroundScheduler(timezone="UTC")
 

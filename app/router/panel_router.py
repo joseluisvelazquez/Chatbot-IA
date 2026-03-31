@@ -549,8 +549,7 @@ def get_messages(
     db: Session = Depends(get_db),
     # _: str = Depends(verify_api_key)
 ):
-    if limit > 200:
-        limit = 200
+    limit = min(limit, 300)
 
     session = (
         db.query(ChatSessions)
@@ -569,11 +568,12 @@ def get_messages(
 
     messages = (
         base_query
-        .order_by(asc(Message.created_at), asc(Message.id))
-        .offset(offset)
+        .order_by(desc(Message.id))   # 🔥 más confiable que created_at
         .limit(limit)
         .all()
     )
+
+    messages.reverse()
 
     return PaginatedMessagesResponse(
         data=[
@@ -586,7 +586,7 @@ def get_messages(
             for m in messages
         ],
         total=total,
-        has_more=(offset + limit) < total
+        has_more = total > limit
     )
 
 
@@ -645,8 +645,10 @@ async def send_agent_message(
             "type": "new_message",
             "session_id": session.id,
             "message": {
+                "id": message.id,
                 "content": content,
-                "direction": "agent"
+                "direction": "agent",
+                "created_at": message.created_at
             }
         })
 
