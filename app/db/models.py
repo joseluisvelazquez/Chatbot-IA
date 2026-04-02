@@ -38,7 +38,20 @@ from sqlalchemy.dialects.mysql import (
     VARCHAR,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+class AuthToken(Base):
+    __tablename__ = "auth_tokens"
+    __table_args__ = (
+        Index("idx_auth_tokens_created_at", "created_at"),
+        Index("idx_auth_tokens_used_at", "used_at"),
+    )
 
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    used_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 class SolicitudesCambioUrgencia(str, enum.Enum):
     MUY_URGENTE = "Muy Urgente"
@@ -820,6 +833,7 @@ class Message(Base):
     message_id = Column(String(120), nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
-    DateTime,
-    default=datetime.datetime.utcnow
-)
+        DateTime,
+        nullable=False,
+        server_default=func.now()
+    )

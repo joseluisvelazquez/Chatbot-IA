@@ -9,6 +9,7 @@ from app.core.flow_engine import process_message
 from app.config.settings import settings
 import asyncio
 import time
+from sqlalchemy.exc import IntegrityError
 from app.services.inconsistencias_service import (
     open_or_patch_inconsistencia,
     close_open_inconsistencia,
@@ -17,6 +18,8 @@ from app.core.states import ChatState
 
 router = APIRouter()
 from datetime import datetime, timezone
+# verificaciones
+from app.services.verification_panel_service import build_verification_snapshot
 
 from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.message_service import save_message
@@ -84,26 +87,52 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             db.rollback()
             return {"status": "duplicate"}
 
-        save_message(
-            db=db,
-            session_id=chat.id,
-            phone=phone,
-            direction="in",
-            content = text if text else f"[BOTON] {button_id}",
-            message_id=message_id
-        )
-        chat.unread_count = (chat.unread_count or 0) + 1
+        
+
+        try:
+            saved_msg = save_message(
+                db=db,
+                session_id=chat.id,
+                phone=phone,
+                direction="in",
+                content=text if text else f"[BOTON] {button_id}",
+                message_id=message_id
+            )
+
+            chat.unread_count = (chat.unread_count or 0) + 1
+
+            db.commit()
+            db.refresh(saved_msg)
+
+        except IntegrityError:
+            db.rollback()
+            return {"status": "duplicate_ignored"}
+
 
         await manager.send_to_all({
             "type": "new_message",
             "session_id": chat.id,
             "message": {
-                "content": text if text else f"[BOTON] {button_id}",
-                "direction": "in"
+                "id": saved_msg.id,
+                "content": saved_msg.content,
+                "direction": saved_msg.direction,
+                "created_at": saved_msg.created_at.isoformat() if saved_msg.created_at else ""
             },
             "unread_count": chat.unread_count
         })
+        # notificar a clientes conectados al dashboard
+        await manager.send_to_all({
+            "type": "dashboard_update",
+            
+            "payload": {
+                "messages_in_delta": 1,
+                "messages_out_delta": 0,
+                "session_id": chat.id
+            }
+        })
 
+        
+        
         
 
         result = process_message(
@@ -119,23 +148,43 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
 
         # Guardar respuesta del bot en la conversación (antes de enviar, para asegurar persistencia aunque falle el envío)
         if reply:
-            save_message(
-                db=db,
-                session_id=chat.id,
-                phone=phone,
-                direction="out",
-                content=reply
-            )
-            await manager.send_to_all({
-                "type": "new_message",
-                "session_id": chat.id,
-                "message": {
-                    "content": reply,
-                    "direction": "out", 
-                },
-                "unread_count": chat.unread_count 
-            })
+            try:
 
+                bot_msg = save_message(
+                    db=db,
+                    session_id=chat.id,
+                    phone=phone,
+                    direction="out",
+                    content=reply
+                )
+                db.commit()
+                db.refresh(bot_msg)
+
+                await manager.send_to_all({
+                    "type": "new_message",
+                    "session_id": chat.id,
+                    "message": {
+                        "id": bot_msg.id,
+                        "content": bot_msg.content,
+                        "direction": bot_msg.direction,
+                        "created_at": bot_msg.created_at.isoformat() if bot_msg.created_at else ""
+                    },
+                    "unread_count": chat.unread_count
+                })
+                await manager.send_to_all({
+                    "type": "dashboard_update",
+                    
+                    "payload": {
+                        "messages_in_delta": 0,
+                        "messages_out_delta": 1,
+                        "session_id": chat.id
+                    }
+                })
+
+            except IntegrityError:
+                db.rollback()
+
+            
         now = utcnow_naive()
 
         print(
@@ -200,8 +249,22 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
 
         # Reprograma reminders en cada actividad real
         upsert_inactivity_reminders(db, chat)
-
         db.commit()
+
+        db.refresh(chat)
+
+        try:
+            snapshot = build_verification_snapshot(db, chat)
+
+            if snapshot:
+                await manager.send_to_all({
+                    "type": "verification_update",
+                    "payload": snapshot
+                })
+
+        except Exception as e:
+            print("ERROR snapshot:", e)
+
 
     except Exception:
         db.rollback()

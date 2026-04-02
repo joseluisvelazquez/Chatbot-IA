@@ -3,21 +3,20 @@ import {
     getDashboardFunnel,
     getDashboardStateTimes
 } from "./api.js";
-
+import { dispatch, subscribeStore, getState } from "./store.js"
 let funnelChartInstance = null;
 
 async function loadSummary() {
     try {
-        const response = await getDashboardSummary();
-        const data = response?.data ?? response ?? {};
+        const response = await getDashboardSummary()
+        const data = response?.data ?? response ?? {}
 
-        document.getElementById("kpi-sessions").textContent = data.total_sessions ?? 0;
-        document.getElementById("kpi-active").textContent = data.active_sessions ?? 0;
-        document.getElementById("kpi-in").textContent = data.messages_in ?? 0;
-        document.getElementById("kpi-out").textContent = data.messages_out ?? 0;
-        document.getElementById("kpi-issues").textContent = data.issues_open ?? 0;
+        dispatch({
+            type: "dashboard/loaded",
+            payload: data,
+        })
     } catch (e) {
-        console.error("Error summary:", e);
+        console.error("Error summary:", e)
     }
 }
 
@@ -97,8 +96,36 @@ async function loadStateTimes() {
     }
 }
 
+
+let unsubscribeDashboardStore = null
+
 export function initDashboardPage() {
-    loadSummary();
-    loadFunnel();
-    loadStateTimes();
+    loadSummary()
+    loadFunnel()
+    loadStateTimes()
+
+    if (unsubscribeDashboardStore) unsubscribeDashboardStore()
+
+    unsubscribeDashboardStore = subscribeStore((appState) => {
+        renderDashboardFromState(appState)
+    })
+
+    renderDashboardFromState(getState())
 }
+function renderDashboardFromState(appState) {
+    if (!appState.dashboard.loaded) return
+    const d = appState.dashboard
+
+    const sessionsEl = document.getElementById("kpi-sessions")
+    const activeEl = document.getElementById("kpi-active")
+    const inEl = document.getElementById("kpi-in")
+    const outEl = document.getElementById("kpi-out")
+    const issuesEl = document.getElementById("kpi-issues")
+
+    if (sessionsEl) sessionsEl.textContent = d.total_sessions ?? 0
+    if (activeEl) activeEl.textContent = d.active_sessions ?? 0
+    if (inEl) inEl.textContent = d.messages_in ?? 0
+    if (outEl) outEl.textContent = d.messages_out ?? 0
+    if (issuesEl) issuesEl.textContent = d.issues_open ?? 0
+}
+

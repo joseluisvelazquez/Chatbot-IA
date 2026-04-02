@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, desc, func, text
 from datetime import datetime, timedelta
@@ -13,17 +13,17 @@ from app.schemas.panel import (
 
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.db.session import get_db
+from app.security.auth_service import decode_panel_session
 from app.websockets.manager import manager
 from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message, FlowEvent
 from app.siga.siga_repository import obtener_venta_por_folio
-
+from app.security.auth_dependencies import get_current_panel_user
 
 from app.services.verification_panel_service import (
     classify_panel_status,
     compute_verification,
     group_inconsistencias_by_folio,
     has_open_inconsistencia,
-    resolve_cuentas_from_folios,
 )
 
 # ORDEN REAL DEL FLOW (ajústalo si cambias estados)
@@ -52,14 +52,28 @@ router = APIRouter(
 # =========================================
 # Obtener Mensajes con el websocket
 # =========================================
-
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+    session_token = websocket.cookies.get("panel_session")
+
+    if not session_token:
+        await websocket.close(code=1008)
+        return
+
+    try:
+        user = decode_panel_session(session_token)
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    websocket.state.user = user
 
     import json
 
     try:
+        manager.connect(websocket)
+
         while True:
             data = await websocket.receive_text()
             payload = json.loads(data)
@@ -70,19 +84,32 @@ async def websocket_endpoint(websocket: WebSocket):
                     "session_id": payload.get("session_id")
                 })
 
-    except:
+    except WebSocketDisconnect:
         manager.disconnect(websocket)
 
+    except Exception:
+        manager.disconnect(websocket)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 # =========================================
 # Panel API: Marcar conversación como leída (RESET UNREAD COUNT)
 # =========================================
 
 @router.post("/conversations/{session_id}/read")
-async def mark_as_read(session_id: int, db: Session = Depends(get_db)):
+async def mark_as_read(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user)
+):
     session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
 
     if not session:
         raise HTTPException(404, "Sesión no encontrada")
+
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
 
     session.unread_count = 0
     db.commit()
@@ -132,7 +159,9 @@ def serialize_inconsistencias(inconsistencias: list[Inconsistencias]) -> list[di
                 })
 
     return result
-def resolve_cuentas_from_folios(folios: list[str], db: Session) -> dict:
+def resolve_cuentas_from_folios(folios: list[str], db: Session, user) -> dict:
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
     result = {}
 
     for folio in folios:
@@ -163,7 +192,8 @@ def resolve_cuentas_from_folios(folios: list[str], db: Session) -> dict:
 @router.get("/dashboard/state-times")
 def dashboard_state_times(
     days: int = 7,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
 ):
     # --------------------------------------
     # 🧠 FILTRO DE TIEMPO
@@ -259,7 +289,8 @@ def dashboard_state_times(
 @router.get("/dashboard/funnel")
 def dashboard_funnel(
     days: int = 7,  # 🔥 filtro de tiempo (últimos N días)
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
 ):
     # --------------------------------------
     #  FILTRO DE TIEMPO
@@ -330,7 +361,9 @@ def dashboard_funnel(
     }
 
 @router.get("/dashboard/summary")
-def dashboard_summary(db: Session = Depends(get_db)):
+def dashboard_summary(
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),):
 
     total_sessions = db.query(func.count(ChatSessions.id)).scalar()
 
@@ -343,7 +376,7 @@ def dashboard_summary(db: Session = Depends(get_db)):
         .scalar()
 
     total_messages_out = db.query(func.count(Message.id))\
-        .filter(Message.direction == "out")\
+        .filter(Message.direction.in_(["out", "agent"]))\
         .scalar()
 
     inconsistencias_abiertas = db.query(func.count(Inconsistencias.id))\
@@ -362,10 +395,11 @@ def dashboard_summary(db: Session = Depends(get_db)):
 # =========================================
 @router.get("/verifications")
 def get_verifications(
-    limit: int = 50,
+    limit: int = 500,
     offset: int = 0,
     status: str | None = None,
     db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
 ):
     flow_states = {
         "INCONSISTENCIA",
@@ -420,7 +454,7 @@ def get_verifications(
 
     folios = [str(session.folio) for session in sessions if session.folio]
 
-    folio_to_no_cuenta = resolve_cuentas_from_folios(folios, db)
+    folio_to_no_cuenta = resolve_cuentas_from_folios(folios, db, user)
 
     no_cuentas = [
         no_cuenta
@@ -505,14 +539,75 @@ def get_verifications(
         "total": total,
         "has_more": (offset + limit) < total,
     }
+@router.get("/verifications/{session_id}")
+def get_verification_by_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    session = (
+        db.query(ChatSessions)
+        .filter(ChatSessions.id == session_id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(404, "Sesión no encontrada")
+
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
+
+    folio = str(session.folio)
+    folio_map = resolve_cuentas_from_folios([folio], db, user)
+    no_cuenta = folio_map.get(folio)
+
+    verification = None
+    if no_cuenta:
+        verification = (
+            db.query(VerificacionCuenta)
+            .filter(VerificacionCuenta.no_cuenta == no_cuenta)
+            .first()
+        )
+
+    progress = verification.json if verification else {}
+    verification_data = compute_verification(progress)
+
+    inconsistencias = (
+        db.query(Inconsistencias)
+        .filter(Inconsistencias.folio == folio)
+        .all()
+    )
+
+    inconsistencias_grouped = group_inconsistencias_by_folio(inconsistencias)
+    inconsistencias_folio = inconsistencias_grouped.get(folio, [])
+
+    panel_status = classify_panel_status(
+        verification_data=verification_data,
+        has_open_inconsistencia=has_open_inconsistencia(inconsistencias_folio),
+        last_activity=session.last_message_at,
+        requires_human=False,
+    )
+
+    return {
+        "session_id": session.id,
+        "folio": folio,
+        "no_cuenta": no_cuenta,
+        "phone": session.phone,
+        "status": panel_status,
+        "progress_pct": verification_data["progress_pct"],
+        "current_step": verification_data["current_step"],
+        "inconsistencias_count": len(inconsistencias_folio),
+        "last_activity": session.last_message_at,
+    }
 # =========================================
 # Obtener conversaciones (PAGINADO + DTO)
 # =========================================
 @router.get("/conversations", response_model=list[ConversationResponse])
 def get_conversations(
-    limit: int = 100,
+    limit: int = 10000,
     offset: int = 0,
     db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
     # _: str = Depends(verify_api_key)
 ):
     if limit > 100:
@@ -531,6 +626,7 @@ def get_conversations(
         ConversationResponse(
             id=s.id,
             phone=s.phone,
+            last_message=s.last_message,
             last_message_at=s.last_message_at,
             unread_count=s.unread_count
         )
@@ -544,9 +640,11 @@ def get_conversations(
 @router.get("/messages/{session_id}", response_model=PaginatedMessagesResponse)
 def get_messages(
     session_id: int,
-    limit: int = 100,
+    limit: int = 10000,
     offset: int = 0,
     db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+
     # _: str = Depends(verify_api_key)
 ):
     if limit > 200:
@@ -560,6 +658,9 @@ def get_messages(
 
     if not session:
         raise HTTPException(404, "La sesión no existe")
+    # 🔥 evita acceso cruzado
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
 
     base_query = db.query(Message).filter(
         Message.session_id == session_id
@@ -599,9 +700,8 @@ def get_messages(
 async def send_agent_message(
     payload: SendMessageRequest,
     db: Session = Depends(get_db),
-    # _: str = Depends(verify_api_key)
+    user = Depends(get_current_panel_user)
 ):
-    # VALIDACIONES
     content = payload.content.strip()
 
     if not content:
@@ -610,7 +710,9 @@ async def send_agent_message(
     if len(content) > 1000:
         raise HTTPException(400, "Mensaje demasiado largo")
 
-    # SESSION
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
+
     session = (
         db.query(ChatSessions)
         .filter(ChatSessions.id == payload.session_id)
@@ -620,13 +722,11 @@ async def send_agent_message(
     if not session:
         raise HTTPException(404, "Sesión no encontrada")
 
-    phone = session.phone  # ⚠️ NO confiar en frontend
+    phone = session.phone
 
     try:
-        # ENVÍO EXTERNO
         await send_whatsapp_message(phone, content)
 
-        # PERSISTENCIA
         message = Message(
             session_id=session.id,
             phone=phone,
@@ -636,21 +736,44 @@ async def send_agent_message(
 
         db.add(message)
 
-        # ACTUALIZAR ORDEN DE CONVERSACIONES
-        session.last_message_at = datetime.utcnow()
+        now = datetime.utcnow()
+        session.last_message_at = now
+        session.last_message = content
+
+        db.flush()
+
+        message_payload = {
+            "id": message.id,
+            "content": message.content,
+            "direction": message.direction,
+            "created_at": message.created_at.isoformat() if message.created_at else now.isoformat()
+        }
 
         db.commit()
 
         await manager.send_to_all({
             "type": "new_message",
             "session_id": session.id,
-            "message": {
-                "content": content,
-                "direction": "agent"
+            "message": message_payload
+        })
+
+        await manager.send_to_all({
+            "type": "dashboard_update",
+            "payload": {
+                "messages_in_delta": 0,
+                "messages_out_delta": 1,
+            },
+        })
+
+        await manager.send_to_all({
+            "type": "verification_update",
+            "payload": {
+                "session_id": session.id,
+                "last_activity": now.isoformat(),
             }
         })
 
-    except Exception as e:
+    except Exception:
         db.rollback()
         raise HTTPException(
             status_code=500,
