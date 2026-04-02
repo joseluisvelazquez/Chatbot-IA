@@ -1,210 +1,81 @@
-
-import {getMessages, sendMessage, apiRequest } from "../js/api.js"
-import { EMOJIS } from "./emojis.js"
-import { getWebSocket } from "./websocket.js"
-import { dispatch } from "./store.js"
-import { consumeSelectedSession } from "./app.js"
-import { subscribeStore, getState } from "./store.js"
-import { getConversations } from "../js/api.js"
-// Estados globales
 let currentSessionId = null
+let socket = null
 let lastTyping = 0
-const renderedMessageIdsBySession = new Map()
-let unsubscribeChatStore = null
-let lastLoadTrigger = 0
+let typingTimeout = null
+const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+const WS_BASE_URL = `${wsProtocol}//${window.location.hostname}:8000/api/panel/ws`
 
-// =========================
-// CONFIG
-// =========================
-const sidebarNodes = new Map()
-const LOAD_COOLDOWN = 500 // ms
-const MAX_RENDERED_MESSAGES = 300
-const PAGE_SIZE = 30
 
-let paginationState = {
-    offset: 0,
-    loading: false,
-    hasMore: true
-}
-// =========================
-// INIT
-// =========================
-export async function initConversationsPage() {
+let unsubscribe = null
+import { getConversations, getMessages, sendMessage, apiRequest } from "../js/api.js"
+import { EMOJIS } from "./emojis.js"
+import { renderSessionExpired, renderNetworkError } from "../js/app.js"
+import { subscribe } from "./websocket.js"
+
+export function initConversationsPage() {
     window.send = send
     window.handleTyping = handleTyping
     window.handleKeyDown = handleKeyDown
     window.autoResize = autoResize
-    if (unsubscribeChatStore) unsubscribeChatStore()
+    unsubscribe = subscribe(handleSocketEvent)
 
-    let lastMessagesRef = null
 
-    unsubscribeChatStore = subscribeStore((state) => {
-        const currentMessages = state.messages.bySessionId[currentSessionId]
-
-        if (currentMessages !== lastMessagesRef) {
-            renderMessagesIncremental(state)
-            lastMessagesRef = currentMessages
-        }
-
-        renderSidebarFromState(state)
+    loadSidebar().then((sessions) => {
+        openConversationFromURL(sessions)
     })
 
-    const sessions = await getConversations()
-
-    dispatch({
-        type: "conversations/loaded",
-        payload: sessions
-    })
-    const state = getState()
-    const selected = consumeSelectedSession()
-
-    if (selected) {
-        const { sessionId, phone } = selected
+    if (window.selectedSession) {
+        const { sessionId, phone } = window.selectedSession
         loadChat(sessionId, phone)
-    }
-    if (!selected && state.conversations.order.length > 0) {
-        const firstId = state.conversations.order[0]
-        const session = state.conversations.byId[firstId]
-
-        loadChat(session.id, session.phone)
+        window.selectedSession = null
     }
 
     requestAnimationFrame(() => {
         setupInputHandler()
         setupEmojiPicker()
-        setupVirtualScroll()
     })
 }
-// --------------------
-// Scroll
-// --------------------
 
-function setupVirtualScroll() {
-    const container = document.getElementById("messagesContainer")
-    if (!container) return
-    if (container.dataset.virtualBound === "true") return
-
-    let ticking = false
-
-    container.addEventListener("scroll", () => {
-        if (ticking) return
-        ticking = true
-
-        requestAnimationFrame(() => {
-            const now = Date.now()
-
-            const nearTop = container.scrollTop < 80
-            const canTrigger = (now - lastLoadTrigger) > LOAD_COOLDOWN
-
-            if (nearTop && canTrigger && !paginationState.loading) {
-                lastLoadTrigger = now
-                loadMoreMessages()
-            }
-
-            ticking = false
-        })
-    })
-
-    container.dataset.virtualBound = "true"
-}
-function forceScrollToBottom() {
-    const container = document.getElementById("messagesContainer")
-    if (!container) return
-
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            container.scrollTop = container.scrollHeight
-        })
-    })
-}
-function showTopLoader() {
-    if (document.getElementById("topLoader")) return
-
-    const container = document.getElementById("messages")
-    if (!container) return
-
-    const div = document.createElement("div")
-    div.id = "topLoader"
-    div.className = "text-center text-xs text-gray-400 py-2"
-    div.innerText = "Cargando mensajes..."
-
-    container.prepend(div)
-}
-
-function hideTopLoader() {
-    const el = document.getElementById("topLoader")
-    if (el) el.remove()
-}
 // --------------------
 // SIDEBAR
 // --------------------
-
-function renderSidebarFromState(state) {
+export async function loadSidebar() {
+    const sessions = await getConversations()
     const list = document.getElementById("conversationList")
+
     if (!list) return
 
-    const sessions = state.conversations.order
-        .map(id => state.conversations.byId[id])
-        .filter(Boolean)
-
-    const seen = new Set()
+    list.innerHTML = ""
 
     sessions.forEach(s => {
-        seen.add(s.id)
+        const div = document.createElement("div")
 
-        let node = sidebarNodes.get(s.id)
+        div.className = `
+            px-4 py-3 cursor-pointer border-b
+            border-gray-200 dark:border-slate-700
+            hover:bg-gray-100 dark:hover:bg-slate-700
+            transition
+        `
 
-        if (!node) {
-            node = createSidebarNode(s)
-            sidebarNodes.set(s.id, node)
-        } else {
-            updateSidebarNode(node, s)
-        }
+        div.innerHTML = `
+            <div class="min-w-0">
+                <div class="font-semibold truncate">${s.phone}</div>
+                <div class="text-xs text-gray-500">${s.last_message_at ?? ""}</div>
+            </div>
+            ${s.unread_count > 0
+                ? `<span class="bg-green-500 text-white text-xs px-2 py-1 rounded-full shrink-0">${s.unread_count}</span>`
+                : ""
+            }
+        `
 
-        // mover arriba si no está
-        if (list.firstChild !== node) {
-            list.prepend(node)
-        }
+        div.onclick = () => loadChat(s.id, s.phone)
+
+        list.appendChild(div)
     })
 
-    // eliminar nodos que ya no existen
-    sidebarNodes.forEach((node, id) => {
-        if (!seen.has(id)) {
-            node.remove()
-            sidebarNodes.delete(id)
-        }
-    })
+    return sessions
 }
-function createSidebarNode(s) {
-    const div = document.createElement("div")
 
-    div.className = `
-        px-4 py-3 cursor-pointer border-b
-        border-gray-200 dark:border-slate-700
-        hover:bg-gray-100 dark:hover:bg-slate-700
-        transition
-    `
-
-    div.dataset.id = s.id
-
-    div.onclick = () => loadChat(s.id, s.phone)
-
-    updateSidebarNode(div, s)
-
-    return div
-}
-function updateSidebarNode(node, s) {
-    node.innerHTML = `
-        <div class="min-w-0">
-            <div class="font-semibold truncate">${s.phone}</div>
-            <div class="text-xs text-gray-500">${s.last_message_at ?? ""}</div>
-        </div>
-        ${s.unread_count > 0
-            ? `<span class="bg-green-500 text-white text-xs px-2 py-1 rounded-full shrink-0">${s.unread_count}</span>`
-            : ""
-        }
-    `
-}
 // --------------------
 // HELPERS
 // --------------------
@@ -238,10 +109,7 @@ function formatButtonMessage(text) {
         </span>
     `
 }
-function isUserAtBottom(container) {
-    const threshold = 50
-    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-}
+
 function formatTime(dateString) {
     const date = new Date(dateString)
     return date.toLocaleTimeString("es-MX", {
@@ -259,12 +127,7 @@ function formatWhatsAppText(text) {
         .replace(/~(.*?)~/g, "<s>$1</s>")
         .replace(/`(.*?)`/g, "<code>$1</code>")
 }
-function getRenderedSet(sessionId) {
-    if (!renderedMessageIdsBySession.has(sessionId)) {
-        renderedMessageIdsBySession.set(sessionId, new Set())
-    }
-    return renderedMessageIdsBySession.get(sessionId)
-}
+
 // --------------------
 // BURBUJA
 // --------------------
@@ -321,121 +184,11 @@ function createMessageNode(msg, timeOverride = "") {
 // --------------------
 // LOAD CHAT
 // --------------------
-function renderMessagesIncremental(state) {
-    const container = document.getElementById("messagesContainer")
-    const list = document.getElementById("messages")
-
-    if (!container || !list || !currentSessionId) return
-
-    const messages = state.messages.bySessionId[currentSessionId] || []
-    const renderedSet = getRenderedSet(currentSessionId)
-
-    const wasAtBottom = isUserAtBottom(container)
-
-    const fragment = document.createDocumentFragment()
-
-    // SOLO PROCESAR NUEVOS (DEL FINAL)
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]
-        const id = msg.id ?? `${msg.content}-${msg.created_at}`
-
-        if (renderedSet.has(id)) break // 🚀 corta aquí
-
-        const node = createMessageNode(msg)
-        node.dataset.messageId = id
-        fragment.prepend(node)
-
-        renderedSet.add(id)
-        if (renderedSet.size > MAX_RENDERED_MESSAGES) {
-            const firstKey = renderedSet.values().next().value
-            renderedSet.delete(firstKey)
-        }
-    }
-
-    if (fragment.childNodes.length > 0) {
-        list.appendChild(fragment)
-
-        if (wasAtBottom) {
-            requestAnimationFrame(() => {
-                container.scrollTop = container.scrollHeight
-            })
-        }
-    }
-}
-async function loadMoreMessages() {
-    if (!currentSessionId) return
-    if (paginationState.loading) return
-    if (!paginationState.hasMore) return
-
-    const container = document.getElementById("messagesContainer")
-    const list = document.getElementById("messages")
-    if (!container || !list) return
-
-    paginationState.loading = true
-
-    const prevScrollTop = container.scrollTop
-    const prevHeight = container.scrollHeight
-
-    showTopLoader()
-
-    try {
-        const res = await getMessages(
-            currentSessionId,
-            PAGE_SIZE,
-            paginationState.offset
-        )
-
-        let newMessages = []
-
-        if (Array.isArray(res)) newMessages = res
-        else if (Array.isArray(res.messages)) newMessages = res.messages
-        else if (Array.isArray(res.data)) newMessages = res.data
-        else if (Array.isArray(res.items)) newMessages = res.items
-
-        if (newMessages.length === 0) {
-            paginationState.hasMore = false
-            return
-        }
-
-        paginationState.offset += newMessages.length
-
-        const fragment = document.createDocumentFragment()
-
-        for (let i = newMessages.length - 1; i >= 0; i--) {
-            const msg = newMessages[i]
-            const id = msg.id ?? `${msg.content}-${msg.created_at}`
-
-            if (getRenderedSet(currentSessionId).has(id)) continue
-
-            const node = createMessageNode(msg)
-            node.dataset.messageId = id
-            fragment.prepend(node)
-
-            getRenderedSet(currentSessionId).add(id)
-        }
-
-        list.prepend(fragment)
-
-        requestAnimationFrame(() => {
-            const newHeight = container.scrollHeight
-            const delta = newHeight - prevHeight
-
-            container.scrollTop = prevScrollTop + delta
-        })
-    } catch (err) {
-        console.error("Error lazy load:", err)
-    } finally {
-        paginationState.loading = false
-        hideTopLoader()
-    }
-}
 export async function loadChat(sessionId, phone) {
     const isSameChat = currentSessionId === sessionId
     currentSessionId = sessionId
 
     const header = document.getElementById("chatHeader")
-    const container = document.getElementById("messagesContainer")
-    const list = document.getElementById("messages")
 
     if (header) {
         header.innerHTML = `
@@ -446,46 +199,43 @@ export async function loadChat(sessionId, phone) {
         `
     }
 
-    await apiRequest(`/panel/conversations/${sessionId}/read`, {
+    await apiRequest(`/conversations/${sessionId}/read`, {
         method: "POST"
     })
 
-    paginationState = {
-        offset: 0,
-        loading: false,
-        hasMore: true
+    const messages = await getMessages(sessionId)
+
+    const container = document.getElementById("messages")
+    if (!container) return
+
+    if (!isSameChat) {
+        container.innerHTML = ""
     }
 
-    getRenderedSet(sessionId).clear()
+    let list = []
 
-    if (!isSameChat && list) {
-        list.innerHTML = ""
-    }
+    if (Array.isArray(messages)) list = messages
+    else if (Array.isArray(messages.messages)) list = messages.messages
+    else if (Array.isArray(messages.data)) list = messages.data
+    else if (Array.isArray(messages.items)) list = messages.items
 
-    const messages = await getMessages(sessionId, PAGE_SIZE, 0)
+    const existing = new Set([...container.children].map(el => el.dataset.id))
 
-    let messagesList = []
+    list.forEach(msg => {
+        const id = msg.id || `${msg.content}-${msg.created_at}`
+        if (existing.has(id)) return
 
-    if (Array.isArray(messages)) messagesList = messages
-    else if (Array.isArray(messages.messages)) messagesList = messages.messages
-    else if (Array.isArray(messages.data)) messagesList = messages.data
-    else if (Array.isArray(messages.items)) messagesList = messages.items
-
-    dispatch({
-        type: "messages/loaded",
-        payload: {
-            sessionId,
-            items: messagesList
-        }
+        const node = createMessageNode(msg)
+        node.dataset.id = id
+        container.appendChild(node)
     })
 
-    paginationState.offset = messagesList.length
-
-    requestAnimationFrame(() => {
-        renderMessagesIncremental(getState())
-        forceScrollToBottom()
+    container.scrollTo({
+        top: container.scrollHeight,
+        behavior: "smooth"
     })
 }
+
 // --------------------
 // INPUT
 // --------------------
@@ -507,6 +257,25 @@ export async function send() {
 
     if (!content || !currentSessionId) return
 
+    const container = document.getElementById("messages")
+    if (!container) return
+
+    const now = formatTime(new Date())
+
+    const node = createMessageNode(
+        {
+            direction: "agent",
+            content
+        },
+        now
+    )
+
+    container.appendChild(node)
+
+    container.scrollTo({
+        top: container.scrollHeight,
+        behavior: "smooth"
+    })
 
     input.value = ""
     input.focus()
@@ -547,12 +316,15 @@ function removeTyping() {
 
 
 
+function handleSocketEvent(data) {
+    if (data.type === "new_message") {
+        // lógica actual
+    }
+}
 // --------------------
 // TYPING EVENT
 // --------------------
 function sendTypingEvent() {
-    const socket = getWebSocket()
-
     if (!socket || socket.readyState !== WebSocket.OPEN) return
     if (!currentSessionId) return
 
@@ -574,6 +346,36 @@ function handleTyping() {
 // --------------------
 // GETPHONE EVENT
 // --------------------
+function getSessionIdFromURL() {
+    const params = new URLSearchParams(window.location.search)
+    return params.get("session_id")
+}
+
+let hasOpenedFromURL = false
+
+function openConversationFromURL(conversations) {
+    if (hasOpenedFromURL) return
+
+    const sessionId = getSessionIdFromURL()
+    if (!sessionId) return
+
+    const match = conversations.find(
+        c => String(c.id) === String(sessionId)
+    )
+
+    if (!match) {
+        console.warn("No se encontró sesión:", sessionId)
+        return
+    }
+
+    hasOpenedFromURL = true
+
+    loadChat(match.id, match.phone)
+
+    const url = new URL(window.location)
+    url.searchParams.delete("session_id")
+    window.history.replaceState({}, "", url)
+}
 
 // --------------------
 // EMOJIS

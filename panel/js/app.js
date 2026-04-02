@@ -4,12 +4,13 @@ import { initConversationsPage, loadChat } from "./chat.js";
 import { initDashboardPage } from "./dashboard.js";
 import { initSidebar } from "./sidebar.js";
 import { setLayout } from "./layoutmanager.js";
+import { initWebSocket } from "./websocket.js"
 
 
 // =========================
 // CONFIG
 // =========================
-
+const AUTH_BASE_URL = `${window.location.protocol}//${window.location.hostname}:8000`
 const PAGE_CONFIG = {
     dashboard: {
         path: "/pages/dashboard.html",
@@ -32,7 +33,40 @@ const PAGE_CONFIG = {
         init: null
     }
 };
+export function startSessionHeartbeat() {
+    setInterval(async () => {
+        try {
+            const res = await fetch(`${AUTH_BASE_URL}/api/auth/me`, {
+                credentials: "include"
+            })
 
+            if (!res.ok) {
+                renderSessionExpired()
+            }
+
+        } catch (error) {
+            console.warn("Heartbeat error:", error)
+            renderNetworkError()
+        }
+    }, 120000) // 2 minutos
+}
+export function startSessionTimeout() {
+    if (!window.currentUser?.exp) return
+
+    const now = Date.now()
+    const exp = window.currentUser.exp * 1000
+
+    const timeout = exp - now
+
+    if (timeout <= 0) {
+        renderSessionExpired()
+        return
+    }
+
+    setTimeout(() => {
+        renderSessionExpired()
+    }, timeout)
+}
 // =========================
 // STATE
 // =========================
@@ -59,11 +93,262 @@ export function consumeSelectedSession() {
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
+// =========================
+// RENDERIZADOS GENERALES
+// =========================
+function renderLoading() {
+    let loader = document.getElementById("globalLoader")
 
+    if (loader) return
+
+    loader = document.createElement("div")
+    loader.id = "globalLoader"
+
+    loader.className = `
+        fixed inset-0 z-[9999]
+        flex items-center justify-center
+        bg-slate-900
+    `
+
+    loader.innerHTML = `
+        <div class="text-center text-white">
+            <div class="animate-spin rounded-full h-10 w-10 border-2 border-green-400 border-t-transparent mx-auto mb-4"></div>
+            <p class="text-sm text-slate-400">
+                Verificando sesión...
+            </p>
+        </div>
+    `
+
+    document.body.appendChild(loader)
+}
+function removeLoading() {
+    const loader = document.getElementById("globalLoader")
+    if (loader) loader.remove()
+}
+// =========================
+// AUTH
+// =========================
+export function renderSessionExpired() {
+    const root = document.getElementById("app")
+
+    root.innerHTML = `
+        <div class="h-screen flex items-center justify-center bg-slate-900">
+            <div class="bg-slate-800 p-8 rounded-xl text-center max-w-md w-full border border-slate-700">
+
+                <div class="text-4xl mb-4">⏳</div>
+
+                <h1 class="text-xl font-semibold mb-2 text-white">
+                    Sesión expirada
+                </h1>
+
+                <p class="text-sm text-slate-400 mb-4">
+                    Tu sesión ha expirado por seguridad.
+                </p>
+
+                <p class="text-xs text-slate-500">
+                    Tiempo máximo: 1 hora sin renovación.
+                </p>
+
+            </div>
+        </div>
+    `
+}
+export function renderNetworkError() {
+    const root = document.getElementById("app")
+
+    root.innerHTML = `
+        <div class="h-screen flex items-center justify-center bg-slate-900">
+            <div class="bg-slate-800 p-8 rounded-xl text-center max-w-md w-full border border-red-500">
+
+                <div class="text-4xl mb-4">⚠️</div>
+
+                <h1 class="text-xl font-semibold mb-2 text-white">
+                    Error de conexión
+                </h1>
+
+                <p class="text-sm text-slate-400 mb-4">
+                    No se pudo conectar con el servidor.
+                </p>
+
+                <p class="text-xs text-red-400">
+                    Verifica que el backend esté corriendo en localhost:8000
+                </p>
+
+            </div>
+        </div>
+    `
+}
+function renderUnauthorized(message = "Debes acceder desde SIGA para continuar.") {
+    const root = document.getElementById("app")
+
+    if (!root) return
+
+    root.innerHTML = `
+        <div class="h-screen w-full flex items-center justify-center bg-slate-900">
+            
+            <div class="bg-slate-800 text-white rounded-xl shadow-xl p-8 max-w-md w-full text-center border border-slate-700">
+
+                <div class="text-4xl mb-4">🔒</div>
+
+                <h1 class="text-xl font-semibold mb-2">
+                    Acceso no autorizado
+                </h1>
+
+                <p class="text-sm text-slate-400 mb-4">
+                    ${message}
+                </p>
+
+                <div class="text-xs text-slate-500">
+                    Si el problema persiste, contacta a sistemas.
+                </div>
+
+            </div>
+
+        </div>
+    `
+}
+async function initAuth() {
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get("token")
+    console.log("initApp ejecutado")
+
+   
+    try {
+
+        // ----------------------------------------
+        // 🔐 1. LOGIN (SIGA o DEV)
+        // ----------------------------------------
+
+        if (token) {
+            const res = await fetch(`${AUTH_BASE_URL}/api/auth/exchange`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ token })
+            })
+
+            if (!res.ok) {
+                renderUnauthorized("Token inválido o expirado")
+                return false
+            }
+
+            // limpiar URL
+            window.history.replaceState({}, document.title, window.location.pathname)
+
+        } else {
+            const res = await fetch(`${AUTH_BASE_URL}/api/auth/dev-login`, {
+                method: "POST",
+                credentials: "include"
+            })
+
+            if (!res.ok) {
+                renderUnauthorized("Modo desarrollo no disponible")
+                return false
+            }
+        }
+
+        // ----------------------------------------
+        // 🔐 2. VALIDAR SESIÓN (CON TIMEOUT)
+        // ----------------------------------------
+
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5000)
+
+        let me
+
+        try {
+            me = await fetch(`${AUTH_BASE_URL}/api/auth/me`, {
+                credentials: "include",
+                signal: controller.signal
+            })
+        } catch (err) {
+            if (err.name === "AbortError") {
+                renderNetworkError()
+                return false
+            }
+            throw err
+        } finally {
+            clearTimeout(timeout)
+        }
+
+        // ----------------------------------------
+        // 🔐 3. RESPUESTAS DEL BACKEND
+        // ----------------------------------------
+
+        if (me.status === 401) {
+            renderSessionExpired()
+            return false
+        }
+
+        if (me.status === 403) {
+            renderUnauthorized("No tienes permisos")
+            return false
+        }
+
+        if (!me.ok) {
+            renderUnauthorized("Error validando sesión")
+            return false
+        }
+
+        // ----------------------------------------
+        // 👤 4. GUARDAR USUARIO
+        // ----------------------------------------
+
+        const user = await me.json()
+        window.currentUser = user
+
+        console.log("Usuario autenticado:", user)
+
+        // ----------------------------------------
+        // 🔁 5. INICIAR CONTROL DE SESIÓN
+        // ----------------------------------------
+
+        startSessionHeartbeat()
+        startSessionTimeout()
+
+        return true
+
+    } catch (error) {
+
+        console.error("Auth error:", error)
+
+        // ----------------------------------------
+        // 🌐 NETWORK ERROR
+        // ----------------------------------------
+
+        if (error.message.includes("Failed to fetch")) {
+            renderNetworkError()
+            return false
+        }
+
+        // ----------------------------------------
+        // ⚠️ ERROR GENERAL
+        // ----------------------------------------
+
+        renderUnauthorized("Error inesperado")
+        return false
+    }
+}
 // =========================
 // ANIMACIONES
 // =========================
 
+
+function animateSidebarToNavbar() {
+    const sidebar = document.getElementById("sidebar")
+
+    if (!sidebar) return
+
+    sidebar.classList.add("transition-all", "duration-300")
+
+    if (window.innerWidth < 768) {
+        sidebar.classList.add("opacity-0", "-translate-x-4")
+    } else {
+        sidebar.classList.remove("opacity-0", "-translate-x-4")
+    }
+}
+
+window.addEventListener("resize", animateSidebarToNavbar)
 async function animateContentOut(content) {
     content.classList.add(
         "opacity-0",
@@ -78,7 +363,30 @@ async function animateContentIn(content) {
     content.classList.remove("opacity-0", "translate-y-1");
     content.classList.add("opacity-100");
 }
+function runInitialAnimations() {
+    const sidebar = document.getElementById("sidebar")
+    const header = document.getElementById("header")
+    const content = document.getElementById("content")
 
+    if (!sidebar || !header || !content) return
+
+    // estado inicial
+    sidebar.classList.add("-translate-x-full", "opacity-0")
+    header.classList.add("-translate-y-full", "opacity-0")
+    content.classList.add("opacity-0", "translate-y-4")
+
+    // forzar repaint
+    requestAnimationFrame(() => {
+
+        sidebar.classList.add("transition-all", "duration-500", "ease-out")
+        header.classList.add("transition-all", "duration-500", "ease-out")
+        content.classList.add("transition-all", "duration-500", "ease-out")
+
+        sidebar.classList.remove("-translate-x-full", "opacity-0")
+        header.classList.remove("-translate-y-full", "opacity-0")
+        content.classList.remove("opacity-0", "translate-y-4")
+    })
+}
 // =========================
 // LOAD VIEW
 // =========================
@@ -211,7 +519,6 @@ function bindEvents() {
         }
     });
 }
-
 // =========================
 // INIT
 // =========================
@@ -222,11 +529,27 @@ function initApp() {
     const view = params.get("view") || "verifications";
 
     navigateTo(view, false);
+    
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
+    renderLoading();
+
     bindEvents();
-    initApp();
+
+    const ok = await initAuth(); // AUTH PRIMERO
+    removeLoading();
+
+    if (!ok) return
+    
+
+    initApp(); // SOLO SI AUTH OK
+    await initWebSocket();
+    
+    if (!window.__appAnimated) {
+        runInitialAnimations();
+        window.__appAnimated = true
+}
 });
 
 window.addEventListener("popstate", () => {

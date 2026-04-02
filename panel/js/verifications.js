@@ -1,9 +1,9 @@
 import { fetchVerifications } from "./api.js";
 import { navigateTo, setSelectedSession } from "./app.js"
 import {loadChat} from "./chat.js"
+import { dispatch, subscribeStore, getState } from "./store.js"
 
-let currentVerificationStatus = "";
-
+let currentVerificationStatus = ""
 function getDrawerElements() {
     return {
         drawer: document.getElementById("drawer"),
@@ -56,13 +56,16 @@ function setVerificationState(state) {
 }
 
 function updateVerificationKpis(items) {
-    document.getElementById("kpiTotal").textContent = items.length;
+    const total = document.getElementById("kpiTotal")
+    if (!total) return
+
+    document.getElementById("kpiTotal").textContent = items.length
     document.getElementById("kpiInProgress").textContent =
-        items.filter(i => i.status === "in_progress").length;
+        items.filter(i => i.status === "in_progress").length
     document.getElementById("kpiInconsistent").textContent =
-        items.filter(i => i.status === "inconsistent").length;
+        items.filter(i => i.status === "inconsistent").length
     document.getElementById("kpiCompleted").textContent =
-        items.filter(i => i.status === "completed").length;
+        items.filter(i => i.status === "completed").length
 }
 
 function renderInconsistencias(item) {
@@ -148,7 +151,7 @@ function openVerificationDetail(item) {
         btn.onclick = async () => {
             await navigateTo("conversations");
 
-            loadChat(item.session_id, item.phone); // 🔥 FIX
+            loadChat(item.session_id, item.phone); // ya  FIX
         };
     }
 
@@ -188,6 +191,21 @@ function renderVerificationRows(items) {
     });
 }
 
+function renderVerificationsFromState(state) {
+    const items = state.verifications.order
+        .map(id => state.verifications.bySessionId[id])
+        .filter(Boolean)
+
+    updateVerificationKpis(items)
+    renderVerificationRows(items)
+
+    if (!items.length) {
+        setVerificationState({ type: "empty" })
+    }
+    else {
+        setVerificationState({ type: "success" })
+    } 
+}
 async function loadVerifications(status = "") {
     currentVerificationStatus = status;
     setVerificationState({ type: "loading" });
@@ -196,16 +214,11 @@ async function loadVerifications(status = "") {
         const response = await fetchVerifications(status);
         const items = response?.data ?? [];
 
-        updateVerificationKpis(items);
 
-        if (!items.length) {
-            renderVerificationRows([]);
-            setVerificationState({ type: "empty" });
-            return;
-        }
-
-        renderVerificationRows(items);
-        setVerificationState({ type: "success" });
+        dispatch({
+            type: "verifications/loaded",
+            payload: items
+        })
     } catch (error) {
         setVerificationState({
             type: "error",
@@ -253,10 +266,22 @@ function bindDrawerCloseEvents() {
     });
 }
 
+let unsubscribeVerificationStore = null
+
 export function initVerificationsPage() {
-    bindVerificationFilters();
-    bindDrawerCloseEvents();
-    loadVerifications();
+    bindVerificationFilters()
+    bindDrawerCloseEvents()
+
+    loadVerifications()
+
+    if (unsubscribeVerificationStore) {
+        unsubscribeVerificationStore()
+    }
+
+    unsubscribeVerificationStore = subscribeStore((state) => {
+        renderVerificationsFromState(state)
+    })
+
 }
 
 document.addEventListener("click", (e) => {
@@ -267,14 +292,14 @@ document.addEventListener("click", (e) => {
     const sessionId = Number(btn.dataset.sessionId)
     if (!sessionId) return
     
-    // 🔥 IMPORTANTE: cerrar drawer antes de navegar
+    // IMPORTANTE: cerrar drawer antes de navegar
     if (window.closeVerificationDrawer) {
         window.closeVerificationDrawer()
     }
 
     setSelectedSession(sessionId)
     
-    // 🔥 IMPORTANTE: delay mínimo para evitar conflicto DOM
+    // IMPORTANTE: delay mínimo para evitar conflicto DOM
     requestAnimationFrame(() => {
         navigateTo("conversations")
     })

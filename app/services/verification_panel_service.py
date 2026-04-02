@@ -2,17 +2,96 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta
-from functools import lru_cache
 from typing import Any, Dict, Iterable, Optional
 
 from app.core.verification_steps import STEP_ORDER
 from app.core.verification_schema import normalize_progress_payload
 from app.siga.siga_repository import obtener_venta_por_folio
-
+from sqlalchemy.orm import Session
+from app.services.verification_service import VerificationService
+from app.db.models import ChatSessions, VerificacionCuenta, Inconsistencias
 
 INACTIVITY_MINUTES = 30
 
+# --------------------------------------
+# 🧠 SNAPSHOT PARA PANEL / WEBSOCKET
+# --------------------------------------
 
+
+
+
+def build_verification_snapshot(
+    db: Session,
+    session: ChatSessions,
+) -> Optional[dict]:
+
+    # -------------------------
+    # 1. Resolver no_cuenta (cacheado 🔥)
+    # -------------------------
+    service = VerificationService(db)
+
+    no_cuenta = service.resolve_no_cuenta_from_folio(str(session.folio)) if session.folio else None
+
+    if not no_cuenta:
+        return None
+
+    # -------------------------
+    # 2. Obtener verificación
+    # -------------------------
+    verif = db.query(VerificacionCuenta).filter(
+        VerificacionCuenta.no_cuenta == no_cuenta
+    ).first()
+
+    if not verif:
+        return None
+
+    progress_json = verif.json or {}
+
+    # -------------------------
+    # 3. Calcular métricas (YA EXISTENTE ✔)
+    # -------------------------
+    verification_data = compute_verification(progress_json)
+
+    # -------------------------
+    # 4. Inconsistencias (agrupadas por folio)
+    # -------------------------
+    inconsistencias = db.query(Inconsistencias).filter(
+        Inconsistencias.folio == str(session.folio),
+        Inconsistencias.estatus == "ABIERTA"
+    )
+
+    grouped = group_inconsistencias_by_folio(inconsistencias)
+    items = grouped.get(str(session.folio), [])
+
+    open_inconsistencia = has_open_inconsistencia(items)
+
+    # -------------------------
+    # 5. Clasificar estado (YA EXISTENTE ✔)
+    # -------------------------
+    status = classify_panel_status(
+        verification_data=verification_data,
+        has_open_inconsistencia=open_inconsistencia,
+        last_activity=session.last_message_at,
+        requires_human=False,  # luego puedes conectar esto
+    )
+
+    # -------------------------
+    # 6. Construir snapshot final
+    # -------------------------
+    return {
+        "session_id": session.id,
+        "folio": str(session.folio) if session.folio else "",
+        "phone": session.phone,
+        "no_cuenta": no_cuenta,
+
+        "status": status,
+        "progress_pct": verification_data["progress_pct"],
+        "current_step": verification_data["current_step"],
+        "inconsistencias_count": len(items),
+
+        "last_activity": session.last_message_at.isoformat()
+        if session.last_message_at else "",
+    }
 def compute_verification(progress: Optional[Dict[str, int]]) -> Dict[str, Any]:
     normalized = normalize_progress_payload(progress or {})
 
@@ -80,17 +159,16 @@ def classify_panel_status(
     # 🔵 normal
     return "in_progress"
 
-@lru_cache(maxsize=1000)
-def resolve_no_cuenta_cached(folio: str) -> Optional[str]:
+def resolve_no_cuenta(db: Session, folio: str) -> Optional[str]:
     if not folio:
         return None
 
-    venta = obtener_venta_por_folio(str(folio))
+    venta = obtener_venta_por_folio(db, str(folio))
     if not venta:
         return None
 
     no_cuenta = venta.get("no_cuenta")
-    if no_cuenta in (None, ""):
+    if not no_cuenta:
         return None
 
     return str(no_cuenta)

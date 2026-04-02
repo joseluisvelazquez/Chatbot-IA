@@ -17,6 +17,7 @@ class SendMessageRequest(BaseModel):
 class ConversationResponse(BaseModel):
     id: int
     phone: str
+    last_message: Optional[str]
     last_message_at: Optional[datetime]
     unread_count: int = 0
 

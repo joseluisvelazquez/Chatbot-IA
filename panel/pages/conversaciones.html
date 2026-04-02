@@ -23,11 +23,17 @@
 
         <!-- MENSAJES -->
         <div
-            id="messages"
-            class="flex-1 min-h-0 w-full overflow-y-auto 
-            p-4 flex flex-col gap-3
-            bg-gray-100 dark:bg-slate-900"
-        ></div>
+            id="messagesContainer"
+            class="flex-1 min-h-0 w-full overflow-y-auto
+            bg-gray-100 dark:bg-slate-900 relative"
+        >
+            <div id="messagesSpacer"></div>
+
+            <div
+                id="messages"
+                class="absolute top-0 left-0 w-full p-4 flex flex-col gap-3"
+            ></div>
+        </div>
 
         <!-- INPUT -->
         <div

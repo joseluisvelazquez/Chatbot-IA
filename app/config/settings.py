@@ -3,6 +3,16 @@ from pydantic import Field
 
 
 class Settings(BaseSettings):
+    # ============================================================
+    # Seguridad y autenticación (obligatorias)
+    # ============================================================
+
+
+    PANEL_SHARED_SECRET: str = Field(...)
+
+    PANEL_SESSION_COOKIE_NAME: str = "panel_session"
+    PANEL_SESSION_SECURE_COOKIE: bool = False
+    PANEL_SESSION_SAMESITE: str = "lax"
 
     # ============================================================
     # WhatsApp Cloud API (obligatorias)
@@ -37,7 +47,12 @@ class Settings(BaseSettings):
     DB_USER: str
     DB_PASSWORD: str
     DB_NAME: str
+
+    # ============================================================
+    # development/testing
+    # ============================================================
     TEST_PHONE_ONLY: list[str]
+    DEBUG: bool = True
 
     @property
     def DATABASE_URL(self) -> str:
