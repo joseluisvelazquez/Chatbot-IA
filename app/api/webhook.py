@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.message_service import save_message
 from app.websockets.manager import manager
+from app.services.media_service import handle_incoming_media
 
 router = APIRouter()
 
@@ -48,11 +49,17 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
 
     if not data:
         return {"status": "ignored"}
+    
+    is_media = data.get("type") in ["image", "document"]
 
     if data.get("is_status"):
         return {"status": "whatsapp_status"}
 
-    if not data.get("text") and not data.get("button_id"):
+    if (
+        not data.get("text")
+        and not data.get("button_id")
+        and data.get("type") not in ["image", "document"]
+    ):
         return {"status": "ignored_no_user_input"}
 
     if data.get("unsupported"):
@@ -66,7 +73,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     text = data.get("text") or ""
     message_id = data.get("message_id")
     button_id = data.get("button_id")
-    content = text if text else button_id
+    content = "[MEDIA]" if is_media else (text if text else button_id)
     print(
         "ABOUT TO PROCESS:",
         {
@@ -84,27 +91,47 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             db.rollback()
             return {"status": "duplicate"}
 
-        save_message(
-            db=db,
-            session_id=chat.id,
-            phone=phone,
-            direction="in",
-            content = text if text else f"[BOTON] {button_id}",
-            message_id=message_id
-        )
+        if is_media:
+            try:
+                media_msg = handle_incoming_media(data, chat)
+            except Exception as e:
+                print("ERROR MEDIA:", e)
+                return {"status": "media_error"}
+
+            save_message(
+                db=db,
+                session_id=chat.id,
+                phone=phone,
+                direction="in",
+                content="[MEDIA]",
+                message_id=message_id,
+                type=media_msg.type,
+                media_url=media_msg.media_url,
+                file_name=media_msg.file_name
+            )
+        else:
+            save_message(
+                db=db,
+                session_id=chat.id,
+                phone=phone,
+                direction="in",
+                content=text if text else f"[BOTON] {button_id}",
+                message_id=message_id
+            )
         chat.unread_count = (chat.unread_count or 0) + 1
 
         await manager.send_to_all({
             "type": "new_message",
             "session_id": chat.id,
             "message": {
-                "content": text if text else f"[BOTON] {button_id}",
-                "direction": "in"
+                "content": "[MEDIA]" if is_media else (text if text else f"[BOTON] {button_id}"),
+                "direction": "in",
+                "type": data.get("type"),
+                "media_url": media_msg.media_url if is_media else None,
+                "file_name": media_msg.file_name if is_media else None
             },
             "unread_count": chat.unread_count
         })
-
-        
 
         result = process_message(
             session=chat,

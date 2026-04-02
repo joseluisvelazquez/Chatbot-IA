@@ -7,8 +7,11 @@ def save_message(
     session_id: int,
     phone: str,
     direction: str,
-    content: str,
-    message_id: str | None = None
+    content: str | None = None,
+    message_id: str | None = None,
+    type: str = "text",
+    media_url: str | None = None,
+    file_name: str | None = None
 ):
 
     msg = Message(
@@ -16,7 +19,10 @@ def save_message(
         phone=phone,
         direction=direction,
         content=content,
-        message_id=message_id
+        message_id=message_id,
+        type=type,
+        media_url=media_url,
+        file_name=file_name
     )
 
     db.add(msg)

@@ -25,6 +25,8 @@ from app.services.verification_panel_service import (
     has_open_inconsistencia,
     resolve_cuentas_from_folios,
 )
+from app.adapters.whatsapp_client import send_whatsapp_media
+from fastapi import Request
 
 # ORDEN REAL DEL FLOW (ajústalo si cambias estados)
 FUNNEL_ORDER = [
@@ -568,7 +570,7 @@ def get_messages(
 
     messages = (
         base_query
-        .order_by(desc(Message.id))   # 🔥 más confiable que created_at
+        .order_by(desc(Message.id))
         .limit(limit)
         .all()
     )
@@ -581,7 +583,10 @@ def get_messages(
                 id=m.id,
                 direction=m.direction,
                 content=m.content,
-                created_at=m.created_at
+                created_at=m.created_at,
+                type=m.type,
+                media_url=m.media_url,
+                file_name=m.file_name
             )
             for m in messages
         ],
@@ -648,7 +653,7 @@ async def send_agent_message(
                 "id": message.id,
                 "content": content,
                 "direction": "agent",
-                "created_at": message.created_at
+                "created_at": message.created_at.isoformat()
             }
         })
 
@@ -658,5 +663,78 @@ async def send_agent_message(
             status_code=500,
             detail="Error enviando mensaje a WhatsApp"
         )
+
+    return {"status": "sent"}
+
+
+@router.post("/messages/file")
+async def send_agent_file(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    payload = await request.json()  # 🔥 CLAVE
+
+    print("📦 PAYLOAD:", payload)
+
+    session_id = payload.get("session_id")
+    media_url = payload.get("media_url")
+    file_name = payload.get("file_name")
+    media_type = payload.get("type")
+
+    if not session_id or not media_url or not media_type:
+        raise HTTPException(400, "Datos incompletos")
+
+    session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
+
+    if not session:
+        raise HTTPException(404, "Sesión no encontrada")
+
+    phone = session.phone
+
+    try:
+        # 🔥 DEBUG
+        print("📤 ENVIANDO MEDIA A WHATSAPP:", media_url, media_type)
+
+        # 🔥 ENVIAR A WHATSAPP
+        await send_whatsapp_media(
+            phone=phone,
+            media_url=media_url,
+            media_type=media_type,
+            filename=file_name
+        )
+
+        # 💾 guardar en BD
+        message = Message(
+            session_id=session.id,
+            phone=phone,
+            direction="agent",
+            content="[MEDIA]",
+            type=media_type,
+            media_url=media_url,
+            file_name=file_name
+        )
+
+        db.add(message)
+        session.last_message_at = datetime.utcnow()
+        db.commit()
+
+        # 📡 websocket
+        await manager.send_to_all({
+            "type": "new_message",
+            "session_id": session.id,
+            "message": {
+                "id": message.id,
+                "direction": "agent",
+                "type": media_type,
+                "media_url": media_url,
+                "file_name": file_name,
+                "created_at": message.created_at.isoformat()
+            }
+        })
+
+    except Exception as e:
+        db.rollback()
+        print("❌ ERROR ENVIANDO MEDIA:", e)
+        raise HTTPException(500, "Error enviando archivo")
 
     return {"status": "sent"}

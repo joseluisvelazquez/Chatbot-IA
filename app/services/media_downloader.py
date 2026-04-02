@@ -11,7 +11,7 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 def get_media_url(media_id: str) -> str:
     url = f"https://graph.facebook.com/v21.0/{media_id}"
     headers = {
-        "Authorization": f"Bearer {settings.META_TOKEN}"
+        "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"
     }
 
     res = requests.get(url, headers=headers)
@@ -24,7 +24,7 @@ def download_and_store(media_id: str) -> str:
     media_url = get_media_url(media_id)
 
     headers = {
-        "Authorization": f"Bearer {settings.META_TOKEN}"
+        "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"
     }
 
     res = requests.get(media_url, headers=headers)

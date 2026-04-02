@@ -819,7 +819,8 @@ class Message(Base):
 
     message_id = Column(String(120), nullable=True)
 
-    created_at: Mapped[datetime.datetime] = mapped_column(
-    DateTime,
-    default=datetime.datetime.utcnow
-)
+    type = Column(String(20), nullable=True)  # text, image, document
+    media_url = Column(Text, nullable=True)
+    file_name = Column(String(255), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

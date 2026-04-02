@@ -1,4 +1,6 @@
-
+const API_URL = window.location.origin.includes("5500")
+    ? "http://localhost:8000"
+    : window.location.origin
 let currentSessionId = null
 let socket = null
 let lastTyping = 0
@@ -28,6 +30,20 @@ export function initConversationsPage() {
     requestAnimationFrame(() => {
         setupInputHandler()
         setupEmojiPicker()
+
+        // 📎 FILE INPUT
+        const fileInput = document.getElementById("fileInput")
+
+        if (fileInput) {
+            fileInput.addEventListener("change", (e) => {
+                const file = e.target.files[0]
+
+                if (file) {
+                    sendFile(file)
+                }
+                fileInput.value = ""
+            })
+        }
     })
 }
 
@@ -216,16 +232,64 @@ function createMessageNode(msg, timeOverride = "") {
         msg.direction === "in" ? "Cliente 👤" :
         ""
 
-    const content = formatButtonMessage(msg.content)
-    const finalText = formatWhatsAppText(content)
+    let bodyContent = ""
+    // --------------------
+    // 📸 IMAGENES
+    // --------------------
+    if (msg.media_url) {
+        if (msg.type === "image") {
+            bodyContent = `
+                <img 
+                    src="${msg.media_url}" 
+                    class="max-w-[220px] rounded-lg cursor-pointer hover:opacity-90"
+                    onclick="window.open('${msg.media_url}', '_blank')"
+                />
+            `
+        } else {
+            bodyContent = `
+                <a 
+                    href="${msg.media_url}" 
+                    target="_blank"
+                    class="flex items-center gap-2 text-blue-600 underline"
+                >
+                    📄 ${msg.file_name || "Archivo"}
+                </a>
+            `
+        }
+    }
+
+    // --------------------
+    // 📄 DOCUMENTOS
+    // --------------------
+    else if (msg.type === "document" && msg.media_url) {
+        bodyContent = `
+            <a 
+                href="${msg.media_url}" 
+                target="_blank"
+                class="flex items-center gap-2 text-blue-600 underline"
+            >
+                📄 ${msg.file_name || "Documento"}
+            </a>
+        `
+    }
+
+    // --------------------
+    // 💬 TEXTO
+    // --------------------
+    else {
+        const content = formatButtonMessage(msg.content)
+        const finalText = formatWhatsAppText(content)
+
+        bodyContent = `<div>${finalText}</div>`
+    }
 
     const metaClass =
-    msg.direction === "in"
-        ? "text-gray-900 dark:text-gray-300"
-        : "text-gray-800 dark:!text-black"
+        msg.direction === "in"
+            ? "text-gray-900 dark:text-gray-300"
+            : "text-gray-800 dark:!text-black"
 
     bubble.innerHTML = `
-        <div>${finalText}</div>
+        ${bodyContent}
         <div class="text-[10px] ${metaClass} mt-1 text-right">
             ${label ? `${label} · ${time}` : time}
         </div>
@@ -277,6 +341,14 @@ export async function loadChat(sessionId, phone) {
         let lastDate = null
 
         list.forEach(msg => {
+            
+            if (!msg.type && msg.media_url) {
+                msg.type = "image"
+            }
+            
+            if (msg.media_url && msg.media_url.startsWith("/media")) {
+                msg.media_url = API_URL + msg.media_url
+            }
             const safeDate = msg.created_at ? new Date(msg.created_at) : new Date()
             const currentDate = safeDate.toDateString()
 
@@ -443,6 +515,11 @@ export function initWebSocket() {
 
         if (data.type === "new_message") {
             const msg = data.message
+
+            if (msg.media_url && msg.media_url.startsWith("/media")) {
+                msg.media_url = API_URL + msg.media_url
+            }
+
             console.log("📡 WS:", {
                 id: msg.id,
                 content: msg.content,
@@ -748,5 +825,44 @@ function formatDateSeparator(dateString) {
         weekday: "long",
         day: "numeric",
         month: "long"
+    })
+}
+
+async function sendFile(file) {
+    if (!file || !currentSessionId) return
+
+    const formData = new FormData()
+    formData.append("file", file)
+
+    const res = await fetch(`${API_URL}/api/panel/upload`, {
+        method: "POST",
+        body: formData
+    })
+
+    const data = await res.json()
+
+    const container = document.getElementById("messages")
+
+    const node = createMessageNode({
+        direction: "agent",
+        type: file.type.startsWith("image") ? "image" : "document",
+        media_url: API_URL + data.url,
+        file_name: data.filename
+    })
+
+    container.appendChild(node)
+    container.scrollTop = container.scrollHeight
+
+    await fetch(`${API_URL}/api/panel/messages/file`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            session_id: currentSessionId,
+            media_url: data.url,
+            file_name: data.filename,
+            type: file.type.startsWith("image") ? "image" : "document"
+        })
     })
 }

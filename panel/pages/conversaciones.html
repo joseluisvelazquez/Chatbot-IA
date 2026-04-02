@@ -31,12 +31,22 @@
 
         <!-- INPUT -->
         <div
-            class="relative shrink-0 p-3 flex gap-2
+            class="relative shrink-0 p-3 flex gap-2 items-end
             bg-gray-50 dark:bg-slate-800
             border-t border-gray-200 dark:border-slate-700"
         >
-        
-           <!-- BOTON EMOJI -->
+
+            <!-- 📎 BOTON FILE -->
+            <label
+                class="h-[42px] w-[42px] flex items-center justify-center 
+                rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
+                transition text-xl shrink-0 cursor-pointer"
+            >
+                📎
+                <input id="fileInput" type="file" class="hidden" />
+            </label>
+
+            <!-- BOTON EMOJI -->
             <button id="emojiBtn"
                 class="h-[42px] w-[42px] flex items-center justify-center 
                     rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
@@ -49,17 +59,17 @@
                 id="messageInput"
                 placeholder="Escribe un mensaje..."
                 class="flex-1 px-3 py-2 border rounded-lg text-sm outline-none resize-none max-h-[120px] overflow-y-auto
-                       bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600 text-black dark:text-white"
+                    bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600 text-black dark:text-white"
                 oninput="handleTyping(); autoResize(this)"
             ></textarea>
 
             <!-- BOTON ENVIAR -->
             <button onclick="send()"
-                class="h-[42px] px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg">
+                class="h-[42px] px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg shrink-0">
                 Enviar
             </button>
 
-            <!-- EMOJI PICKER -->
+            <!-- EMOJI PICKER (igual que lo tienes) -->
             <div id="emojiPickerContainer"
                 class="hidden absolute bottom-16 left-2 w-[260px] h-[340px]
                     bg-white dark:bg-slate-800
@@ -74,11 +84,11 @@
                         bg-white dark:bg-slate-900
                         text-black dark:text-white
                         text-sm outline-none focus:border-green-500">
+
                 <div id="emojiGrid"
                     class="flex-1 grid grid-cols-8 gap-1 overflow-y-auto">
                 </div>
             </div>
         </div>
-        
     </div>
 </div>
