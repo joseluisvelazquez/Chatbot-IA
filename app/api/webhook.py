@@ -1,35 +1,36 @@
-from fastapi import APIRouter, Depends, Request 
-from fastapi.responses import PlainTextResponse 
-from sqlalchemy.orm import Session 
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import PlainTextResponse
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+
+from datetime import datetime, timezone
+import asyncio
+
 from app.db.session import get_db
 from app.adapters.meta_webhook import parse_meta_payload
-from app.services.session_service import get_or_create_session, update_session
 from app.adapters.whatsapp_client import send_whatsapp_message
-from app.core.flow_engine import process_message
 from app.config.settings import settings
-import asyncio
-import time
-from sqlalchemy.exc import IntegrityError
+
+from app.core.flow_engine import process_message
+from app.core.states import ChatState
+
+from app.services.session_service import get_or_create_session, update_session
+from app.services.message_service import save_message
+from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.inconsistencias_service import (
     open_or_patch_inconsistencia,
     close_open_inconsistencia,
 )
-from app.core.states import ChatState
-
-router = APIRouter()
-from datetime import datetime, timezone
-# verificaciones
 from app.services.verification_panel_service import build_verification_snapshot
+from app.services.media_service import handle_incoming_media
 
-from app.services.reminder_service import upsert_inactivity_reminders
-from app.services.message_service import save_message
 from app.websockets.manager import manager
+
 
 router = APIRouter()
 
 
 def utcnow_naive() -> datetime:
-    # Guardamos "naive UTC" para MySQL DATETIME (sin timezone)
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
@@ -55,7 +56,13 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     if data.get("is_status"):
         return {"status": "whatsapp_status"}
 
-    if not data.get("text") and not data.get("button_id"):
+    is_media = data.get("type") in ["image", "document"]
+
+    if (
+        not data.get("text")
+        and not data.get("button_id")
+        and not is_media
+    ):
         return {"status": "ignored_no_user_input"}
 
     if data.get("unsupported"):
@@ -69,7 +76,8 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     text = data.get("text") or ""
     message_id = data.get("message_id")
     button_id = data.get("button_id")
-    content = text if text else button_id
+    content = "[MEDIA]" if is_media else (text if text else button_id)
+
     print(
         "ABOUT TO PROCESS:",
         {
@@ -80,24 +88,41 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             "is_status": data.get("is_status"),
         },
     )
+
     try:
         chat = get_or_create_session(db, phone)
+
         # Anti-duplicado
         if message_id and chat.last_message_id == message_id:
             db.rollback()
             return {"status": "duplicate"}
 
-        
+        media_msg = None
 
         try:
-            saved_msg = save_message(
-                db=db,
-                session_id=chat.id,
-                phone=phone,
-                direction="in",
-                content=text if text else f"[BOTON] {button_id}",
-                message_id=message_id
-            )
+            if is_media:
+                media_msg = handle_incoming_media(data, chat)
+
+                saved_msg = save_message(
+                    db=db,
+                    session_id=chat.id,
+                    phone=phone,
+                    direction="in",
+                    content="[MEDIA]",
+                    message_id=message_id,
+                    type=media_msg.type,
+                    media_url=media_msg.media_url,
+                    file_name=media_msg.file_name,
+                )
+            else:
+                saved_msg = save_message(
+                    db=db,
+                    session_id=chat.id,
+                    phone=phone,
+                    direction="in",
+                    content=text if text else f"[BOTON] {button_id}",
+                    message_id=message_id,
+                )
 
             chat.unread_count = (chat.unread_count or 0) + 1
 
@@ -107,7 +132,12 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         except IntegrityError:
             db.rollback()
             return {"status": "duplicate_ignored"}
-
+        except Exception as e:
+            db.rollback()
+            if is_media:
+                print("ERROR MEDIA:", e)
+                return {"status": "media_error"}
+            raise
 
         await manager.send_to_all({
             "type": "new_message",
@@ -116,24 +146,22 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 "id": saved_msg.id,
                 "content": saved_msg.content,
                 "direction": saved_msg.direction,
-                "created_at": saved_msg.created_at.isoformat() if saved_msg.created_at else ""
+                "created_at": saved_msg.created_at.isoformat() if saved_msg.created_at else "",
+                "type": getattr(saved_msg, "type", None),
+                "media_url": getattr(saved_msg, "media_url", None),
+                "file_name": getattr(saved_msg, "file_name", None),
             },
             "unread_count": chat.unread_count
         })
-        # notificar a clientes conectados al dashboard
+
         await manager.send_to_all({
             "type": "dashboard_update",
-            
             "payload": {
                 "messages_in_delta": 1,
                 "messages_out_delta": 0,
                 "session_id": chat.id
             }
         })
-
-        
-        
-        
 
         result = process_message(
             session=chat,
@@ -146,10 +174,8 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         buttons = result.buttons
         previous_state = result.previous_state
 
-        # Guardar respuesta del bot en la conversación (antes de enviar, para asegurar persistencia aunque falle el envío)
         if reply:
             try:
-
                 bot_msg = save_message(
                     db=db,
                     session_id=chat.id,
@@ -167,36 +193,29 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                         "id": bot_msg.id,
                         "content": bot_msg.content,
                         "direction": bot_msg.direction,
-                        "created_at": bot_msg.created_at.isoformat() if bot_msg.created_at else ""
+                        "created_at": bot_msg.created_at.isoformat() if bot_msg.created_at else "",
+                        "type": getattr(bot_msg, "type", None),
+                        "media_url": getattr(bot_msg, "media_url", None),
+                        "file_name": getattr(bot_msg, "file_name", None),
                     },
                     "unread_count": chat.unread_count
                 })
-                await manager.send_to_all({
-                    "type": "dashboard_update",
-                    
-                    "payload": {
-                        "messages_in_delta": 0,
-                        "messages_out_delta": 1,
-                        "session_id": chat.id
-                    }
-                })
+
+
+                
 
             except IntegrityError:
                 db.rollback()
 
-            
         now = utcnow_naive()
 
         print(
             f"DEBUG: next_state={next_state}, previous_state={previous_state}, buttons={buttons}"
         )
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # --------------------------------------
         # 🧾 Persistencia de inconsistencias
         # --------------------------------------
-
-        # 1) Si flow_engine mandó patch -> lo aplicamos (abre si no existe)
         if result.inconsistencia_patch:
             open_or_patch_inconsistencia(
                 db=db,
@@ -206,7 +225,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 patch=result.inconsistencia_patch,
             )
 
-        # 2) Si caímos en estados "problemáticos" -> también abrimos/registramos evento
         if next_state in [
             ChatState.INCONSISTENCIA,
             ChatState.ACLARACION,
@@ -226,7 +244,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 },
             )
 
-        # 3) Si finaliza -> cerramos inconsistencia abierta (si existe)
         if next_state == ChatState.FINALIZADO:
             close_open_inconsistencia(
                 db=db,
@@ -244,34 +261,35 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             last_message=content,
             previous_state=previous_state,
             message_id=message_id,
-            last_message_at=now,  # ✅ clave
+            last_message_at=now,
         )
 
-        # Reprograma reminders en cada actividad real
         upsert_inactivity_reminders(db, chat)
         db.commit()
-
         db.refresh(chat)
 
         try:
             snapshot = build_verification_snapshot(db, chat)
-
             if snapshot:
                 await manager.send_to_all({
                     "type": "verification_update",
                     "payload": snapshot
                 })
-
         except Exception as e:
             print("ERROR snapshot:", e)
-
 
     except Exception:
         db.rollback()
         raise
 
-    # 📤 responder fuera del lock (ya con commit hecho)
     if reply:
-        asyncio.create_task(send_whatsapp_message(phone, reply, buttons, image_id=result.image_id))
+        asyncio.create_task(
+            send_whatsapp_message(
+                phone,
+                reply,
+                buttons,
+                image_id=result.image_id
+            )
+        )
 
     return {"status": "ok"}

@@ -1,31 +1,43 @@
-
-import {getMessages, sendMessage, apiRequest } from "../js/api.js"
+import { getMessages, sendMessage, apiRequest } from "../js/api.js"
 import { EMOJIS } from "./emojis.js"
 import { getWebSocket } from "./websocket.js"
 import { dispatch } from "./store.js"
-import { consumeSelectedSession } from "./app.js"
 import { subscribeStore, getState } from "./store.js"
 import { getConversations } from "../js/api.js"
-// Estados globales
+import { getSelectedSession, setSelectedSession } from "./app.js"
+
+
+
+// =========================
+// ESTADO GLOBAL
+// =========================
 let currentSessionId = null
 let lastTyping = 0
-const renderedMessageIdsBySession = new Map()
 let unsubscribeChatStore = null
 let lastLoadTrigger = 0
+let lastLoadedSessionId = null
+let isLoadingChat = false
+
+const renderedMessageIdsBySession = new Map()
 
 // =========================
 // CONFIG
 // =========================
 const sidebarNodes = new Map()
-const LOAD_COOLDOWN = 500 // ms
+const LOAD_COOLDOWN = 500
 const MAX_RENDERED_MESSAGES = 300
 const PAGE_SIZE = 30
+
+const API_BASE = window.location.origin.includes("5500")
+    ? "http://localhost:8000"
+    : ""
 
 let paginationState = {
     offset: 0,
     loading: false,
     hasMore: true
 }
+
 // =========================
 // INIT
 // =========================
@@ -34,19 +46,37 @@ export async function initConversationsPage() {
     window.handleTyping = handleTyping
     window.handleKeyDown = handleKeyDown
     window.autoResize = autoResize
+    
+    // reset visual de la vista al volver a entrar al módulo
+    lastLoadedSessionId = null
+    isLoadingChat = false
+
     if (unsubscribeChatStore) unsubscribeChatStore()
 
     let lastMessagesRef = null
+    let lastConversationSignature = ""
 
     unsubscribeChatStore = subscribeStore((state) => {
-        const currentMessages = state.messages.bySessionId[currentSessionId]
+        const currentMessages = state.messages.bySessionId[currentSessionId] || []
 
         if (currentMessages !== lastMessagesRef) {
             renderMessagesIncremental(state)
             lastMessagesRef = currentMessages
         }
 
-        renderSidebarFromState(state)
+        const signature = state.conversations.order
+            .map((id) => {
+                const c = state.conversations.byId[id]
+                return c
+                    ? `${c.id}:${c.last_message_at ?? ""}:${c.unread_count ?? 0}`
+                    : id
+            })
+            .join("|")
+
+        if (signature !== lastConversationSignature) {
+            renderSidebarFromState(state)
+            lastConversationSignature = signature
+        }
     })
 
     const sessions = await getConversations()
@@ -55,90 +85,266 @@ export async function initConversationsPage() {
         type: "conversations/loaded",
         payload: sessions
     })
-    const state = getState()
-    const selected = consumeSelectedSession()
 
-    if (selected) {
-        const { sessionId, phone } = selected
-        loadChat(sessionId, phone)
+    renderSidebarFromState(getState())
+
+    const state = getState()
+    let selected = getSelectedSession()
+
+    if (!selected) {
+        const params = new URLSearchParams(window.location.search)
+        const sessionIdFromUrl = params.get("session_id")
+
+        if (sessionIdFromUrl) {
+            const sessionFromStore = state.conversations.byId[Number(sessionIdFromUrl)]
+            selected = {
+                sessionId: Number(sessionIdFromUrl),
+                phone: sessionFromStore?.phone || null
+            }
+        }
     }
-    if (!selected && state.conversations.order.length > 0) {
+
+    if (!selected) {
+        const saved = localStorage.getItem("lastSession")
+        if (saved) {
+            try {
+                selected = JSON.parse(saved)
+            } catch {}
+        }
+    }
+
+    if (selected?.sessionId) {
+        const sessionIdNum = Number(selected.sessionId)
+        const sessionFromStore = state.conversations.byId[sessionIdNum]
+
+        await loadChat(
+            sessionIdNum,
+            selected.phone || sessionFromStore?.phone || ""
+        )
+    } else {
         const firstId = state.conversations.order[0]
         const session = state.conversations.byId[firstId]
 
-        loadChat(session.id, session.phone)
+        if (session) {
+            await loadChat(session.id, session.phone)
+        }
     }
 
+    
     requestAnimationFrame(() => {
         setupInputHandler()
         setupEmojiPicker()
         setupVirtualScroll()
+        setupBottomSeparatorCleaner()
+
+        const fileInput = document.getElementById("fileInput")
+
+        if (fileInput && !fileInput.dataset.bound) {
+            fileInput.addEventListener("change", (e) => {
+                const file = e.target.files?.[0]
+
+                if (file) {
+                    sendFile(file)
+                }
+
+                fileInput.value = ""
+            })
+
+            fileInput.dataset.bound = "true"
+        }
     })
 }
-// --------------------
-// Scroll
-// --------------------
 
-function setupVirtualScroll() {
-    const container = document.getElementById("messagesContainer")
-    if (!container) return
-    if (container.dataset.virtualBound === "true") return
+// =========================
+// HELPERS
+// =========================
+function getRenderedSet(sessionId) {
+    if (!renderedMessageIdsBySession.has(sessionId)) {
+        renderedMessageIdsBySession.set(sessionId, new Set())
+    }
+    return renderedMessageIdsBySession.get(sessionId)
+}
 
-    let ticking = false
+function clearRenderedSession(sessionId) {
+    renderedMessageIdsBySession.set(sessionId, new Set())
+}
 
-    container.addEventListener("scroll", () => {
-        if (ticking) return
-        ticking = true
+function normalizeMessage(msg) {
+    if (!msg) return {}
 
-        requestAnimationFrame(() => {
-            const now = Date.now()
+    const normalized = { ...msg }
 
-            const nearTop = container.scrollTop < 80
-            const canTrigger = (now - lastLoadTrigger) > LOAD_COOLDOWN
+    if (!normalized.type && normalized.media_url) {
+        normalized.type = "image"
+    }
 
-            if (nearTop && canTrigger && !paginationState.loading) {
-                lastLoadTrigger = now
-                loadMoreMessages()
-            }
+    if (normalized.media_url && normalized.media_url.startsWith("/media")) {
+        normalized.media_url = `${API_BASE}${normalized.media_url}`
+    }
 
-            ticking = false
-        })
+    if (!normalized.created_at) {
+        normalized.created_at = new Date().toISOString()
+    }
+
+    return normalized
+}
+
+function formatTime(dateString) {
+    const date = new Date(dateString)
+    return date.toLocaleTimeString("es-MX", {
+        hour: "2-digit",
+        minute: "2-digit"
     })
-
-    container.dataset.virtualBound = "true"
 }
-function forceScrollToBottom() {
-    const container = document.getElementById("messagesContainer")
-    if (!container) return
 
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            container.scrollTop = container.scrollHeight
-        })
+function formatDateSeparator(dateString) {
+    const date = new Date(dateString)
+    const today = new Date()
+
+    const isToday = date.toDateString() === today.toDateString()
+
+    const yesterday = new Date()
+    yesterday.setDate(today.getDate() - 1)
+
+    const isYesterday = date.toDateString() === yesterday.toDateString()
+
+    if (isToday) return "Hoy"
+    if (isYesterday) return "Ayer"
+
+    return date.toLocaleDateString("es-MX", {
+        weekday: "long",
+        day: "numeric",
+        month: "long"
     })
 }
-function showTopLoader() {
-    if (document.getElementById("topLoader")) return
 
-    const container = document.getElementById("messages")
-    if (!container) return
+function formatWhatsAppText(text) {
+    if (!text) return ""
 
-    const div = document.createElement("div")
-    div.id = "topLoader"
-    div.className = "text-center text-xs text-gray-400 py-2"
-    div.innerText = "Cargando mensajes..."
-
-    container.prepend(div)
+    return text
+        .replace(/\n/g, "<br>")
+        .replace(/\*(.*?)\*/g, "<b>$1</b>")
+        .replace(/_(.*?)_/g, "<i>$1</i>")
+        .replace(/~(.*?)~/g, "<s>$1</s>")
+        .replace(/`(.*?)`/g, "<code>$1</code>")
 }
 
-function hideTopLoader() {
-    const el = document.getElementById("topLoader")
-    if (el) el.remove()
+const BUTTON_LABELS = {
+    MENU_VERIFICACION: "📋 Menú de verificación",
+    FOLIO_SI: "✔️ Confirmó folio",
+    NOMBRE_SI: "✔️ Confirmó nombre",
+    DOM_SI: "🏠 Confirmó domicilio",
+    FECHA_SI: "📅 Confirmó fecha",
+    PROD_SI: "📦 Confirmó producto",
+    PRODESTADOSI: "📦 Producto en buen estado",
+    PAGO_SI: "💰 Confirmó pago",
+    PAGOS_OK: "💳 Entendió pagos",
+    PLAN3_OK: "📆 Aceptó plan 3 meses",
+    PLANES_OK: "📊 Revisó planes",
+    BEN_OK: "🎉 Confirmó beneficios"
 }
-// --------------------
+
+function formatButtonMessage(text) {
+    if (!text) return text
+
+    const match = text.match(/\[BOTON\]\s*(.+)/)
+    if (!match) return text
+
+    const key = match[1].trim()
+
+    if (BUTTON_LABELS[key]) {
+        return `
+            <span class="
+                inline-flex items-center gap-1
+                bg-gray-100 dark:bg-slate-500
+                text-gray-800 dark:text-white
+                border border-gray-200 dark:border-slate-400
+                px-3 py-1 rounded-md text-xs font-medium
+                shadow-none dark:shadow-sm
+            ">
+                🔘 ${BUTTON_LABELS[key]}
+            </span>
+        `
+    }
+
+    let label = key
+
+    if (key.endsWith("_SI")) {
+        label = "✔️ Confirmó " + key.replace("_SI", "").toLowerCase()
+    } else if (key.endsWith("_NO")) {
+        label = "❌ Rechazó " + key.replace("_NO", "").toLowerCase()
+    } else if (key.endsWith("_DUDA")) {
+        label = "❓ Tiene dudas"
+    } else if (key.endsWith("_OK")) {
+        label = "✅ Confirmó"
+    } else {
+        label = key.replaceAll("_", " ").toLowerCase()
+    }
+
+    return `
+        <span class="
+            inline-flex items-center gap-1
+            bg-gray-100 dark:bg-slate-500
+            text-gray-800 dark:text-white
+            border border-gray-200 dark:border-slate-400
+            px-3 py-1 rounded-md text-xs font-medium
+            shadow-none dark:shadow-sm
+        ">
+            🔘 ${label}
+        </span>
+    `
+}
+
+function isUserAtBottom(container) {
+    const threshold = 60
+    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold
+}
+
+function getLastRenderedDate(list) {
+    const nodes = list.querySelectorAll("[data-message-date]")
+    if (!nodes.length) return null
+    return nodes[nodes.length - 1].dataset.messageDate
+}
+
+function insertDateSeparator(list, dateString) {
+    const separator = document.createElement("div")
+    separator.className = "flex justify-center my-2"
+    separator.dataset.separatorType = "date"
+
+    separator.innerHTML = `
+        <div class="text-xs px-3 py-1 rounded-full bg-gray-300 dark:bg-slate-700 text-gray-700 dark:text-gray-200">
+            ${formatDateSeparator(dateString)}
+        </div>
+    `
+
+    list.appendChild(separator)
+}
+
+function ensureNewMessagesSeparator(list) {
+    if (document.getElementById("newMessagesSeparator")) return
+
+    const separator = document.createElement("div")
+    separator.id = "newMessagesSeparator"
+    separator.className = "flex justify-center my-2"
+    separator.dataset.separatorType = "new"
+
+    separator.innerHTML = `
+        <div class="text-xs px-3 py-1 rounded-full bg-blue-500 text-white">
+            Nuevos mensajes
+        </div>
+    `
+
+    list.appendChild(separator)
+}
+
+function removeNewMessagesSeparator() {
+    const separator = document.getElementById("newMessagesSeparator")
+    if (separator) separator.remove()
+}
+
+// =========================
 // SIDEBAR
-// --------------------
-
+// =========================
 function renderSidebarFromState(state) {
     const list = document.getElementById("conversationList")
     if (!list) return
@@ -147,9 +353,10 @@ function renderSidebarFromState(state) {
         .map(id => state.conversations.byId[id])
         .filter(Boolean)
 
+    const fragment = document.createDocumentFragment()
     const seen = new Set()
 
-    sessions.forEach(s => {
+    sessions.forEach((s) => {
         seen.add(s.id)
 
         let node = sidebarNodes.get(s.id)
@@ -157,29 +364,26 @@ function renderSidebarFromState(state) {
         if (!node) {
             node = createSidebarNode(s)
             sidebarNodes.set(s.id, node)
-        } else {
-            updateSidebarNode(node, s)
         }
 
-        // mover arriba si no está
-        if (list.firstChild !== node) {
-            list.prepend(node)
-        }
+        updateSidebarNode(node, s)
+        fragment.appendChild(node)
     })
 
-    // eliminar nodos que ya no existen
     sidebarNodes.forEach((node, id) => {
         if (!seen.has(id)) {
-            node.remove()
             sidebarNodes.delete(id)
         }
     })
+
+    list.replaceChildren(fragment)
 }
+
 function createSidebarNode(s) {
     const div = document.createElement("div")
 
     div.className = `
-        px-4 py-3 cursor-pointer border-b
+        px-4 py-3 cursor-pointer border-b flex justify-between items-center
         border-gray-200 dark:border-slate-700
         hover:bg-gray-100 dark:hover:bg-slate-700
         transition
@@ -187,13 +391,28 @@ function createSidebarNode(s) {
 
     div.dataset.id = s.id
 
-    div.onclick = () => loadChat(s.id, s.phone)
+    div.onclick = async () => {
+        if (currentSessionId === s.id && lastLoadedSessionId === s.id && !isLoadingChat) {
+            return
+        }
 
-    updateSidebarNode(div, s)
+        await loadChat(s.id, s.phone)
+    }
 
     return div
 }
+
 function updateSidebarNode(node, s) {
+    const isActive = s.id === currentSessionId
+
+    node.className = `
+        px-4 py-3 cursor-pointer border-b flex justify-between items-center
+        border-gray-200 dark:border-slate-700
+        hover:bg-gray-100 dark:hover:bg-slate-700
+        transition
+        ${isActive ? "bg-blue-100 dark:bg-slate-700" : ""}
+    `
+
     node.innerHTML = `
         <div class="min-w-0">
             <div class="font-semibold truncate">${s.phone}</div>
@@ -205,70 +424,13 @@ function updateSidebarNode(node, s) {
         }
     `
 }
-// --------------------
-// HELPERS
-// --------------------
-const BUTTON_LABELS = {
-    "MENU_VERIFICACION": "📋 Menú de verificación",
-    "FOLIO_SI": "✔️ Confirmó folio",
-    "NOMBRE_SI": "✔️ Confirmó nombre",
-    "DOM_SI": "🏠 Confirmó domicilio",
-    "FECHA_SI": "📅 Confirmó fecha",
-    "PROD_SI": "📦 Confirmó producto",
-    "PRODESTADOSI": "📦 Producto en buen estado",
-    "PAGO_SI": "💰 Confirmó pago",
-    "PAGOS_OK": "💳 Entendió pagos",
-    "PLAN3_OK": "📆 Aceptó plan 3 meses",
-    "PLANES_OK": "📊 Revisó planes",
-    "BEN_OK": "🎉 Confirmó beneficios"
-}
 
-function formatButtonMessage(text) {
-    if (!text) return text
+// =========================
+// MENSAJES
+// =========================
+function createMessageNode(rawMsg, timeOverride = "") {
+    const msg = normalizeMessage(rawMsg)
 
-    const match = text.match(/\[BOTON\]\s*(.+)/)
-    if (!match) return text
-
-    const key = match[1].trim()
-    const label = BUTTON_LABELS[key] || key
-
-    return `
-        <span class="inline-block bg-gray-200 px-2 py-1 rounded text-xs">
-            🔘 ${label}
-        </span>
-    `
-}
-function isUserAtBottom(container) {
-    const threshold = 50
-    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-}
-function formatTime(dateString) {
-    const date = new Date(dateString)
-    return date.toLocaleTimeString("es-MX", {
-        hour: "2-digit",
-        minute: "2-digit"
-    })
-}
-
-function formatWhatsAppText(text) {
-    if (!text) return ""
-
-    return text
-        .replace(/\*(.*?)\*/g, "<b>$1</b>")
-        .replace(/_(.*?)_/g, "<i>$1</i>")
-        .replace(/~(.*?)~/g, "<s>$1</s>")
-        .replace(/`(.*?)`/g, "<code>$1</code>")
-}
-function getRenderedSet(sessionId) {
-    if (!renderedMessageIdsBySession.has(sessionId)) {
-        renderedMessageIdsBySession.set(sessionId, new Set())
-    }
-    return renderedMessageIdsBySession.get(sessionId)
-}
-// --------------------
-// BURBUJA
-// --------------------
-function createMessageNode(msg, timeOverride = "") {
     const wrapper = document.createElement("div")
     wrapper.className = "w-full flex opacity-0 translate-y-2 transition-all duration-300"
 
@@ -277,12 +439,11 @@ function createMessageNode(msg, timeOverride = "") {
     })
 
     const bubble = document.createElement("div")
-
     let bubbleClass = "inline-block max-w-[70%] min-w-[80px] px-3 py-2 rounded-lg text-sm shadow-sm break-words"
 
     if (msg.direction === "in") {
         wrapper.classList.add("justify-start")
-        bubbleClass += " bg-white text-black"
+        bubbleClass += " bg-gray-200 text-black dark:bg-slate-700 dark:text-white"
     } else if (msg.direction === "out") {
         wrapper.classList.add("justify-end")
         bubbleClass += " bg-blue-100 text-black"
@@ -297,19 +458,50 @@ function createMessageNode(msg, timeOverride = "") {
     bubble.className = bubbleClass
 
     const time = timeOverride || (msg.created_at ? formatTime(msg.created_at) : "")
-
     const label =
         msg.direction === "out" ? "Bot 🤖" :
         msg.direction === "agent" ? "Tú 🧑‍💻" :
         msg.direction === "in" ? "Cliente 👤" :
         ""
 
-    const content = formatButtonMessage(msg.content)
-    const finalText = formatWhatsAppText(content)
+    let bodyContent = ""
+    const mediaUrl = msg.media_url
+
+    if (mediaUrl) {
+        if (msg.type === "image") {
+            bodyContent = `
+                <img
+                    src="${mediaUrl}"
+                    class="max-w-[220px] rounded-lg cursor-pointer hover:opacity-90"
+                    onclick="window.open('${mediaUrl}', '_blank')"
+                    loading="lazy"
+                />
+            `
+        } else {
+            bodyContent = `
+                <a
+                    href="${mediaUrl}"
+                    target="_blank"
+                    class="flex items-center gap-2 text-blue-600 underline"
+                >
+                    📄 ${msg.file_name || "Archivo"}
+                </a>
+            `
+        }
+    } else {
+        const content = formatButtonMessage(msg.content)
+        const finalText = formatWhatsAppText(content)
+        bodyContent = `<div>${finalText}</div>`
+    }
+
+    const metaClass =
+        msg.direction === "in"
+            ? "text-gray-900 dark:text-gray-300"
+            : "text-gray-800 dark:!text-black"
 
     bubble.innerHTML = `
-        <div>${finalText}</div>
-        <div class="text-[10px] text-gray-500 mt-1 text-right">
+        ${bodyContent}
+        <div class="text-[10px] ${metaClass} mt-1 text-right">
             ${label ? `${label} · ${time}` : time}
         </div>
     `
@@ -318,9 +510,31 @@ function createMessageNode(msg, timeOverride = "") {
     return wrapper
 }
 
-// --------------------
-// LOAD CHAT
-// --------------------
+function appendMessageWithSeparators(list, msg, options = {}) {
+    const { showNewIncomingSeparator = false } = options
+    const normalized = normalizeMessage(msg)
+
+    const currentDate = new Date(normalized.created_at).toDateString()
+    const lastDate = getLastRenderedDate(list)
+
+    if (lastDate !== currentDate) {
+        insertDateSeparator(list, normalized.created_at)
+    }
+
+    if (showNewIncomingSeparator && normalized.direction === "in") {
+        ensureNewMessagesSeparator(list)
+    }
+
+    const node = createMessageNode(normalized)
+    node.dataset.messageId = normalized.id ?? `${normalized.content ?? "media"}-${normalized.created_at}`
+    node.dataset.messageDate = currentDate
+
+    list.appendChild(node)
+}
+
+// =========================
+// RENDER INCREMENTAL
+// =========================
 function renderMessagesIncremental(state) {
     const container = document.getElementById("messagesContainer")
     const list = document.getElementById("messages")
@@ -329,23 +543,59 @@ function renderMessagesIncremental(state) {
 
     const messages = state.messages.bySessionId[currentSessionId] || []
     const renderedSet = getRenderedSet(currentSessionId)
-
     const wasAtBottom = isUserAtBottom(container)
-
     const fragment = document.createDocumentFragment()
 
-    // SOLO PROCESAR NUEVOS (DEL FINAL)
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]
-        const id = msg.id ?? `${msg.content}-${msg.created_at}`
+    for (let i = 0; i < messages.length; i++) {
+        const msg = normalizeMessage(messages[i])
+        const id = String(msg.id ?? `${msg.content ?? "media"}-${msg.created_at}`)
 
-        if (renderedSet.has(id)) break // 🚀 corta aquí
+        if (renderedSet.has(id)) continue
+
+        const tempList = document.createElement("div")
+        const shouldShowNewSeparator =
+            !wasAtBottom &&
+            msg.direction === "in" &&
+            lastLoadedSessionId === currentSessionId &&
+            renderedSet.size > 0
+
+        const currentDate = new Date(msg.created_at).toDateString()
+        const lastDate = fragment.querySelectorAll("[data-message-date]").length
+            ? fragment.querySelectorAll("[data-message-date]")[fragment.querySelectorAll("[data-message-date]").length - 1].dataset.messageDate
+            : getLastRenderedDate(list)
+
+        if (lastDate !== currentDate) {
+            const sep = document.createElement("div")
+            sep.className = "flex justify-center my-2"
+            sep.dataset.separatorType = "date"
+            sep.innerHTML = `
+                <div class="text-xs px-3 py-1 rounded-full bg-gray-300 dark:bg-slate-700 text-gray-700 dark:text-gray-200">
+                    ${formatDateSeparator(msg.created_at)}
+                </div>
+            `
+            fragment.appendChild(sep)
+        }
+
+        if (shouldShowNewSeparator && !document.getElementById("newMessagesSeparator")) {
+            const newSep = document.createElement("div")
+            newSep.id = "newMessagesSeparator"
+            newSep.className = "flex justify-center my-2"
+            newSep.dataset.separatorType = "new"
+            newSep.innerHTML = `
+                <div class="text-xs px-3 py-1 rounded-full bg-blue-500 text-white">
+                    Nuevos mensajes
+                </div>
+            `
+            fragment.appendChild(newSep)
+        }
 
         const node = createMessageNode(msg)
         node.dataset.messageId = id
-        fragment.prepend(node)
+        node.dataset.messageDate = currentDate
 
+        fragment.appendChild(node)
         renderedSet.add(id)
+
         if (renderedSet.size > MAX_RENDERED_MESSAGES) {
             const firstKey = renderedSet.values().next().value
             renderedSet.delete(firstKey)
@@ -358,10 +608,15 @@ function renderMessagesIncremental(state) {
         if (wasAtBottom) {
             requestAnimationFrame(() => {
                 container.scrollTop = container.scrollHeight
+                removeNewMessagesSeparator()
             })
         }
     }
 }
+
+// =========================
+// PAGINACIÓN
+// =========================
 async function loadMoreMessages() {
     if (!currentSessionId) return
     if (paginationState.loading) return
@@ -379,11 +634,7 @@ async function loadMoreMessages() {
     showTopLoader()
 
     try {
-        const res = await getMessages(
-            currentSessionId,
-            PAGE_SIZE,
-            paginationState.offset
-        )
+        const res = await getMessages(currentSessionId, PAGE_SIZE, paginationState.offset)
 
         let newMessages = []
 
@@ -399,19 +650,37 @@ async function loadMoreMessages() {
 
         paginationState.offset += newMessages.length
 
+        const renderedSet = getRenderedSet(currentSessionId)
         const fragment = document.createDocumentFragment()
+        let tempDate = null
 
-        for (let i = newMessages.length - 1; i >= 0; i--) {
-            const msg = newMessages[i]
-            const id = msg.id ?? `${msg.content}-${msg.created_at}`
+        for (let i = 0; i < newMessages.length; i++) {
+            const msg = normalizeMessage(newMessages[i])
+            const id = String(msg.id ?? `${msg.content ?? "media"}-${msg.created_at}`)
 
-            if (getRenderedSet(currentSessionId).has(id)) continue
+            if (renderedSet.has(id)) continue
+
+            const currentDate = new Date(msg.created_at).toDateString()
+
+            if (tempDate !== currentDate) {
+                const separator = document.createElement("div")
+                separator.className = "flex justify-center my-2"
+                separator.dataset.separatorType = "date"
+                separator.innerHTML = `
+                    <div class="text-xs px-3 py-1 rounded-full bg-gray-300 dark:bg-slate-700 text-gray-700 dark:text-gray-200">
+                        ${formatDateSeparator(msg.created_at)}
+                    </div>
+                `
+                fragment.appendChild(separator)
+                tempDate = currentDate
+            }
 
             const node = createMessageNode(msg)
             node.dataset.messageId = id
-            fragment.prepend(node)
+            node.dataset.messageDate = currentDate
 
-            getRenderedSet(currentSessionId).add(id)
+            fragment.appendChild(node)
+            renderedSet.add(id)
         }
 
         list.prepend(fragment)
@@ -419,7 +688,6 @@ async function loadMoreMessages() {
         requestAnimationFrame(() => {
             const newHeight = container.scrollHeight
             const delta = newHeight - prevHeight
-
             container.scrollTop = prevScrollTop + delta
         })
     } catch (err) {
@@ -429,66 +697,104 @@ async function loadMoreMessages() {
         hideTopLoader()
     }
 }
+
+// =========================
+// LOAD CHAT
+// =========================
 export async function loadChat(sessionId, phone) {
-    const isSameChat = currentSessionId === sessionId
-    currentSessionId = sessionId
 
     const header = document.getElementById("chatHeader")
-    const container = document.getElementById("messagesContainer")
     const list = document.getElementById("messages")
 
-    if (header) {
-        header.innerHTML = `
-            <div class="flex flex-col">
-                <span class="font-semibold">+${phone}</span>
-                <span class="text-xs text-gray-500">En conversación</span>
-            </div>
-        `
-    }
+    if (isLoadingChat && currentSessionId === sessionId) return
 
-    await apiRequest(`/panel/conversations/${sessionId}/read`, {
-        method: "POST"
+    // solo evita recargar si la vista actual YA tiene renderizado ese chat
+    const alreadyRendered =
+        currentSessionId === Number(sessionId) &&
+        lastLoadedSessionId === Number(sessionId) &&
+        header &&
+        header.textContent?.trim() &&
+        list &&
+        list.childElementCount > 0
+
+    if (alreadyRendered) return
+    const previousSessionId = currentSessionId
+    const isSameChat = previousSessionId === sessionId
+
+    currentSessionId = Number(sessionId)
+    setSelectedSession({
+        sessionId: Number(sessionId),
+        phone
     })
+    
+    renderSidebarFromState(getState())
+    isLoadingChat = true
 
-    paginationState = {
-        offset: 0,
-        loading: false,
-        hasMore: true
-    }
 
-    getRenderedSet(sessionId).clear()
-
-    if (!isSameChat && list) {
-        list.innerHTML = ""
-    }
-
-    const messages = await getMessages(sessionId, PAGE_SIZE, 0)
-
-    let messagesList = []
-
-    if (Array.isArray(messages)) messagesList = messages
-    else if (Array.isArray(messages.messages)) messagesList = messages.messages
-    else if (Array.isArray(messages.data)) messagesList = messages.data
-    else if (Array.isArray(messages.items)) messagesList = messages.items
-
-    dispatch({
-        type: "messages/loaded",
-        payload: {
-            sessionId,
-            items: messagesList
+    try {
+        if (header) {
+            header.innerHTML = `
+                <div class="flex flex-col">
+                    <span class="font-semibold">+${phone}</span>
+                    <span class="text-xs text-gray-500">En conversación</span>
+                </div>
+            `
         }
-    })
 
-    paginationState.offset = messagesList.length
+        await apiRequest(`/panel/conversations/${sessionId}/read`, {
+            method: "POST"
+        })
 
-    requestAnimationFrame(() => {
-        renderMessagesIncremental(getState())
-        forceScrollToBottom()
-    })
+        paginationState = {
+            offset: 0,
+            loading: false,
+            hasMore: true
+        }
+
+        if (!isSameChat && list) {
+            list.innerHTML = ""
+            clearRenderedSession(sessionId)
+            removeNewMessagesSeparator()
+        }
+
+        const messages = await getMessages(sessionId, PAGE_SIZE, 0)
+
+        let messagesList = []
+
+        if (Array.isArray(messages)) messagesList = messages
+        else if (Array.isArray(messages.messages)) messagesList = messages.messages
+        else if (Array.isArray(messages.data)) messagesList = messages.data
+        else if (Array.isArray(messages.items)) messagesList = messages.items
+
+        if (!isSameChat) {
+            dispatch({
+                type: "messages/loaded",
+                payload: {
+                    sessionId,
+                    items: messagesList
+                }
+            })
+        }
+
+        paginationState.offset = messagesList.length
+        lastLoadedSessionId = sessionId
+
+        requestAnimationFrame(() => {
+            renderMessagesIncremental(getState())
+
+            const container = document.getElementById("messagesContainer")
+            if (container) {
+                container.scrollTop = container.scrollHeight
+            }
+        })
+    } finally {
+        isLoadingChat = false
+    }
 }
-// --------------------
-// INPUT
-// --------------------
+
+// =========================
+// SEND
+// =========================
 function handleKeyDown(event) {
     if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault()
@@ -496,17 +802,12 @@ function handleKeyDown(event) {
     }
 }
 
-// --------------------
-// SEND
-// --------------------
 export async function send() {
     const input = document.getElementById("messageInput")
     if (!input) return
 
     const content = input.value.trim()
-
     if (!content || !currentSessionId) return
-
 
     input.value = ""
     input.focus()
@@ -522,9 +823,50 @@ export async function send() {
     }
 }
 
-// --------------------
+async function sendFile(file) {
+    if (!file || !currentSessionId) return
+
+    if (file.size > 10 * 1024 * 1024) {
+        alert("Archivo demasiado grande")
+        return
+    }
+
+    const formData = new FormData()
+    formData.append("file", file)
+
+    try {
+        const res = await fetch(`${API_BASE}/api/panel/upload`, {
+            method: "POST",
+            body: formData
+        })
+
+        if (!res.ok) {
+            throw new Error(`Upload error: ${res.status}`)
+        }
+
+        const data = await res.json()
+
+        // 🔥 NO render optimista para evitar duplicados con WS
+        await apiRequest(`/panel/messages/file`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                session_id: currentSessionId,
+                media_url: data.url,
+                file_name: data.filename,
+                type: file.type.startsWith("image") ? "image" : "document"
+            })
+        })
+    } catch (err) {
+        console.error("Error subiendo archivo:", err)
+    }
+}
+
+// =========================
 // TYPING
-// --------------------
+// =========================
 function showTyping(text = "✍️ escribiendo...") {
     removeTyping()
 
@@ -537,7 +879,6 @@ function showTyping(text = "✍️ escribiendo...") {
     div.innerText = text
 
     container.appendChild(div)
-    container.scrollTop = container.scrollHeight
 }
 
 function removeTyping() {
@@ -545,11 +886,6 @@ function removeTyping() {
     if (typing) typing.remove()
 }
 
-
-
-// --------------------
-// TYPING EVENT
-// --------------------
 function sendTypingEvent() {
     const socket = getWebSocket()
 
@@ -571,13 +907,77 @@ function handleTyping() {
     sendTypingEvent()
 }
 
-// --------------------
-// GETPHONE EVENT
-// --------------------
+// =========================
+// SCROLL HELPERS
+// =========================
+function setupVirtualScroll() {
+    const container = document.getElementById("messagesContainer")
+    if (!container) return
+    if (container.dataset.virtualBound === "true") return
 
-// --------------------
+    let ticking = false
+
+    container.addEventListener("scroll", () => {
+        if (ticking) return
+        ticking = true
+
+        requestAnimationFrame(() => {
+            const now = Date.now()
+
+            if (isUserAtBottom(container)) {
+                removeNewMessagesSeparator()
+            }
+
+            const nearTop = container.scrollTop < 80
+            const canTrigger = (now - lastLoadTrigger) > LOAD_COOLDOWN
+
+            if (nearTop && canTrigger && !paginationState.loading) {
+                lastLoadTrigger = now
+                loadMoreMessages()
+            }
+
+            ticking = false
+        })
+    })
+
+    container.dataset.virtualBound = "true"
+}
+
+function setupBottomSeparatorCleaner() {
+    const container = document.getElementById("messagesContainer")
+    if (!container || container.dataset.separatorCleanerBound === "true") return
+
+    container.addEventListener("scroll", () => {
+        if (isUserAtBottom(container)) {
+            removeNewMessagesSeparator()
+        }
+    })
+
+    container.dataset.separatorCleanerBound = "true"
+}
+
+function showTopLoader() {
+    if (document.getElementById("topLoader")) return
+
+    const container = document.getElementById("messages")
+    if (!container) return
+
+    const div = document.createElement("div")
+    div.id = "topLoader"
+    div.className = "text-center text-xs text-gray-400 py-2"
+    div.innerText = "Cargando mensajes..."
+
+    container.prepend(div)
+}
+
+function hideTopLoader() {
+    const el = document.getElementById("topLoader")
+    if (el) el.remove()
+}
+
+// =========================
 // EMOJIS
-// --------------------
+// =========================
 function setupInputHandler() {
     const input = document.getElementById("messageInput")
 
@@ -590,9 +990,8 @@ function setupInputHandler() {
         input.removeEventListener("keydown", input._handleKeyDownRef)
     }
 
-    const handler = function(event) {
+    const handler = function (event) {
         if (event.key !== "Enter") return
-
         if (event.shiftKey) return
 
         event.preventDefault()
@@ -709,8 +1108,6 @@ function autoResize(el) {
     if (!el) return
 
     el.style.height = "auto"
-
     const newHeight = Math.min(el.scrollHeight, 120)
-
     el.style.height = `${newHeight}px`
 }

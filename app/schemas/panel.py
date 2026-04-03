@@ -28,6 +28,10 @@ class MessageResponse(BaseModel):
     content: str
     created_at: datetime
 
+    type: Optional[str] = None
+    media_url: Optional[str] = None
+    file_name: Optional[str] = None
+
 
 class PaginatedMessagesResponse(BaseModel):
     data: List[MessageResponse]

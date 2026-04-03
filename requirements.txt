@@ -13,3 +13,5 @@ httpx
 pydantic_settings
 apscheduler
 uvicorn[standard]
+requests
+python-multipart

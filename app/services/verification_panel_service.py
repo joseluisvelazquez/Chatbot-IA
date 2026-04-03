@@ -18,8 +18,6 @@ INACTIVITY_MINUTES = 30
 # --------------------------------------
 
 
-
-
 def build_verification_snapshot(
     db: Session,
     session: ChatSessions,
