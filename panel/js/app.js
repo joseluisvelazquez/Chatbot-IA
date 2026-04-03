@@ -74,16 +74,18 @@ export function startSessionTimeout() {
 const viewCache = {};
 let isNavigating = false;
 // ====== ESTADO TEMPORAL ======
-let selectedSessionId = null
+let selectedSession = null
 
-export function setSelectedSession(sessionId) {
-    selectedSessionId = sessionId
+export function setSelectedSession(session) {
+    selectedSession = session
+
+    if (session) {
+        localStorage.setItem("lastSession", JSON.stringify(session))
+    }
 }
 
-export function consumeSelectedSession() {
-    const id = selectedSessionId
-    selectedSessionId = null
-    return id
+export function getSelectedSession() {
+    return selectedSession
 }
 
 // =========================
@@ -437,14 +439,23 @@ export async function navigateTo(page, push = true) {
     if (!content) return;
 
     try {
+        if (page !== "conversations") {
+            const last = localStorage.getItem("lastSession")
+
+            if (last) {
+                try {
+                    setSelectedSession(JSON.parse(last))
+                } catch {}
+            }
+        }
         isNavigating = true;
 
         const url = new URL(window.location);
 
-        // 🔥 SIEMPRE SET VIEW
+        // SIEMPRE SET VIEW
         url.searchParams.set("view", page);
 
-        // 🔥 LIMPIAR PARAMS SOLO SI NO ES CHAT
+        // LIMPIAR PARAMS SOLO SI NO ES CHAT
         if (page !== "conversations") {
             url.searchParams.delete("session_id");
             url.searchParams.delete("phone");
@@ -467,7 +478,7 @@ export async function navigateTo(page, push = true) {
         await loadView(config.path);
 
         if (typeof config.init === "function") {
-            config.init();
+            await config.init();
         }
         
 
@@ -501,21 +512,24 @@ function bindEvents() {
         const btn = e.target.closest(".btn-primary");
 
         if (btn) {
+            const sessionId = btn.dataset.sessionId
+            const phone = btn.dataset.phone || null
 
-            const sessionId = btn.dataset.sessionId;
-
-            const url = new URL(window.location);
-
-            url.searchParams.set("view", "conversations");
+            const url = new URL(window.location)
+            url.searchParams.set("view", "conversations")
 
             if (sessionId) {
-                url.searchParams.set("session_id", sessionId);
+                url.searchParams.set("session_id", sessionId)
             }
 
-            window.history.pushState({}, "", url);
+            setSelectedSession({
+                sessionId: Number(sessionId),
+                phone
+            })
 
-            navigateTo("conversations", false);
-            return;
+            window.history.pushState({}, "", url)
+            navigateTo("conversations", false)
+            return
         }
     });
 }

@@ -18,6 +18,8 @@ from app.websockets.manager import manager
 from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message, FlowEvent
 from app.siga.siga_repository import obtener_venta_por_folio
 from app.security.auth_dependencies import get_current_panel_user
+from app.adapters.whatsapp_client import send_whatsapp_media
+from fastapi import Request
 
 from app.services.verification_panel_service import (
     classify_panel_status,
@@ -658,7 +660,7 @@ def get_messages(
 
     if not session:
         raise HTTPException(404, "La sesión no existe")
-    # 🔥 evita acceso cruzado
+    # evita acceso cruzado
     if user.empresa_id != 1:
         raise HTTPException(403, "No autorizado")
 
@@ -682,7 +684,10 @@ def get_messages(
                 id=m.id,
                 direction=m.direction,
                 content=m.content,
-                created_at=m.created_at
+                created_at=m.created_at,
+                type=m.type,
+                media_url=m.media_url,
+                file_name=m.file_name
             )
             for m in messages
         ],
@@ -779,5 +784,93 @@ async def send_agent_message(
             status_code=500,
             detail="Error enviando mensaje a WhatsApp"
         )
+
+    return {"status": "sent"}
+@router.post("/messages/file")
+async def send_agent_file(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    payload = await request.json()
+
+    print("📦 PAYLOAD:", payload)
+
+    session_id = payload.get("session_id")
+    media_url = payload.get("media_url")
+    file_name = payload.get("file_name")
+    media_type = payload.get("type")
+
+    if not session_id or not media_url or not media_type:
+        raise HTTPException(400, "Datos incompletos")
+
+    session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
+
+    if not session:
+        raise HTTPException(404, "Sesión no encontrada")
+
+    phone = session.phone
+
+    # =========================
+    # 💾 1. GUARDAR PRIMERO
+    # =========================
+    try:
+        message = Message(
+            session_id=session.id,
+            phone=phone,
+            direction="agent",
+            content="[MEDIA]",
+            type=media_type,
+            media_url=media_url,
+            file_name=file_name
+        )
+
+        db.add(message)
+        session.last_message_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(message)
+
+        print("✅ GUARDADO EN DB:", message.id)
+
+    except Exception as e:
+        db.rollback()
+        print("❌ ERROR DB:", e)
+        raise HTTPException(500, "Error guardando mensaje")
+
+    # =========================
+    # 📡 2. WEBSOCKET (INMEDIATO)
+    # =========================
+    await manager.send_to_all({
+        "type": "new_message",
+        "session_id": session.id,
+        "message": {
+            "id": message.id,
+            "direction": "agent",
+            "type": media_type,
+            "media_url": media_url,
+            "file_name": file_name,
+            "created_at": message.created_at.isoformat()
+        }
+    })
+
+    # =========================
+    # 📤 3. WHATSAPP (ASYNC)
+    # =========================
+    async def send_media_safe():
+        try:
+            print("📤 ENVIANDO MEDIA A WHATSAPP:", media_url)
+
+            await send_whatsapp_media(
+                phone=phone,
+                media_url=media_url,
+                media_type=media_type,
+                filename=file_name
+            )
+
+        except Exception as e:
+            print("❌ ERROR WHATSAPP:", e)
+
+    import asyncio
+    asyncio.create_task(send_media_safe())
 
     return {"status": "sent"}

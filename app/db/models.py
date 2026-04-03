@@ -819,9 +819,9 @@ class VentasDocumentos(Base):
 class Message(Base):
     __tablename__ = "messages"
 
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, index=True)
-    phone = Column(String(20), index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    session_id: Mapped[int] = mapped_column(Integer, index=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
 
     direction = Column(
         Enum("in", "out", "agent", name="message_direction"),
@@ -831,6 +831,10 @@ class Message(Base):
     content = Column(Text)
 
     message_id = Column(String(120), nullable=True)
+
+    type = Column(String(20), nullable=True)  # text, image, document
+    media_url = Column(Text, nullable=True)
+    file_name = Column(String(255), nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime,

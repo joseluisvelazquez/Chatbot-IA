@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     META_API_VERSION: str = "v24.0"
     METODOS_PAGO_IMAGE_ID: str | None = None
 
+    # ============================================================
+    # URL base para servir archivos
+    # ============================================================
+
+    MEDIA_BASE_URL: str
+
 
     # ============================================================
     # Base URL (propiedad dinámica)
