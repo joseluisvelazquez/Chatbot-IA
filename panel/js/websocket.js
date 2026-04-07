@@ -18,7 +18,7 @@ export function initWebSocket() {
     socket.onmessage = (event) => {
         const data = JSON.parse(event.data)
 
-        console.log("🔥 WS EVENT:", data)
+        console.log(" WS EVENT:", data)
 
         // -------------------------
         // 💬 MENSAJES

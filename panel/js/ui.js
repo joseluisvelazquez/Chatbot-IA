@@ -77,6 +77,9 @@ export function renderHeader(layout = "default") {
             </div>
 
             <div class="flex items-center gap-3">
+                <button onclick="logout()" class="text-sm text-red-400">
+                    Cerrar sesión
+                </button>
                 <button
                     type="button"
                     onclick="toggleTheme()"
@@ -103,6 +106,9 @@ export function renderHeader(layout = "default") {
             </div>
 
             <div class="flex items-center gap-3">
+                <button onclick="logout()" class="text-sm text-red-400">
+                    Cerrar sesión
+                </button>
                 <button onclick="toggleTheme()"
                     class="inline-flex h-8 w-10 items-center justify-center rounded-md
                     text-gray-700 dark:text-slate-200

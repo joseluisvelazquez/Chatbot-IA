@@ -606,6 +606,38 @@ class MotivosCancelacion(Base):
     id_emp_motivo: Mapped[Optional[int]] = mapped_column(Integer)
     motivo: Mapped[Optional[str]] = mapped_column(TEXT)
 
+class PanelSession(Base):
+    __tablename__ = "panel_sessions"
+    __table_args__ = (
+        Index("idx_panel_session_token", "session_id"),
+        Index("idx_panel_session_user", "username"),
+        Index("idx_panel_session_exp", "exp"),
+        Index("idx_panel_session_revoked", "revoked_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    session_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+
+    username: Mapped[str] = mapped_column(VARCHAR(120), nullable=False)
+    puesto: Mapped[str] = mapped_column(VARCHAR(120), nullable=False)
+    empresa_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(VARCHAR(30), nullable=False)
+
+    jti: Mapped[Optional[str]] = mapped_column(String(64))
+
+    exp: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    ip: Mapped[Optional[str]] = mapped_column(String(45))
+    user_agent: Mapped[Optional[str]] = mapped_column(Text)
+
+    revoked_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
 
 class PlanesPago(Base):
     __tablename__ = "planes_pago"

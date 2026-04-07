@@ -24,7 +24,7 @@ export async function apiRequest(endpoint, options = {}) {
                 detail = errorData.detail || detail;
             } catch (_) {}
 
-            // 🔥 MANEJO PRO
+            //  MANEJO PRO
             if (response.status === 401) {
                 renderSessionExpired()
                 throw new Error("Sesión expirada")
@@ -40,7 +40,7 @@ export async function apiRequest(endpoint, options = {}) {
         return await response.json();
 
     } catch (error) {
-        // 🔥 NETWORK ERROR
+        //  NETWORK ERROR
         if (error.message.includes("Failed to fetch")) {
             renderNetworkError()
         }

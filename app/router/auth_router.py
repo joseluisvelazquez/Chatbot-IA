@@ -10,9 +10,11 @@ from app.config.settings import settings
 from app.db.session import get_db
 from app.security.auth_dependencies import get_current_panel_user
 from app.security.auth_models import PanelUser
+
 from app.security.auth_service import (
-    create_panel_session_value,
+    create_panel_session,
     decode_siga_token,
+    revoke_panel_session,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -47,13 +49,11 @@ def _cookie_samesite() -> str:
 
 def _set_panel_session_cookie(response: Response, session_value: str, max_age: int) -> None:
     response.set_cookie(
-        key=_cookie_name(),
+        key="panel_session",
         value=session_value,
         httponly=True,
-        secure=False,
-        samesite="lax",   # 🔥 CAMBIO CLAVE
-        max_age=max_age,
-        path="/",
+        secure=False,   # correcto en dev
+        samesite="lax", # correcto
     )
 
 
@@ -65,9 +65,15 @@ def _clear_panel_session_cookie(response: Response) -> None:
 
 
 @router.post("/dev-login")
-def dev_login(request: Request, response: Response):
+def dev_login(request: Request, response: Response, db: Session = Depends(get_db)):
     if not settings.DEBUG:
-        raise HTTPException(status_code=403, detail="No permitido")
+        raise HTTPException(403, "No permitido")
+
+    host = request.headers.get("host", "")
+
+    if not host.startswith(("localhost", "127.0.0.1")):
+        raise HTTPException(403, "Solo localhost")
+    
 
     user = PanelUser(
         username="dev_user",
@@ -78,30 +84,36 @@ def dev_login(request: Request, response: Response):
         jti=None,
     )
 
-    session_value = create_panel_session_value(user)
-
-    _set_panel_session_cookie(
-        response=response,
-        session_value=session_value,
-        max_age=3600,
+    session_value = create_panel_session(
+        db,
+        user,
+        request.client.host,
+        request.headers.get("user-agent"),
     )
 
+    _set_panel_session_cookie(response, session_value, 3600)
+
+    db.commit()
     return {"status": "ok"}
 
 
 @router.post("/exchange", response_model=AuthUserResponse)
 def exchange_siga_token(
     body: ExchangeTokenRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
     try:
         user = decode_siga_token(body.token, db)
 
-        session_value = create_panel_session_value(user)
-
         now = int(time.time())
         remaining_seconds = max(user.exp - now, 1)
+
+        ip = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent")
+
+        session_value = create_panel_session(db, user, ip, user_agent)
 
         _set_panel_session_cookie(
             response=response,
@@ -123,7 +135,6 @@ def exchange_siga_token(
         db.rollback()
         raise
 
-
 @router.get("/me", response_model=AuthUserResponse)
 def get_me(user: PanelUser = Depends(get_current_panel_user)):
     return AuthUserResponse(
@@ -136,6 +147,17 @@ def get_me(user: PanelUser = Depends(get_current_panel_user)):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response):
+def logout(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    session_token = request.cookies.get(_cookie_name())
+
+    if session_token:
+        revoke_panel_session(session_token, db)
+        db.commit()
+
     _clear_panel_session_cookie(response)
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)

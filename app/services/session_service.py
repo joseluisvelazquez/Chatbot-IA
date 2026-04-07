@@ -20,7 +20,7 @@ def attach_folio_to_session(db, session, folio):
     if existing:
         return existing
 
-    # 🔥 crear nueva sesión con folio
+    #  crear nueva sesión con folio
     new_session = ChatSessions(
         phone=session.phone,
         folio=folio,

@@ -131,6 +131,10 @@ function removeLoading() {
 // AUTH
 // =========================
 export function renderSessionExpired() {
+    // limpiar estado
+    window.currentUser = null
+    localStorage.removeItem("lastSession")
+
     const root = document.getElementById("app")
 
     root.innerHTML = `
@@ -147,9 +151,10 @@ export function renderSessionExpired() {
                     Tu sesión ha expirado por seguridad.
                 </p>
 
-                <p class="text-xs text-slate-500">
-                    Tiempo máximo: 1 hora sin renovación.
-                </p>
+                <button onclick="location.reload()"
+                    class="mt-4 px-4 py-2 bg-green-500 text-black rounded-lg">
+                    Reingresar
+                </button>
 
             </div>
         </div>
@@ -209,6 +214,23 @@ function renderUnauthorized(message = "Debes acceder desde SIGA para continuar."
         </div>
     `
 }
+export async function logout() {
+    try {
+        await fetch(`${AUTH_BASE_URL}/api/auth/logout`, {
+            method: "POST",
+            credentials: "include"
+        })
+    } catch (e) {
+        console.warn("Logout error:", e)
+    }
+
+    // limpiar estado
+    window.currentUser = null
+    localStorage.removeItem("lastSession")
+
+    // reload limpio
+    window.location.href = "/"
+}
 async function initAuth() {
     const params = new URLSearchParams(window.location.search)
     const token = params.get("token")
@@ -237,7 +259,8 @@ async function initAuth() {
             // limpiar URL
             window.history.replaceState({}, document.title, window.location.pathname)
 
-        } else {
+        } else if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+            // SOLO localhost
             const res = await fetch(`${AUTH_BASE_URL}/api/auth/dev-login`, {
                 method: "POST",
                 credentials: "include"
@@ -247,6 +270,9 @@ async function initAuth() {
                 renderUnauthorized("Modo desarrollo no disponible")
                 return false
             }
+        } else {
+            renderUnauthorized("Debes acceder desde SIGA")
+            return false
         }
 
         // ----------------------------------------
@@ -571,3 +597,4 @@ window.addEventListener("popstate", () => {
     const view = params.get("view") || "verifications";
     navigateTo(view, false);
 });
+window.logout = logout; // para poder llamar desde HTML

@@ -1,5 +1,4 @@
 STEP_ORDER = [
-    "inicio",
     "folio",
     "nombre",
     "domicilio",

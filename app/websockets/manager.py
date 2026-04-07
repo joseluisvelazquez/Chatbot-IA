@@ -21,7 +21,7 @@ class ConnectionManager:
 
         for ws in self.active_connections:
             try:
-                await ws.send_json(message)  # 🔥 IMPORTANTE: await
+                await ws.send_json(message)  #  IMPORTANTE: await
             except Exception as e:
                 print("❌ Error enviando WS:", e)
                 dead_connections.append(ws)

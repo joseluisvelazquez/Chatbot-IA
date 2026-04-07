@@ -45,10 +45,10 @@ def log_flow_event(
         )
 
         db.add(event)
-        db.flush()  # 🔥 NO commit aquí
+        db.flush()  #  NO commit aquí
 
     except Exception:
-        # 🔥 nunca romper el flujo del chatbot
+        #  nunca romper el flujo del chatbot
         pass
     
 def is_verification_complete(payload: Dict[str, Any]) -> bool:

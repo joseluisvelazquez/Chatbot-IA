@@ -34,7 +34,7 @@ async def send_message(
 
     if not chat:
         return {"error": "session not found"}
-    # 🔥 VALIDACIÓN EMPRESA (mínimo control multi-tenant)
+    #  VALIDACIÓN EMPRESA (mínimo control multi-tenant)
     if user.empresa_id != 1:
         raise HTTPException(status_code=403, detail="Acceso no permitido")
 

@@ -33,7 +33,7 @@ async function loadFunnel() {
             return;
         }
 
-        const labels = data.map(item => item.state ?? "-");
+        const labels = data.map(item => item.step ?? "-");
         const values = data.map(item => item.total ?? 0);
 
         if (funnelChartInstance) {
