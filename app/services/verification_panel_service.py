@@ -24,7 +24,7 @@ def build_verification_snapshot(
 ) -> Optional[dict]:
 
     # -------------------------
-    # 1. Resolver no_cuenta (cacheado 🔥)
+    # 1. Resolver no_cuenta (cacheado )
     # -------------------------
     service = VerificationService(db)
 

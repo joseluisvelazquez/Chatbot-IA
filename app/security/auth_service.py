@@ -9,11 +9,13 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 from app.config.settings import settings
 from app.db.models import AuthToken
 from app.security.auth_models import PanelUser
-
+import secrets
+from app.db.models import PanelSession
 
 ROLE_MAP: dict[str, str] = {
     "GERENTE EJECUTIVO": "admin",
@@ -71,13 +73,28 @@ def _parse_signed_token(token: str) -> dict[str, Any]:
 
     try:
         encoded_payload, signature = token.split(".", 1)
-        payload_json = _b64url_decode(encoded_payload).decode("utf-8")
+
+        # usar EXACTAMENTE el payload recibido
+        payload_bytes = _b64url_decode(encoded_payload)
+        payload_json = payload_bytes.decode("utf-8")
+
     except Exception as exc:
         raise AuthError("Token mal formado") from exc
 
-    expected_signature = _sign_payload(payload_json, _get_shared_secret())
+    secret = _get_shared_secret()
+
+    # recalcular firma usando el JSON original (NO reconstruido)
+    expected_signature = hmac.new(
+        secret.encode("utf-8"),
+        payload_bytes,  #  CLAVE: usar bytes directos
+        hashlib.sha256,
+    ).hexdigest()
 
     if not hmac.compare_digest(signature, expected_signature):
+        print("❌ Firma inválida")
+        print("Payload:", payload_json)
+        print("Expected:", expected_signature)
+        print("Received:", signature)
         raise AuthError("Firma inválida")
 
     try:
@@ -87,6 +104,88 @@ def _parse_signed_token(token: str) -> dict[str, Any]:
 
     return payload
 
+def decode_panel_session(session_token: str, db: Session) -> PanelUser:
+    if not session_token:
+        raise AuthError("Sesión inválida")
+
+    row = (
+        db.query(PanelSession)
+        .filter(PanelSession.session_id == session_token)
+        .first()
+    )
+
+    if not row:
+        raise AuthError("Sesión no encontrada")
+
+    now = int(time.time())
+
+    if row.revoked_at is not None:
+        raise AuthError("Sesión cerrada")
+
+    if row.exp <= now:
+        raise AuthError("Sesión expirada")
+
+    return PanelUser(
+        username=row.username,
+        puesto=row.puesto,
+        empresa_id=row.empresa_id,
+        role=row.role,
+        exp=row.exp,
+        jti=row.jti,
+    )
+
+def create_panel_session_value(user: PanelUser) -> str:
+    payload = {
+        "user": user.username,
+        "puesto": user.puesto,
+        "empresa": user.empresa_id,
+        "role": user.role,
+        "exp": user.exp,
+        "jti": user.jti,
+    }
+    payload_json = _canonical_json(payload)
+    encoded_payload = _b64url_encode(payload_json.encode("utf-8"))
+    signature = _sign_payload(payload_json, _get_shared_secret())
+    return f"{encoded_payload}.{signature}"
+
+def revoke_panel_session(session_token: str, db: Session) -> None:
+    if not session_token:
+        return
+
+    row = (
+        db.query(PanelSession)
+        .filter(
+            PanelSession.session_id == session_token,
+            PanelSession.revoked_at.is_(None),
+        )
+        .first()
+    )
+
+    if row:
+        row.revoked_at = int(time.time())
+        db.flush()
+
+def create_panel_session(db: Session, user: PanelUser, ip: str | None, user_agent: str | None) -> str:
+    session_id = secrets.token_urlsafe(32)
+
+    row = PanelSession(
+        session_id=session_id,
+        username=user.username,
+        puesto=user.puesto,
+        empresa_id=user.empresa_id,
+        role=user.role,
+        jti=user.jti,
+        exp=user.exp,
+        ip=ip,
+        user_agent=user_agent,
+        revoked_at=None,
+        created_at=datetime.utcnow(),  # ✅ FIX
+    )
+
+    db.add(row)
+    db.flush()
+
+    return session_id
 
 def decode_siga_token(token: str, db: Session) -> PanelUser:
     """
@@ -110,6 +209,18 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
     empresa_raw = payload.get("empresa")
     exp_raw = payload.get("exp")
     jti = str(payload.get("jti", "")).strip()
+    print("JTI:", jti)
+
+    token_row = (
+        db.query(AuthToken)
+        .filter(AuthToken.jti == jti)
+        .first()
+    )
+
+    print("TOKEN_ROW:", token_row)
+
+    if token_row:
+        print("USED_AT:", token_row.used_at)
 
     if not username:
         raise AuthError("Token sin usuario")
@@ -131,8 +242,17 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
         raise AuthError("Expiración inválida") from exc
 
     now = int(time.time())
-    if exp <= now:
+
+    print("DIFF:", exp - now)
+    CLOCK_SKEW = 120  # 2 minutos
+
+    if exp <= now - CLOCK_SKEW:
+        
+        print("NOW:", now)
+        print("EXP:", exp)
         raise AuthError("Token expirado")
+
+    
 
     token_row = (
         db.query(AuthToken)
@@ -157,58 +277,6 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
         puesto=puesto,
         empresa_id=empresa_id,
         role=role,
-        exp=exp,
-        jti=jti,
-    )
-
-
-def create_panel_session_value(user: PanelUser) -> str:
-    payload = {
-        "user": user.username,
-        "puesto": user.puesto,
-        "empresa": user.empresa_id,
-        "role": user.role,
-        "exp": user.exp,
-        "jti": user.jti,
-    }
-    payload_json = _canonical_json(payload)
-    encoded_payload = _b64url_encode(payload_json.encode("utf-8"))
-    signature = _sign_payload(payload_json, _get_shared_secret())
-    return f"{encoded_payload}.{signature}"
-
-
-def decode_panel_session(session_token: str) -> PanelUser:
-    if not session_token or "." not in session_token:
-        raise AuthError("Sesión inválida")
-
-    payload = _parse_signed_token(session_token)
-
-    username = str(payload.get("user", "")).strip()
-    puesto = str(payload.get("puesto", "")).strip().upper()
-    role = str(payload.get("role", "viewer")).strip()
-    empresa_raw = payload.get("empresa")
-    exp_raw = payload.get("exp")
-    jti_raw = payload.get("jti")
-
-    if not username or not puesto:
-        raise AuthError("Sesión incompleta")
-
-    try:
-        empresa_id = int(empresa_raw)
-        exp = int(exp_raw)
-    except (TypeError, ValueError) as exc:
-        raise AuthError("Sesión inválida") from exc
-
-    if exp <= int(time.time()):
-        raise AuthError("Sesión expirada")
-
-    jti = str(jti_raw).strip() if jti_raw else None
-
-    return PanelUser(
-        username=username,
-        puesto=puesto,
-        empresa_id=empresa_id,
-        role=role,  # type: ignore[arg-type]
         exp=exp,
         jti=jti,
     )

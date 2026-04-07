@@ -1,13 +1,14 @@
-from __future__ import annotations
-
 from fastapi import Cookie, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
+from app.db.session import get_db
 from app.security.auth_models import PanelUser
 from app.security.auth_service import decode_panel_session
 
 
 def get_current_panel_user(
     panel_session: str | None = Cookie(default=None),
+    db: Session = Depends(get_db),
 ) -> PanelUser:
     if not panel_session:
         raise HTTPException(
@@ -15,7 +16,7 @@ def get_current_panel_user(
             detail="Sesión no iniciada",
         )
 
-    return decode_panel_session(panel_session)
+    return decode_panel_session(panel_session, db)
 
 
 def require_roles(*allowed_roles: str):
@@ -23,7 +24,7 @@ def require_roles(*allowed_roles: str):
         if user.role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="No autorizado para este recurso",
+                detail="No autorizado",
             )
         return user
 

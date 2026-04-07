@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # ============================================================
     # Base URL (propiedad dinámica)
     # ============================================================
+    
 
     @property
     def BASE_URL(self) -> str:
@@ -62,6 +63,7 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
+        print("ENV DEBUG:", self.DEBUG)
         return (
             f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
@@ -71,7 +73,10 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+    
 
 
 # Instancia global
+
 settings = Settings()
+

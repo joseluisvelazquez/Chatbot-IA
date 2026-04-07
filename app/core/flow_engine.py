@@ -148,7 +148,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                     previous_state=None,
                 )
     # --------------------------------------
-    # 🔥 LOG FLOW EVENT (CLAVE)
+    #  LOG FLOW EVENT (CLAVE)
     # --------------------------------------
     def _log():
         
@@ -268,6 +268,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             return verification_result
 
         session.folio = nuevo_folio
+        _try_mark_step("inicio")
         _try_mark_step("folio")
 
         _log()
@@ -283,7 +284,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------
     # Usuario escribe la inconsistencia
     # --------------------------------------
-    # 🔥 FIX COMPONENTES
+    #  FIX COMPONENTES
     
 
     if current_state == ChatState.ESCRIBIR_INCONSISTENCIA:
@@ -314,7 +315,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 }
             )
 
-        # 🔥 CASO FALLBACK (EL QUE TE FALTABA)
+        #  CASO FALLBACK (EL QUE TE FALTABA)
         _log()
         return FlowResult(
             reply="⚠️ No pude procesar tu mensaje. Intenta nuevamente.",
@@ -561,6 +562,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 current_state=next_state,
                 detected_intent=detected_intent,
             )
+            
 
 
     print(f"DEBUG: current_state={current_state}, detected_intent={detected_intent}, next_state={next_state}, previous_state={previous_state}")

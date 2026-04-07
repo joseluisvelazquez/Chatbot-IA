@@ -846,7 +846,7 @@ async function sendFile(file) {
 
         const data = await res.json()
 
-        // 🔥 NO render optimista para evitar duplicados con WS
+        //  NO render optimista para evitar duplicados con WS
         await apiRequest(`/panel/messages/file`, {
             method: "POST",
             headers: {

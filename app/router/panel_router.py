@@ -20,6 +20,7 @@ from app.siga.siga_repository import obtener_venta_por_folio
 from app.security.auth_dependencies import get_current_panel_user
 from app.adapters.whatsapp_client import send_whatsapp_media
 from fastapi import Request
+from app.services.verification_tracker import STEP_MAP
 
 from app.services.verification_panel_service import (
     classify_panel_status,
@@ -28,23 +29,21 @@ from app.services.verification_panel_service import (
     has_open_inconsistencia,
 )
 
-# ORDEN REAL DEL FLOW (ajústalo si cambias estados)
-FUNNEL_ORDER = [
-    "INICIO",
-    "CONFIRMAR_FOLIO",
-    "CONFIRMAR_NOMBRE",
-    "CONFIRMAR_DOMICILIO",
-    "CONFIRMAR_FECHA",
-    "CONFIRMAR_PRODUCTO",
-    "CONFIRMAR_ESTADO_PRODUCTO",
-    "CONFIRMAR_COMPONENTES",
-    "COMPONENTES_FALTANTES",
-    "CONFIRMAR_PAGO_INICIAL",
-    "INFO_PAGOS",
-    "INFO_METODOS_PAGO",
-    "INFO_PLAN_3_MESES",
-    "INFO_BENEFICIOS",
-    "FINALIZADO",
+# ORDEN REAL DEL FLOW 
+FUNNEL_STEPS = [
+    "folio",
+    "nombre",
+    "domicilio",
+    "fecha",
+    "producto",
+    "componentes",
+    "pagoInicial",
+    "pagos",
+    "bancos",
+    "plan3meses",
+    "planes",
+    "beneficios",
+    "finalizado",
 ]
 router = APIRouter(
     prefix="/api/panel",
@@ -56,14 +55,18 @@ router = APIRouter(
 # =========================================
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+
     session_token = websocket.cookies.get("panel_session")
 
     if not session_token:
         await websocket.close(code=1008)
         return
 
+    # crear sesión DB manual
+    db = next(get_db())
+
     try:
-        user = decode_panel_session(session_token)
+        user = decode_panel_session(session_token, db)  
     except Exception:
         await websocket.close(code=1008)
         return
@@ -95,6 +98,8 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=1011)
         except Exception:
             pass
+    finally:
+        db.close()  #importante
 # =========================================
 # Panel API: Marcar conversación como leída (RESET UNREAD COUNT)
 # =========================================
@@ -203,7 +208,7 @@ def dashboard_state_times(
     date_from = datetime.utcnow() - timedelta(days=days)
 
     # --------------------------------------
-    # 🔥 SUBQUERY: ordenar eventos por sesión
+    #  SUBQUERY: ordenar eventos por sesión
     # --------------------------------------
     events = (
         db.query(
@@ -253,7 +258,7 @@ def dashboard_state_times(
         last_event_per_session[session_id] = e
 
     # --------------------------------------
-    # 🔥 AGREGAR MÉTRICAS
+    #  AGREGAR MÉTRICAS
     # --------------------------------------
     result = []
 
@@ -279,7 +284,7 @@ def dashboard_state_times(
         })
 
     # --------------------------------------
-    # 🔥 ORDENAR POR TIEMPO PROMEDIO (cuellos de botella)
+    #  ORDENAR POR TIEMPO PROMEDIO (cuellos de botella)
     # --------------------------------------
     result_sorted = sorted(result, key=lambda x: x["avg_seconds"], reverse=True)
 
@@ -287,75 +292,77 @@ def dashboard_state_times(
         "range_days": days,
         "data": result_sorted
     }
-
 @router.get("/dashboard/funnel")
 def dashboard_funnel(
-    days: int = 7,  # 🔥 filtro de tiempo (últimos N días)
+    days: int = 7,
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),
 ):
-    # --------------------------------------
-    #  FILTRO DE TIEMPO
-    # --------------------------------------
     date_from = datetime.utcnow() - timedelta(days=days)
 
-    # --------------------------------------
-    #  SUBQUERY: PRIMERA VEZ POR ESTADO
-    # --------------------------------------
-    subquery = (
+    events = (
         db.query(
             FlowEvent.session_id,
             FlowEvent.to_state,
-            func.min(FlowEvent.created_at).label("first_time")
+            FlowEvent.created_at
         )
         .filter(
             FlowEvent.to_state.isnot(None),
             FlowEvent.created_at >= date_from
         )
-        .group_by(FlowEvent.session_id, FlowEvent.to_state)
-        .subquery()
-    )
-
-    # --------------------------------------
-    #  AGREGACIÓN FINAL
-    # --------------------------------------
-    results = (
-        db.query(
-            subquery.c.to_state,
-            func.count(func.distinct(subquery.c.session_id)).label("total")
-        )
-        .group_by(subquery.c.to_state)
         .all()
     )
 
     # --------------------------------------
-    #  MAPA PARA ACCESO RÁPIDO
+    # NORMALIZAR A STEPS
     # --------------------------------------
-    result_map = {r.to_state: r.total for r in results}
+    session_steps = {}
+
+    for e in events:
+        step = STEP_MAP.get(e.to_state)
+
+        if not step:
+            continue
+
+        if e.session_id not in session_steps:
+            session_steps[e.session_id] = {}
+
+        # guardar primera vez que llegó al step
+        if step not in session_steps[e.session_id]:
+            session_steps[e.session_id][step] = e.created_at
 
     # --------------------------------------
-    #  ORDENAR SEGÚN FLUJO
+    # CONTAR USUARIOS POR STEP
+    # --------------------------------------
+    step_counts = {step: 0 for step in FUNNEL_STEPS}
+
+    for steps in session_steps.values():
+        for step in steps.keys():
+            step_counts[step] += 1
+
+    # --------------------------------------
+    # CONSTRUIR FUNNEL ORDENADO
     # --------------------------------------
     funnel = []
 
-    for state in FUNNEL_ORDER:
+    for step in FUNNEL_STEPS:
         funnel.append({
-            "state": state,
-            "total": result_map.get(state, 0)
+            "step": step,
+            "total": step_counts.get(step, 0)
         })
 
     # --------------------------------------
-    #  DROP-OFF (SUPER IMPORTANTE)
+    # DROP-OFF
     # --------------------------------------
     for i in range(len(funnel)):
         current = funnel[i]["total"]
         next_val = funnel[i + 1]["total"] if i + 1 < len(funnel) else 0
 
-        drop_off = current - next_val if current > 0 else 0
-        conversion = (next_val / current * 100) if current > 0 else 0
-
-        funnel[i]["drop_off"] = drop_off
-        funnel[i]["conversion_pct"] = round(conversion, 2)
+        funnel[i]["drop_off"] = max(current - next_val, 0)
+        funnel[i]["conversion_pct"] = round(
+            (next_val / current * 100) if current > 0 else 0,
+            2
+        )
 
     return {
         "range_days": days,
