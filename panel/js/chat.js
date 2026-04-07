@@ -38,6 +38,9 @@ let paginationState = {
     hasMore: true
 }
 
+let searchTerm = ""
+let filterMode = "all" // "all" | "unread"
+
 // =========================
 // INIT
 // =========================
@@ -119,7 +122,8 @@ export async function initConversationsPage() {
 
         await loadChat(
             sessionIdNum,
-            selected.phone || sessionFromStore?.phone || ""
+            selected.phone || sessionFromStore?.phone || "",
+            selected.name || sessionFromStore?.name || null
         )
     } else {
         const firstId = state.conversations.order[0]
@@ -136,6 +140,7 @@ export async function initConversationsPage() {
         setupEmojiPicker()
         setupVirtualScroll()
         setupBottomSeparatorCleaner()
+        setupSearchAndFilters()
 
         const fileInput = document.getElementById("fileInput")
 
@@ -349,9 +354,24 @@ function renderSidebarFromState(state) {
     const list = document.getElementById("conversationList")
     if (!list) return
 
-    const sessions = state.conversations.order
+    let sessions = state.conversations.order
         .map(id => state.conversations.byId[id])
         .filter(Boolean)
+
+    // 🔍 FILTRO POR BÚSQUEDA
+    if (searchTerm) {
+        sessions = sessions.filter(s => {
+            const phone = s.phone?.toLowerCase() || ""
+            const name = s.name?.toLowerCase() || ""
+
+            return phone.includes(searchTerm) || name.includes(searchTerm)
+        })
+    }
+
+    // 🟢 FILTRO NO LEÍDOS
+    if (filterMode === "unread") {
+        sessions = sessions.filter(s => (s.unread_count || 0) > 0)
+    }
 
     const fragment = document.createDocumentFragment()
     const seen = new Set()
@@ -396,7 +416,7 @@ function createSidebarNode(s) {
             return
         }
 
-        await loadChat(s.id, s.phone)
+        await loadChat(s.id, s.phone, s.name)
     }
 
     return div
@@ -415,7 +435,7 @@ function updateSidebarNode(node, s) {
 
     node.innerHTML = `
         <div class="min-w-0">
-            <div class="font-semibold truncate">${s.phone}</div>
+            <div class="font-semibold truncate">${s.name || s.phone}</div>
             <div class="text-xs text-gray-500">${s.last_message_at ?? ""}</div>
         </div>
         ${s.unread_count > 0
@@ -548,11 +568,16 @@ function renderMessagesIncremental(state) {
 
     for (let i = 0; i < messages.length; i++) {
         const msg = normalizeMessage(messages[i])
-        const id = String(msg.id ?? `${msg.content ?? "media"}-${msg.created_at}`)
+        if (!msg.id) continue
+        const id = `msg-${msg.id}`
 
         if (renderedSet.has(id)) continue
 
-        const tempList = document.createElement("div")
+        if (document.querySelector(`[data-message-id="${id}"]`)) {
+            renderedSet.add(id)
+            continue
+        }
+
         const shouldShowNewSeparator =
             !wasAtBottom &&
             msg.direction === "in" &&
@@ -656,7 +681,8 @@ async function loadMoreMessages() {
 
         for (let i = 0; i < newMessages.length; i++) {
             const msg = normalizeMessage(newMessages[i])
-            const id = String(msg.id ?? `${msg.content ?? "media"}-${msg.created_at}`)
+            const id = msg.id ? `msg-${msg.id}` : null
+            if (!id) continue
 
             if (renderedSet.has(id)) continue
 
@@ -701,12 +727,12 @@ async function loadMoreMessages() {
 // =========================
 // LOAD CHAT
 // =========================
-export async function loadChat(sessionId, phone) {
+export async function loadChat(sessionId, phone, name = null) {
 
     const header = document.getElementById("chatHeader")
     const list = document.getElementById("messages")
 
-    if (isLoadingChat && currentSessionId === sessionId) return
+    if (isLoadingChat) return
 
     // solo evita recargar si la vista actual YA tiene renderizado ese chat
     const alreadyRendered =
@@ -724,19 +750,31 @@ export async function loadChat(sessionId, phone) {
     currentSessionId = Number(sessionId)
     setSelectedSession({
         sessionId: Number(sessionId),
-        phone
+        phone,
+        name
     })
     
     renderSidebarFromState(getState())
     isLoadingChat = true
+    const state = getState()
+    const sessionInfo = state.conversations.byId[Number(sessionId)]
+    const displayName = sessionInfo?.name || `+${phone}`
 
 
     try {
         if (header) {
             header.innerHTML = `
-                <div class="flex flex-col">
-                    <span class="font-semibold">+${phone}</span>
-                    <span class="text-xs text-gray-500">En conversación</span>
+                <div class="flex items-center justify-between w-full">
+                    
+                    <div class="flex flex-col">
+                        <span class="font-semibold text-sm">
+                            ${name || "+" + phone}
+                        </span>
+                        <span class="text-xs text-gray-400">
+                            ${name ? "+" + phone : "En conversación"}
+                        </span>
+                    </div>
+
                 </div>
             `
         }
@@ -775,18 +813,9 @@ export async function loadChat(sessionId, phone) {
                 }
             })
         }
-
         paginationState.offset = messagesList.length
         lastLoadedSessionId = sessionId
 
-        requestAnimationFrame(() => {
-            renderMessagesIncremental(getState())
-
-            const container = document.getElementById("messagesContainer")
-            if (container) {
-                container.scrollTop = container.scrollHeight
-            }
-        })
     } finally {
         isLoadingChat = false
     }
@@ -1110,4 +1139,56 @@ function autoResize(el) {
     el.style.height = "auto"
     const newHeight = Math.min(el.scrollHeight, 120)
     el.style.height = `${newHeight}px`
+}
+function setActiveFilter(activeBtn, inactiveBtn) {
+    // ACTIVO
+    activeBtn.classList.remove(
+        "bg-gray-200", "text-gray-700",
+        "dark:bg-slate-700", "dark:text-gray-300"
+    )
+    activeBtn.classList.add(
+        "bg-green-600", "text-white",
+        "dark:bg-green-500"
+    )
+
+    // INACTIVO
+    inactiveBtn.classList.remove(
+        "bg-green-600", "text-white",
+        "dark:bg-green-500"
+    )
+    inactiveBtn.classList.add(
+        "bg-gray-200", "text-gray-700",
+        "dark:bg-slate-700", "dark:text-gray-300"
+    )
+}
+
+function setupSearchAndFilters() {
+    const input = document.getElementById("searchInput")
+    const btnAll = document.getElementById("filterAll")
+    const btnUnread = document.getElementById("filterUnread")
+
+    if (input) {
+        input.addEventListener("input", (e) => {
+            searchTerm = e.target.value.toLowerCase().trim()
+            renderSidebarFromState(getState())
+        })
+    }
+
+    if (btnAll) {
+        btnAll.onclick = () => {
+            filterMode = "all"
+            setActiveFilter(btnAll, btnUnread)
+            renderSidebarFromState(getState())
+        }
+    }
+
+    if (btnUnread) {
+        
+
+        btnUnread.onclick = () => {
+            filterMode = "unread"
+            setActiveFilter(btnUnread, btnAll)
+            renderSidebarFromState(getState())
+        }
+    }
 }

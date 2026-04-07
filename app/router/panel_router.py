@@ -27,6 +27,7 @@ from app.services.verification_panel_service import (
     group_inconsistencias_by_folio,
     has_open_inconsistencia,
 )
+from app.db.models import BitacoraVentas
 
 # ORDEN REAL DEL FLOW (ajústalo si cambias estados)
 FUNNEL_ORDER = [
@@ -617,20 +618,58 @@ def get_conversations(
 
     sessions = (
         db.query(ChatSessions)
-
         .order_by(desc(ChatSessions.last_message_at))
         .offset(offset)
         .limit(limit)
         .all()
     )
+    
+    def normalize_phone(phone: str | None) -> str:
+        if not phone:
+            return ""
+
+        phone = str(phone).replace("+", "").strip()
+
+        if phone.startswith("52") and len(phone) > 10:
+            phone = phone[2:]
+
+        return phone[-10:]
+    
+    # teléfonos normalizados de sesiones
+    normalized_phones = list({
+        normalize_phone(s.phone)
+        for s in sessions
+        if s.phone
+    })
+
+    # QUERY MASIVA
+    ventas = (
+        db.query(BitacoraVentas.tel_1, BitacoraVentas.nombre_completo)
+        .filter(
+            func.right(BitacoraVentas.tel_1, 10).in_(normalized_phones),
+            BitacoraVentas.id_emp_bv == 1
+        )
+        .all()
+    )
+
+    phone_to_name = {}
+
+    for v in ventas:
+        if not v.tel_1:
+            continue
+
+        db_phone = normalize_phone(v.tel_1)
+        if db_phone and v.nombre_completo:
+            phone_to_name[db_phone] = v.nombre_completo.strip()
 
     return [
         ConversationResponse(
             id=s.id,
             phone=s.phone,
+            name=phone_to_name.get(normalize_phone(s.phone)),
             last_message=s.last_message,
             last_message_at=s.last_message_at,
-            unread_count=s.unread_count
+            unread_count=s.unread_count,
         )
         for s in sessions
     ]
@@ -649,8 +688,8 @@ def get_messages(
 
     # _: str = Depends(verify_api_key)
 ):
-    if limit > 200:
-        limit = 200
+    MAX_MESSAGES = 250
+    limit = min(limit, MAX_MESSAGES)
 
     session = (
         db.query(ChatSessions)
@@ -672,11 +711,12 @@ def get_messages(
 
     messages = (
         base_query
-        .order_by(asc(Message.created_at), asc(Message.id))
+        .order_by(desc(Message.id))
         .offset(offset)
         .limit(limit)
         .all()
     )
+    messages.reverse()
 
     return PaginatedMessagesResponse(
         data=[
@@ -692,7 +732,7 @@ def get_messages(
             for m in messages
         ],
         total=total,
-        has_more=(offset + limit) < total
+        has_more = total > limit
     )
 
 

@@ -1,17 +1,54 @@
-<div class="flex flex-1 h-full min-w-0 min-h-0 overflow-hidden">
+<div class="flex h-full w-full overflow-hidden">
 
     <!-- SIDEBAR -->
-    <div
-        id="conversationList"
-        class="w-80 shrink-0 overflow-y-auto 
-        bg-white dark:bg-slate-800 
+    <div class="w-80 shrink-0 flex flex-col
+        bg-white dark:bg-slate-800
         border-r border-gray-200 dark:border-slate-700"
-    ></div>
+    >
 
+        <!-- 🔍 BUSCADOR -->
+        <div class="p-3">
+            <input
+                id="searchInput"
+                placeholder="Buscar chat..."
+                class="w-full px-3 py-2 rounded-lg 
+                       bg-gray-100 dark:bg-slate-700
+                       text-black dark:text-white
+                       text-sm outline-none
+                       placeholder-gray-400"
+            />
+        </div>
+
+        <!-- 🔘 FILTROS -->
+        <div class="px-3 pb-2 flex gap-2">
+
+            <button id="filterAll"
+                class="filter-btn px-3 py-1 text-xs rounded-lg transition
+                    bg-green-600 text-white
+                    dark:bg-green-500 dark:text-white">
+                Todos
+            </button>
+
+            <button id="filterUnread"
+                class="filter-btn px-3 py-1 text-xs rounded-lg transition
+                    bg-gray-200 text-gray-700
+                    dark:bg-slate-700 dark:text-gray-300">
+                No leídos
+            </button>
+
+        </div>
+
+        <!-- 📋 LISTA -->
+        <div
+            id="conversationList"
+            class="flex-1 overflow-y-auto"
+        ></div>
+    </div>
+    
     <!-- CHAT -->
     <div class="flex-1 flex flex-col min-w-0 min-h-0">
 
-        <!-- HEADER CHAT -->
+        <!-- HEADER -->
         <div
             id="chatHeader"
             class="shrink-0 px-4 py-3 font-semibold
@@ -24,7 +61,7 @@
         <!-- MENSAJES -->
         <div
             id="messagesContainer"
-            class="flex-1 min-h-0 w-full overflow-y-auto
+            class="flex-1 min-h-0 overflow-y-auto
             bg-gray-100 dark:bg-slate-900 relative"
         >
             <div id="messagesSpacer"></div>
@@ -41,8 +78,8 @@
             bg-gray-50 dark:bg-slate-800
             border-t border-gray-200 dark:border-slate-700"
         >
-            <!-- 📎 BOTON FILE -->
-             <label
+            <!-- 📎 FILE -->
+            <label
                 class="h-[42px] w-[42px] flex items-center justify-center 
                 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
                 transition text-xl shrink-0 cursor-pointer"
@@ -51,7 +88,7 @@
                 <input id="fileInput" type="file" class="hidden" />
             </label>
         
-           <!-- BOTON EMOJI -->
+            <!-- 😊 EMOJI -->
             <button id="emojiBtn"
                 class="h-[42px] w-[42px] flex items-center justify-center 
                     rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
@@ -68,7 +105,7 @@
                 oninput="handleTyping(); autoResize(this)"
             ></textarea>
 
-            <!-- BOTON ENVIAR -->
+            <!-- ENVIAR -->
             <button onclick="send()"
                 class="h-[42px] px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg shrink-0">
                 Enviar
@@ -76,7 +113,7 @@
 
             <!-- EMOJI PICKER -->
             <div id="emojiPickerContainer"
-                class="hidden absolute bottom-16 left-2 w-[260px] h-[340px]
+                class="hidden absolute bottom-[60px] left-2 w-[260px] h-[340px]
                     bg-white dark:bg-slate-800
                     border border-gray-200 dark:border-slate-700
                     rounded-xl shadow-lg
@@ -84,11 +121,12 @@
 
                 <input id="emojiSearch"
                     placeholder="Buscar emoji..."
-                    class="h-8 mb-3 px-2 rounded border 
+                    class="h-8 mb-2 px-2 rounded border 
                         border-gray-300 dark:border-slate-600
                         bg-white dark:bg-slate-900
                         text-black dark:text-white
                         text-sm outline-none focus:border-green-500">
+
                 <div id="emojiGrid"
                     class="flex-1 grid grid-cols-8 gap-1 overflow-y-auto">
                 </div>
