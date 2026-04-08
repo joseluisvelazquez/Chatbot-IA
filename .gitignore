@@ -3,6 +3,9 @@
 *.dump
 *.bak
 
+# Media para las imagenes que se suben a la base de datos
+media/
+
 # Entornos
 .env
 venv/
