@@ -30,10 +30,7 @@ app.include_router(panel_send_router)
 app.include_router(auth_router)  
 app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
 
-BASE_DIR = Path(__file__).resolve().parent
-MEDIA_DIR = BASE_DIR / "media"
-
-app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+app.mount("/media", StaticFiles(directory="/app/media"), name="media")
 
 scheduler = BackgroundScheduler(timezone="UTC")
 

@@ -490,22 +490,36 @@ function createMessageNode(rawMsg, timeOverride = "") {
     if (mediaUrl) {
         if (msg.type === "image") {
             bodyContent = `
-                <img
-                    src="${mediaUrl}"
-                    class="max-w-[220px] rounded-lg cursor-pointer hover:opacity-90"
-                    onclick="window.open('${mediaUrl}', '_blank')"
-                    loading="lazy"
-                />
+                <div class="flex flex-col gap-1">
+                    <img
+                        src="${mediaUrl}"
+                        class="max-w-[220px] rounded-lg cursor-pointer hover:opacity-90"
+                        onclick="window.open('${mediaUrl}', '_blank')"
+                        loading="lazy"
+                    />
+                    ${
+                        msg.content
+                            ? `<span class="text-sm">${formatWhatsAppText(msg.content)}</span>`
+                            : ""
+                    }
+                </div>
             `
         } else {
             bodyContent = `
-                <a
-                    href="${mediaUrl}"
-                    target="_blank"
-                    class="flex items-center gap-2 text-blue-600 underline"
-                >
-                    📄 ${msg.file_name || "Archivo"}
-                </a>
+                <div class="flex flex-col gap-1">
+                    <a
+                        href="${mediaUrl}"
+                        target="_blank"
+                        class="flex items-center gap-2 text-blue-600 underline"
+                    >
+                        📄 ${msg.file_name || "Archivo"}
+                    </a>
+                    ${
+                        msg.content
+                            ? `<span class="text-sm">${formatWhatsAppText(msg.content)}</span>`
+                            : ""
+                    }
+                </div>
             `
         }
     } else {

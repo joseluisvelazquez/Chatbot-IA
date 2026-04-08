@@ -168,6 +168,10 @@ def revoke_panel_session(session_token: str, db: Session) -> None:
 def create_panel_session(db: Session, user: PanelUser, ip: str | None, user_agent: str | None) -> str:
     session_id = secrets.token_urlsafe(32)
 
+    SESSION_DURATION = 60 * 60 * 8  # 8 horas
+
+    now = int(time.time())
+
     row = PanelSession(
         session_id=session_id,
         username=user.username,
@@ -175,11 +179,11 @@ def create_panel_session(db: Session, user: PanelUser, ip: str | None, user_agen
         empresa_id=user.empresa_id,
         role=user.role,
         jti=user.jti,
-        exp=user.exp,
+        exp=now + SESSION_DURATION,  
         ip=ip,
         user_agent=user_agent,
         revoked_at=None,
-        created_at=datetime.utcnow(),  # ✅ FIX
+        created_at=datetime.utcnow(),
     )
 
     db.add(row)

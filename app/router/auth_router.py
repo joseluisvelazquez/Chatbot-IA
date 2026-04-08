@@ -107,8 +107,8 @@ def exchange_siga_token(
     try:
         user = decode_siga_token(body.token, db)
 
-        now = int(time.time())
-        remaining_seconds = max(user.exp - now, 1)
+        SESSION_DURATION = 60 * 60 * 8
+        remaining_seconds = SESSION_DURATION
 
         ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")

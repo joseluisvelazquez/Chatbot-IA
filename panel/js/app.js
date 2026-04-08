@@ -234,15 +234,10 @@ export async function logout() {
 async function initAuth() {
     const params = new URLSearchParams(window.location.search)
     const token = params.get("token")
-    console.log("initApp ejecutado")
 
-   
     try {
 
-        // ----------------------------------------
-        // 🔐 1. LOGIN (SIGA o DEV)
-        // ----------------------------------------
-
+        // 🔐 1. SI VIENE TOKEN → hacer exchange
         if (token) {
             const res = await fetch(`${AUTH_BASE_URL}/api/auth/exchange`, {
                 method: "POST",
@@ -258,9 +253,26 @@ async function initAuth() {
 
             // limpiar URL
             window.history.replaceState({}, document.title, window.location.pathname)
+        }
 
-        } else if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-            // SOLO localhost
+        // 🔐 2. SIEMPRE intentar validar sesión (cookie)
+        const me = await fetch(`${AUTH_BASE_URL}/api/auth/me`, {
+            credentials: "include"
+        })
+
+        if (me.ok) {
+            const user = await me.json()
+            window.currentUser = user
+
+            startSessionHeartbeat()
+            startSessionTimeout()
+
+            return true
+        }
+
+        // 🔐 3. SI NO hay sesión → fallback
+
+        if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
             const res = await fetch(`${AUTH_BASE_URL}/api/auth/dev-login`, {
                 method: "POST",
                 credentials: "include"
@@ -270,90 +282,32 @@ async function initAuth() {
                 renderUnauthorized("Modo desarrollo no disponible")
                 return false
             }
-        } else {
-            renderUnauthorized("Debes acceder desde SIGA")
-            return false
-        }
 
-        // ----------------------------------------
-        // 🔐 2. VALIDAR SESIÓN (CON TIMEOUT)
-        // ----------------------------------------
-
-        const controller = new AbortController()
-        const timeout = setTimeout(() => controller.abort(), 5000)
-
-        let me
-
-        try {
-            me = await fetch(`${AUTH_BASE_URL}/api/auth/me`, {
-                credentials: "include",
-                signal: controller.signal
+            const me2 = await fetch(`${AUTH_BASE_URL}/api/auth/me`, {
+                credentials: "include"
             })
-        } catch (err) {
-            if (err.name === "AbortError") {
-                renderNetworkError()
+
+            if (!me2.ok) {
+                renderUnauthorized("Error validando sesión")
                 return false
             }
-            throw err
-        } finally {
-            clearTimeout(timeout)
+
+            const user = await me2.json()
+            window.currentUser = user
+
+            startSessionHeartbeat()
+            startSessionTimeout()
+
+            return true
         }
 
-        // ----------------------------------------
-        // 🔐 3. RESPUESTAS DEL BACKEND
-        // ----------------------------------------
-
-        if (me.status === 401) {
-            renderSessionExpired()
-            return false
-        }
-
-        if (me.status === 403) {
-            renderUnauthorized("No tienes permisos")
-            return false
-        }
-
-        if (!me.ok) {
-            renderUnauthorized("Error validando sesión")
-            return false
-        }
-
-        // ----------------------------------------
-        // 👤 4. GUARDAR USUARIO
-        // ----------------------------------------
-
-        const user = await me.json()
-        window.currentUser = user
-
-        console.log("Usuario autenticado:", user)
-
-        // ----------------------------------------
-        // 🔁 5. INICIAR CONTROL DE SESIÓN
-        // ----------------------------------------
-
-        startSessionHeartbeat()
-        startSessionTimeout()
-
-        return true
+        // ❌ SI no hay token ni sesión → bloquear
+        renderUnauthorized("Debes acceder desde SIGA")
+        return false
 
     } catch (error) {
-
         console.error("Auth error:", error)
-
-        // ----------------------------------------
-        // 🌐 NETWORK ERROR
-        // ----------------------------------------
-
-        if (error.message.includes("Failed to fetch")) {
-            renderNetworkError()
-            return false
-        }
-
-        // ----------------------------------------
-        // ⚠️ ERROR GENERAL
-        // ----------------------------------------
-
-        renderUnauthorized("Error inesperado")
+        renderNetworkError()
         return false
     }
 }

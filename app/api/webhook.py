@@ -76,7 +76,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     text = data.get("text") or ""
     message_id = data.get("message_id")
     button_id = data.get("button_id")
-    content = "[MEDIA]" if is_media else (text if text else button_id)
+    content = text if text else (button_id if button_id else "[MEDIA]")
 
     print(
         "ABOUT TO PROCESS:",
@@ -108,7 +108,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                     session_id=chat.id,
                     phone=phone,
                     direction="in",
-                    content="[MEDIA]",
+                    content=text,
                     message_id=message_id,
                     type=media_msg.type,
                     media_url=media_msg.media_url,
