@@ -77,6 +77,8 @@ async def send_document(phone: str, url: str, filename="archivo.pdf"):
 
 
 async def send_buttons_with_image(phone: str, text: str, buttons: list, image_id: str):
+    header_image = {"link": image_id} if image_id.startswith("http") else {"id": image_id}
+
     return await _send(
         {
             "messaging_product": "whatsapp",
@@ -87,7 +89,7 @@ async def send_buttons_with_image(phone: str, text: str, buttons: list, image_id
                 "type": "button",
                 "header": {
                     "type": "image",
-                    "image": {"id": image_id}
+                    "image": header_image
                 },
                 "body": {"text": text},
                 "action": {"buttons": build_meta_buttons(buttons)},

@@ -1,6 +1,6 @@
 import pytest
-from app.core.intents import detect_intent
-from app.core.states import ChatState
+from app.core.intents.intents import detect_intent
+from app.core.states.states import ChatState
 
 
 def test_affirmative_simple():

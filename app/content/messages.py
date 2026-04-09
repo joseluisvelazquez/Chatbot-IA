@@ -6,6 +6,10 @@ ESPERA = (
     "En breve te contactaré nuevamente para brindarte más información."
 )
 
+MENU_AYUDA = (
+    "Estoy aquí para apoyarte. ¿Qué te gustaría hacer a continuación?"
+)
+
 INICIO = (
     "¡Ya volví!\n"
     "Vamos a confirmar algunos datos de tu compra.\n"
@@ -16,9 +20,7 @@ INICIO = (
 CONFIRMAR_NOMBRE = "📝 ¿Tu nombre completo es *{nombre_completo}*?"
 CONFIRMAR_DOMICILIO = "🏠 ¿Tu domicilio es *{domicilio_completo}*?"
 CONFIRMAR_FECHA = "📆 ¿El día en que suscribiste tu contrato fue el *{fecha_venta}*?"
-
-CONFIRMAR_PRODUCTO = "🖥️🖨️ ¿El producto que adquiriste es una/un *{nombre_producto}*?"
-
+CONFIRMAR_PRODUCTO = "🖥️🖨️ ¿El producto que adquiriste es {articulo} *{nombre_producto}*?"
 CONFIRMAR_ESTADO_PRODUCTO = "📦 ¿Recibiste en buen estado tu *{nombre_producto}*?"
 
 CONFIRMAR_COMPONENTES = (
@@ -58,7 +60,7 @@ INFO_PLAN_3_MESES_DESCUENTO = (
 
 INFO_PLAN_3_MESES = (
     "💲 El saldo de tu cuenta es de *${saldo_3_meses}*.\n\n"
-    "⏳ Tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) por *${importe_semanal_3m}*.\n\n"
+    "⏳ Si deseas liquidar en 3 meses, tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) por *${importe_semanal_3m}*.\n\n"
     "¿Tienes alguna duda respecto al plan de 3 meses?"
 )
 
@@ -88,9 +90,51 @@ INFO_BENEFICIOS2 = (
 
 FINALIZADO = "✅ Verificación completada. Gracias por tu tiempo."
 
-INCONSISTENCIA = (
+INCONSISTENCIA = "Entiendo. Por favor, indícame qué parte de la información está incorrecta."
+INCONSISTENCIA_NOMBRE = "Entiendo. ¿Me podrías escribir cómo es tu nombre correcto, por favor?"
+INCONSISTENCIA_DOMICILIO = "Entiendo. Para tenerlo registrado, ¿me podrías indicar brevemente qué dato falta o está equivocado en tu domicilio?"
+INCONSISTENCIA_FECHA = "Entiendo. ¿Me podrías indicar cuál es la fecha correcta de tu compra?"
+INCONSISTENCIA_PRODUCTO = "Entiendo. ¿Me podrías confirmar cómo se llama o qué marca es el producto que recibiste?"
+INCONSISTENCIA_ESTADO_PRODUCTO = "Lamento escuchar eso. ¿Me podrías describir brevemente cuál es el detalle o falla que presenta tu producto?"
+INCONSISTENCIA_PAGO_INICIAL = "Entiendo. ¿Cuál fue el importe exacto que diste de pago inicial?"
+
+FUERA_DE_FLUJO = (
     "💬 Gracias por tu mensaje.\n\n"
-    "Un asesor te contactará para resolver la inconsistencia."
+    "Fuera de flujo, un asesor te contactará para atender tu caso."
 )
 
 ACLARACION = "💬 Puedo ayudarte a aclarar tu duda o continuar el proceso."
+
+RECORDATORIO_1H = (
+    "👋🏼 Solo paso a recordarte que podemos continuar con tu verificación cuando gustes.\n\n"
+    "El proceso tarda menos de 5 minutos."
+)
+
+RECORDATORIO_2H = (
+    "⏰ Último recordatorio por ahora.\n\n"
+    "Cuando estés listo podemos continuar con tu verificación."
+)
+
+PREGUNTA_DUDA = "¡Claro que sí! Platícame, ¿qué duda tienes? Estoy aquí para apoyarte."
+PEDIR_FOLIO = "✏️ Por favor, envíame tu número de folio."
+PEDIR_FOLIO_INICIO = "✏️ Por favor indícame tu número de folio para comenzar."
+PEDIR_FOLIO_DEVOLUCION = "Para poder iniciar tu proceso de devolución, primero indícame tu número de folio, por favor."
+PEDIR_FOLIO_DESCUENTO = "Para poder darte mas detalles de tu cuenta, primero indícame tu número de folio, por favor."
+CONFIRMAR_FOLIO_DETECTADO = "🔎 Detecté tu folio: *{folio}*. ¿Es correcto?"
+FOLIO_NO_DETECTADO = "Lo siento, ese folio no parece estar registrado. Por favor intentalo de nuevo."
+FOLIO_NO_EXISTE = "🔍 ¡Ups! No logré localizar ese número de folio en mi sistema."
+CONTINUAR_VERIFICACION = "🔁 Continuemos con la verificación:"
+CONTINUAR_VERIFICACION_MENU = "🔁 Continuemos con la verificación."
+CORRECCION_REGISTRADA = "✅ Entendido, ya registré la corrección.\n\nContinuemos con la verificación."
+AYUDA_ALGO_MAS = "Entendido. ¿Te puedo ayudar con algo más?"
+EN_QUE_MAS_AYUDAR = "¿En qué más te puedo ayudar?"
+
+ESCALAMIENTO_CRITICO = "⚠️ Detectamos un detalle en la información.\n\nUn asesor revisará tu caso para ayudarte mejor."
+ESCALAMIENTO_MULTIPLES = "⚠️ Detectamos varias inconsistencias en la información.\n\nUn asesor revisará tu caso para ayudarte mejor."
+NO_ENTENDIDO = "No entendí completamente tu respuesta."
+ERROR_IA = "🤖 No pude procesar tu duda en este momento."
+VERIFICAR_FOTO_COMPONENTE = "Te envío una foto de referencia de: *{componente}*.\n\nPor favor revisa bien tu paquete, ¿estás absolutamente seguro de que NO lo recibiste?"
+CONFIRMAR_COMPONENTE_FALTANTE = "✅ Registrado. Confirmamos que te falta: *{componente}*\n\n¿Deseas reportar que faltó algún otro componente diferente?"
+FOTO_YA_LO_VI = "✅ ¡Qué bueno que lo encontraste!\n\n¿Deseas reportar que faltó algún otro componente diferente?"
+PEDIR_MOTIVO_DEVOLUCION = "Por favor indícanos el motivo de la devolución."
+DEVOLUCION_FINALIZADA = "Gracias por la información.\n\nUn asesor se pondrá en contacto contigo para continuar con el proceso de devolución."

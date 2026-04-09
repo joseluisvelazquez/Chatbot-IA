@@ -13,16 +13,25 @@ class Settings(BaseSettings):
     PHONE_NUMBER_ID: str
 
     # ============================================================
-    # Opcionales
+    # WhatsApp Cloud API (opcionales / IDs de Imágenes)
     # ============================================================
 
     META_API_VERSION: str = "v24.0"
     METODOS_PAGO_IMAGE_ID: str | None = None
-
+    
+    # IDs de imágenes para componentes
+    IMAGE_ID_CPU: str | None = None
+    IMAGE_ID_MONITOR: str | None = None
+    IMAGE_ID_TECLADO: str | None = None
+    IMAGE_ID_MOUSE: str | None = None
+    IMAGE_ID_BOCINAS: str | None = None
+    IMAGE_ID_REGULADOR: str | None = None
+    IMAGE_ID_WIFI: str | None = None
 
     # ============================================================
-    # Base URL (propiedad dinámica)
+    # Gemini API (obligatorias)
     # ============================================================
+    GEMINI_API_KEY: str
 
     @property
     def BASE_URL(self) -> str:

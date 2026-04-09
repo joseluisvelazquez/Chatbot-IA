@@ -1,7 +1,9 @@
-﻿from typing import Optional
+from typing import Optional
 import datetime
 import decimal
 import enum
+from sqlalchemy import Boolean, Text
+from sqlalchemy.dialects.mysql import JSON as MYSQL_JSON
 
 from sqlalchemy import (
     Column,
@@ -125,7 +127,8 @@ class BitacoraActualizacionResguardos(Base):
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
     )
-
+    devolucion = Column(Boolean, default=False)
+    motivo_devolucion = Column(Text, nullable=True)
 
 class BitacoraInventario(Base):
     __tablename__ = "bitacora_inventario"
@@ -284,6 +287,11 @@ class ChatSessions(Base):
     )
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     last_message_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
+    reminders = relationship("Reminder", back_populates="session")
+    ai_intent_attempts = Column(Integer, default=0)
+    ai_response_attempts = Column(Integer, default=0)
+    ai_inconsistency_attempts = Column(Integer, default=0)
+    invalid_folio_attempts = Column(Integer, default=0)
 
 
 class Clientes(Base):

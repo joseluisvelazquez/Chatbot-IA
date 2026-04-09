@@ -1,6 +1,6 @@
 import pytest
-from app.core.flow_engine import process_message
-from app.core.states import ChatState
+from app.core.flow.flow_engine import process_message
+from app.core.states.states import ChatState
 
 
 def test_binary_affirmative_transition():
@@ -39,7 +39,7 @@ def test_resume_previous_state():
 
 
 def test_out_of_flow_ai_respond(monkeypatch):
-    from app.core import flow_engine
+    from app.core.flow.flow import flow_engine
 
     def fake_ai(state, text):
         return {
