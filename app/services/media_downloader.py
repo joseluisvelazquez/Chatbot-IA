@@ -8,7 +8,7 @@ import requests
 from app.config.settings import settings
 
 # app/services/media_downloader.py -> subimos 2 niveles y caemos en /app
-MEDIA_DIR = Path("/app/media") # Ruta del docker
+MEDIA_DIR = Path.cwd() / "media" # Ruta del docker
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 GRAPH_API_VERSION = "v21.0"

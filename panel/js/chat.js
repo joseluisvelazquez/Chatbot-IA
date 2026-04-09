@@ -449,7 +449,13 @@ function updateSidebarNode(node, s) {
 // MENSAJES
 // =========================
 function createMessageNode(rawMsg, timeOverride = "") {
+
     const msg = normalizeMessage(rawMsg)
+
+    const cleanContent =
+        msg.content && msg.content !== "[MEDIA]"
+            ? msg.content
+            : null
 
     const wrapper = document.createElement("div")
     wrapper.className = "w-full flex opacity-0 translate-y-2 transition-all duration-300"
@@ -499,7 +505,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
                     />
                     ${
                         msg.content
-                            ? `<span class="text-sm">${formatWhatsAppText(msg.content)}</span>`
+                            ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
                             : ""
                     }
                 </div>
@@ -516,7 +522,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
                     </a>
                     ${
                         msg.content
-                            ? `<span class="text-sm">${formatWhatsAppText(msg.content)}</span>`
+                            ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
                             : ""
                     }
                 </div>
