@@ -3,6 +3,7 @@ services:
     volumes:
         - /etc/localtime:/etc/localtime:ro
         - /etc/timezone:/etc/timezone:ro
+        - ./media:/app/media
     build: .
     container_name: mxcomp_api
     ports:

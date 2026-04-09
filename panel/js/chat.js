@@ -449,7 +449,13 @@ function updateSidebarNode(node, s) {
 // MENSAJES
 // =========================
 function createMessageNode(rawMsg, timeOverride = "") {
+
     const msg = normalizeMessage(rawMsg)
+
+    const cleanContent =
+        msg.content && msg.content !== "[MEDIA]"
+            ? msg.content
+            : null
 
     const wrapper = document.createElement("div")
     wrapper.className = "w-full flex opacity-0 translate-y-2 transition-all duration-300"
@@ -490,22 +496,36 @@ function createMessageNode(rawMsg, timeOverride = "") {
     if (mediaUrl) {
         if (msg.type === "image") {
             bodyContent = `
-                <img
-                    src="${mediaUrl}"
-                    class="max-w-[220px] rounded-lg cursor-pointer hover:opacity-90"
-                    onclick="window.open('${mediaUrl}', '_blank')"
-                    loading="lazy"
-                />
+                <div class="flex flex-col gap-1">
+                    <img
+                        src="${mediaUrl}"
+                        class="max-w-[220px] rounded-lg cursor-pointer hover:opacity-90"
+                        onclick="window.open('${mediaUrl}', '_blank')"
+                        loading="lazy"
+                    />
+                    ${
+                        msg.content
+                            ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
+                            : ""
+                    }
+                </div>
             `
         } else {
             bodyContent = `
-                <a
-                    href="${mediaUrl}"
-                    target="_blank"
-                    class="flex items-center gap-2 text-blue-600 underline"
-                >
-                    📄 ${msg.file_name || "Archivo"}
-                </a>
+                <div class="flex flex-col gap-1">
+                    <a
+                        href="${mediaUrl}"
+                        target="_blank"
+                        class="flex items-center gap-2 text-blue-600 underline"
+                    >
+                        📄 ${msg.file_name || "Archivo"}
+                    </a>
+                    ${
+                        msg.content
+                            ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
+                            : ""
+                    }
+                </div>
             `
         }
     } else {

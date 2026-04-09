@@ -49,6 +49,7 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         media_id = None
         file_name = None
         unsupported = False
+        caption = None
 
         # --------------------------------------------------
         # TEXT
@@ -73,14 +74,18 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # IMAGE ✅
         # --------------------------------------------------
         elif message_type == "image":
-            media_id = message.get("image", {}).get("id")
+            image = message.get("image", {})
+            media_id = image.get("id")
+            caption = image.get("caption")
 
         # --------------------------------------------------
         # DOCUMENT ✅
         # --------------------------------------------------
         elif message_type == "document":
-            media_id = message.get("document", {}).get("id")
-            file_name = message.get("document", {}).get("filename")
+            document = message.get("document", {})
+            media_id = document.get("id")
+            file_name = document.get("filename")
+            caption = document.get("caption")
 
         # --------------------------------------------------
         # OTROS (audio, video, sticker, etc.)
@@ -92,7 +97,7 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "phone": phone,
             "message_id": message_id,
             "type": message_type,
-            "text": text,
+            "text": text or caption,
             "button_id": button_id,
             "media_id": media_id,
             "file_name": file_name,

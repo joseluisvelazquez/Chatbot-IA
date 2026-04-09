@@ -8,8 +8,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 router = APIRouter(prefix="/api/panel", tags=["media"])
 
 # app/router/media_router.py -> subimos 2 niveles y caemos en /app
-BASE_DIR = Path(__file__).resolve().parent.parent
-MEDIA_DIR = BASE_DIR / "media"
+MEDIA_DIR = Path("/app/media")
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 # MIME permitidos y extensión canónica

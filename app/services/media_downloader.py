@@ -8,8 +8,7 @@ import requests
 from app.config.settings import settings
 
 # app/services/media_downloader.py -> subimos 2 niveles y caemos en /app
-BASE_DIR = Path(__file__).resolve().parent.parent
-MEDIA_DIR = BASE_DIR / "media"
+MEDIA_DIR = Path.cwd() / "media" # Ruta del docker
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 GRAPH_API_VERSION = "v21.0"
@@ -91,12 +90,17 @@ def download_and_store(media_id: str) -> str:
     generated_name = f"{uuid4().hex}.{extension}"
     destination = MEDIA_DIR / generated_name
 
+    #Para pruebas locales, si el archivo ya existe
+    print("🧪 MEDIA_DIR:", MEDIA_DIR)
+    print("🧪 DESTINATION:", destination)
+
     try:
         with destination.open("wb") as output:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if not chunk:
                     continue
                 output.write(chunk)
+        print("🧪 ARCHIVO GUARDADO?", destination.exists())
     except Exception:
         destination.unlink(missing_ok=True)
         raise
