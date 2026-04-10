@@ -459,7 +459,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
     const msg = normalizeMessage(rawMsg)
 
     const cleanContent =
-        msg.content && msg.content !== "[MEDIA]"
+        msg.content && msg.content.trim() !== "" && msg.content !== "[MEDIA]"
             ? msg.content
             : null
 
@@ -510,7 +510,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
                         loading="lazy"
                     />
                     ${
-                        msg.content
+                        cleanContent
                             ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
                             : ""
                     }
@@ -518,20 +518,28 @@ function createMessageNode(rawMsg, timeOverride = "") {
             `
         } else {
             bodyContent = `
-                <div class="flex flex-col gap-1">
-                    <a
-                        href="${mediaUrl}"
-                        target="_blank"
-                        class="flex items-center gap-2 text-blue-600 underline"
-                    >
-                        📄 ${msg.file_name || "Archivo"}
-                    </a>
-                    ${
-                        msg.content
-                            ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
-                            : ""
-                    }
+                <div class="flex items-center gap-3 p-2 rounded-lg bg-gray-100 dark:bg-slate-600">
+
+                    <div class="w-10 h-10 flex items-center justify-center bg-red-500 text-white rounded-md text-xs font-bold">
+                        PDF
+                    </div>
+
+                    <div class="flex flex-col min-w-0">
+                        <span class="text-sm font-medium truncate">
+                            ${msg.file_name || "Archivo"}
+                        </span>
+                        <span class="text-xs text-gray-500 dark:text-gray-300">
+                            Documento
+                        </span>
+                    </div>
+
                 </div>
+
+                ${
+                    cleanContent
+                        ? `<span class="text-sm mt-1 block">${formatWhatsAppText(cleanContent)}</span>`
+                        : ""
+                }
             `
         }
     } else {
@@ -1263,6 +1271,9 @@ function setupSearchAndFilters() {
         }
     }
 }
+
+selectedFiles = selectedFiles.filter(Boolean)
+
 function renderMultiPreview() {
     const container = document.getElementById("filePreview")
     if (!container || selectedFiles.length === 0) return
@@ -1271,6 +1282,7 @@ function renderMultiPreview() {
     const mainUrl = URL.createObjectURL(mainFile)
 
     const isImage = mainFile.type.startsWith("image")
+    const isPDF = mainFile.type === "application/pdf"
 
     container.classList.remove("hidden")
 
@@ -1287,10 +1299,19 @@ function renderMultiPreview() {
                             class="w-full max-h-[420px] object-contain rounded-xl"
                         />
                     `
+                    : isPDF
+                    ? `
+                        <embed
+                            id="mainPreviewImage"
+                            src="${mainUrl}"
+                            type="application/pdf"
+                            class="w-full h-[420px] rounded-xl bg-white"
+                        />
+                    `
                     : `
                         <div 
                             id="mainPreviewImage"
-                            class="w-full max-w-[520px] h-[200px] flex items-center justify-center bg-gray-300 dark:bg-slate-700 rounded-xl text-sm"
+                            class="w-full max-w-[520px] h-[200px] flex flex-col items-center justify-center bg-gray-300 dark:bg-slate-700 rounded-xl text-sm"
                         >
                             📄 ${mainFile.name}
                         </div>
@@ -1317,17 +1338,37 @@ function renderMultiPreview() {
         const url = URL.createObjectURL(file)
         return `
             <div class="relative shrink-0 group">
-                <img
-                    src="${url}"
-                    data-thumb
-                    onclick="selectPreview(${i})"
-                    class="
-                        w-16 h-16 object-cover rounded-md cursor-pointer
-                        ${i === selectedPreviewIndex 
-                            ? "ring-2 ring-green-500" 
-                            : "opacity-70 hover:opacity-100"}
-                    "
-                />
+                ${file.type.startsWith("image") 
+                    ? `
+                        <img
+                            src="${url}"
+                            data-thumb
+                            onclick="selectPreview(${i})"
+                            class="
+                                w-16 h-16 object-cover rounded-md cursor-pointer
+                                ${i === selectedPreviewIndex 
+                                    ? "ring-2 ring-green-500" 
+                                    : "opacity-70 hover:opacity-100"}
+                            "
+                        />
+                    `
+                    : `
+                        <div
+                            data-thumb
+                            onclick="selectPreview(${i})"
+                            class="
+                                w-16 h-16 flex items-center justify-center
+                                bg-red-500 text-white text-xs font-bold
+                                rounded-md cursor-pointer
+                                ${i === selectedPreviewIndex 
+                                    ? "ring-2 ring-green-500" 
+                                    : "opacity-70 hover:opacity-100"}
+                            "
+                        >
+                            PDF
+                        </div>
+                    `
+                }
 
                 <button
                     onclick="removeFileAtIndex(${i})"
@@ -1342,17 +1383,38 @@ function renderMultiPreview() {
 
 
 function updatePreviewUI() {
-    const mainImg = document.getElementById("mainPreviewImage")
-    if (!mainImg) return
+    const container = document.getElementById("mainPreviewImage")
+    if (!container) return
 
     const file = selectedFiles[selectedPreviewIndex]
     if (!file) return
 
     const isImage = file.type.startsWith("image")
+    const isPDF = file.type === "application/pdf"
+
+    const newUrl = URL.createObjectURL(file)
+
     if (isImage) {
-        mainImg.src = URL.createObjectURL(file)
-    } else {
-        mainImg.outerHTML = `
+        container.outerHTML = `
+            <img 
+                id="mainPreviewImage"
+                src="${newUrl}" 
+                class="w-full max-h-[420px] object-contain rounded-xl"
+            />
+        `
+    } 
+    else if (isPDF) {
+        container.outerHTML = `
+            <embed
+                id="mainPreviewImage"
+                src="${newUrl}"
+                type="application/pdf"
+                class="w-full h-[420px] rounded-xl bg-white"
+            />
+        `
+    } 
+    else {
+        container.outerHTML = `
             <div 
                 id="mainPreviewImage"
                 class="w-full max-w-[520px] h-[200px] flex items-center justify-center bg-gray-300 dark:bg-slate-700 rounded-xl text-sm"

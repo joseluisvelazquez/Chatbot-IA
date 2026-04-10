@@ -74,7 +74,7 @@ async def send_file_message(
     # -----------------------
     # 💾 GUARDAR EN DB
     # -----------------------
-    content = payload.content or "[MEDIA]"
+    content = payload.content if payload.content and payload.content != "[MEDIA]" else None
 
     msg = Message(
         session_id=chat.id,
@@ -88,7 +88,7 @@ async def send_file_message(
 
     db.add(msg)
 
-    chat.last_message = "[MEDIA]"
+    chat.last_message = payload.content if payload.content else "📎 Archivo"
     chat.last_message_at = datetime.utcnow()
     chat.unread_count = 0
 
@@ -116,12 +116,13 @@ async def send_file_message(
     # 📤 WHATSAPP
     # -----------------------
     try:
+        caption = payload.content if payload.content and payload.content != "[MEDIA]" else None
         await send_whatsapp_media(
             phone=phone,
             media_url=payload.media_url,
             media_type=payload.type,
             filename=payload.file_name,
-            caption=payload.content
+            caption=caption
         )
     except Exception as e:
         print(f"[WHATSAPP ERROR] phone={phone} error={e}")
