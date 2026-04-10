@@ -53,6 +53,9 @@ export async function fetchVerifications(status = "") {
     const query = status ? `?status=${encodeURIComponent(status)}` : "";
     return apiRequest(`/panel/verifications${query}`);
 }
+export async function getVerificationBySession(sessionId) {
+    return apiRequest(`/panel/verifications/${sessionId}`);
+}
 export async function getConversations() {
     return apiRequest("/panel/conversations");
 }

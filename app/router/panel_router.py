@@ -14,6 +14,7 @@ from app.schemas.panel import (
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.db.session import get_db
 from app.security.auth_service import decode_panel_session
+from app.services.verification_service import VerificationService
 from app.websockets.manager import manager
 from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message, FlowEvent
 from app.siga.siga_repository import obtener_venta_por_folio
@@ -21,7 +22,7 @@ from app.security.auth_dependencies import get_current_panel_user
 from app.adapters.whatsapp_client import send_whatsapp_media
 from fastapi import Request
 from app.services.verification_tracker import STEP_MAP
-
+from app.utils.inconsistencias_serializer import serialize_inconsistencias
 from app.services.verification_panel_service import (
     classify_panel_status,
     compute_verification,
@@ -50,6 +51,7 @@ router = APIRouter(
     prefix="/api/panel",
     tags=["panel"]
 )
+
 
 # =========================================
 # Obtener Mensajes con el websocket
@@ -130,43 +132,6 @@ async def mark_as_read(
 
     return {"status": "ok"}
 
-def serialize_inconsistencias(inconsistencias: list[Inconsistencias]) -> list[dict]:
-    result: list[dict] = []
-
-    for inc in inconsistencias:
-        extra = inc.extra_json or {}
-        estatus = inc.estatus or "ABIERTA"
-
-        # 1) Campos normales con mensaje del cliente
-        for field_name, field_data in extra.items():
-            if not isinstance(field_data, dict):
-                continue
-
-            if field_name == "evento":
-                continue
-
-            # Caso: campos tipo nombre/domicilio/producto/fecha_venta
-            mensaje_cliente = field_data.get("mensaje_cliente")
-            confirmado = field_data.get("confirmado")
-
-            if confirmado is False or mensaje_cliente:
-                result.append({
-                    "campo": field_name,
-                    "mensaje": mensaje_cliente or "Sin detalle",
-                    "estado": estatus,
-                })
-                continue
-
-            # Caso: componentes faltantes
-            faltantes = field_data.get("faltantes")
-            if isinstance(faltantes, list) and faltantes:
-                result.append({
-                    "campo": field_name,
-                    "mensaje": f"Faltantes: {', '.join(str(x) for x in faltantes)}",
-                    "estado": estatus,
-                })
-
-    return result
 def resolve_cuentas_from_folios(folios: list[str], db: Session, user) -> dict:
     if user.empresa_id != 1:
         raise HTTPException(403, "No autorizado")
@@ -405,22 +370,17 @@ def dashboard_summary(
 # =========================================
 @router.get("/verifications")
 def get_verifications(
-    limit: int = 500,
+    limit: int = 100,
     offset: int = 0,
     status: str | None = None,
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),
 ):
-    flow_states = {
-        "INCONSISTENCIA",
-        "ESCRIBIR_INCONSISTENCIA",
-        "FUERA_DE_FLUJO",
-        "ACLARACION",
-        "LLAMADA",
-        "RECORDATORIO_1H",
-        "RECORDATORIO_2H",
-    }
-
+    # =========================
+    # 🔐 VALIDACIONES
+    # =========================
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
 
     valid_statuses = {
         None,
@@ -430,15 +390,19 @@ def get_verifications(
         "stalled",
         "completed",
     }
-    if status not in valid_statuses:
-        raise HTTPException(status_code=400, detail="status inválido")
 
-    if limit < 1:
-        raise HTTPException(status_code=400, detail="limit inválido")
+    if status not in valid_statuses:
+        raise HTTPException(400, "status inválido")
+
+    if limit < 1 or limit > 500:
+        raise HTTPException(400, "limit inválido")
 
     if offset < 0:
-        raise HTTPException(status_code=400, detail="offset inválido")
+        raise HTTPException(400, "offset inválido")
 
+    # =========================
+    # 📦 OBTENER SESIONES
+    # =========================
     sessions = (
         db.query(ChatSessions)
         .filter(ChatSessions.folio.isnot(None))
@@ -449,11 +413,10 @@ def get_verifications(
     )
 
     total = (
-        db.query(ChatSessions)
+        db.query(func.count(ChatSessions.id))
         .filter(ChatSessions.folio.isnot(None))
-        .count()
+        .scalar()
     )
-    
 
     if not sessions:
         return {
@@ -462,14 +425,61 @@ def get_verifications(
             "has_more": False,
         }
 
-    folios = [str(session.folio) for session in sessions if session.folio]
+    # =========================
+    # 🧠 HELPERS
+    # =========================
+    def normalize_phone(phone: str | None) -> str:
+        if not phone:
+            return ""
+        phone = str(phone).replace("+", "").strip()
+        if phone.startswith("52") and len(phone) > 10:
+            phone = phone[2:]
+        return phone[-10:]
+    
+    def build_siga_url(no_cuenta: str | None, folio: str | None) -> str | None:
+        if no_cuenta:
+            return f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}"
 
+        if folio:
+            return f"https://siga.mxcomp.com.mx/ventas/{folio}"
+
+        return None
+
+    # =========================
+    # 📞 RESOLVER NOMBRES (BATCH)
+    # =========================
+    normalized_phones = list({
+        normalize_phone(s.phone)
+        for s in sessions
+        if s.phone
+    })
+
+    ventas = (
+        db.query(BitacoraVentas.tel_1, BitacoraVentas.nombre_completo)
+        .filter(
+            func.right(BitacoraVentas.tel_1, 10).in_(normalized_phones),
+            BitacoraVentas.id_emp_bv == 1
+        )
+        .all()
+    )
+
+    phone_to_name = {}
+    for v in ventas:
+        if not v.tel_1:
+            continue
+
+        db_phone = normalize_phone(v.tel_1)
+        if db_phone and v.nombre_completo:
+            phone_to_name[db_phone] = v.nombre_completo.strip()
+
+    # =========================
+    # 🔗 FOLIOS → CUENTAS
+    # =========================
+    folios = [str(s.folio) for s in sessions if s.folio]
     folio_to_no_cuenta = resolve_cuentas_from_folios(folios, db, user)
 
     no_cuentas = [
-        no_cuenta
-        for no_cuenta in folio_to_no_cuenta.values()
-        if no_cuenta is not None
+        nc for nc in folio_to_no_cuenta.values() if nc is not None
     ]
 
     verificaciones = []
@@ -481,11 +491,14 @@ def get_verifications(
         )
 
     verification_map = {
-        str(item.no_cuenta): item
-        for item in verificaciones
-        if getattr(item, "no_cuenta", None) is not None
+        str(v.no_cuenta): v
+        for v in verificaciones
+        if v.no_cuenta
     }
 
+    # =========================
+    # ⚠️ INCONSISTENCIAS (BATCH)
+    # =========================
     inconsistencias = (
         db.query(Inconsistencias)
         .filter(Inconsistencias.folio.in_(folios))
@@ -494,7 +507,21 @@ def get_verifications(
 
     inconsistencias_by_folio = group_inconsistencias_by_folio(inconsistencias)
 
+    # =========================
+    # 🔄 ARMADO FINAL
+    # =========================
     result = []
+
+    flow_states = {
+        "INCONSISTENCIA",
+        "ESCRIBIR_INCONSISTENCIA",
+        "FUERA_DE_FLUJO",
+        "ACLARACION",
+        "LLAMADA",
+        "RECORDATORIO_1H",
+        "RECORDATORIO_2H",
+    }
+    
 
     for session in sessions:
         folio = str(session.folio)
@@ -502,6 +529,7 @@ def get_verifications(
 
         verification = verification_map.get(no_cuenta) if no_cuenta else None
         progress = verification.json if verification else {}
+
         verification_data = compute_verification(progress)
 
         current_step = verification_data["current_step"]
@@ -509,9 +537,8 @@ def get_verifications(
         if session.state in flow_states and session.previous_state:
             current_step = session.previous_state.lower()
 
-        
-
         inconsistencias_folio = inconsistencias_by_folio.get(folio, [])
+
         open_inconsistencia = has_open_inconsistencia(inconsistencias_folio)
 
         panel_status = classify_panel_status(
@@ -521,12 +548,12 @@ def get_verifications(
             requires_human=False,
         )
 
-
         serialized_inconsistencias = serialize_inconsistencias(inconsistencias_folio)
 
         item = {
             "session_id": session.id,
             "folio": folio,
+            "name": phone_to_name.get(normalize_phone(session.phone)),
             "no_cuenta": no_cuenta,
             "phone": session.phone,
             "status": panel_status,
@@ -537,6 +564,7 @@ def get_verifications(
             "confirmed_count": verification_data["progress_count"],
             "total_steps": verification_data["total_steps"],
             "last_activity": session.last_message_at,
+            "siga_url": build_siga_url(no_cuenta, folio),
         }
 
         if status and item["status"] != status:
@@ -555,23 +583,37 @@ def get_verification_by_session(
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),
 ):
+    # =========================
+    # 🔐 VALIDACIÓN
+    # =========================
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
+
     session = (
         db.query(ChatSessions)
         .filter(ChatSessions.id == session_id)
         .first()
     )
 
-    if not session:
-        raise HTTPException(404, "Sesión no encontrada")
-
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
+    if not session or not session.folio:
+        raise HTTPException(404, "Verificación no encontrada")
 
     folio = str(session.folio)
-    folio_map = resolve_cuentas_from_folios([folio], db, user)
-    no_cuenta = folio_map.get(folio)
 
+    # =========================
+    # 🧠 RESOLVER no_cuenta
+    # =========================
+    service = VerificationService(db)
+
+    no_cuenta = service.resolve_no_cuenta_from_folio(str(session.folio)) if session.folio else None
+
+
+    # =========================
+    # 🧾 VERIFICACIÓN
+    # =========================
     verification = None
+    progress = {}
+
     if no_cuenta:
         verification = (
             db.query(VerificacionCuenta)
@@ -579,34 +621,74 @@ def get_verification_by_session(
             .first()
         )
 
-    progress = verification.json if verification else {}
+    if verification:
+        progress = verification.json or {}
+
     verification_data = compute_verification(progress)
 
+    # =========================
+    # ⚠️ INCONSISTENCIAS
+    # =========================
     inconsistencias = (
         db.query(Inconsistencias)
         .filter(Inconsistencias.folio == folio)
         .all()
     )
 
-    inconsistencias_grouped = group_inconsistencias_by_folio(inconsistencias)
-    inconsistencias_folio = inconsistencias_grouped.get(folio, [])
+    serialized_inconsistencias = serialize_inconsistencias(inconsistencias)
 
+    open_inconsistencia = any(
+        i["estado"] == "ABIERTA" for i in serialized_inconsistencias
+    )
+
+    # =========================
+    # 📊 STATUS
+    # =========================
     panel_status = classify_panel_status(
         verification_data=verification_data,
-        has_open_inconsistencia=has_open_inconsistencia(inconsistencias_folio),
+        has_open_inconsistencia=open_inconsistencia,
         last_activity=session.last_message_at,
         requires_human=False,
     )
 
+    # =========================
+    # 🧠 STEP CORRECTO
+    # =========================
+    current_step = verification_data["current_step"]
+
+    flow_states = {
+        "INCONSISTENCIA",
+        "ESCRIBIR_INCONSISTENCIA",
+        "FUERA_DE_FLUJO",
+        "ACLARACION",
+        "LLAMADA",
+        "RECORDATORIO_1H",
+        "RECORDATORIO_2H",
+    }
+
+    if session.state in flow_states and session.previous_state:
+        current_step = session.previous_state.lower()
+
+    # =========================
+    # 📦 RESPONSE FINAL
+    # =========================
     return {
         "session_id": session.id,
         "folio": folio,
+        "name": None,  # opcional: puedes resolverlo igual que conversations
         "no_cuenta": no_cuenta,
         "phone": session.phone,
+
         "status": panel_status,
         "progress_pct": verification_data["progress_pct"],
-        "current_step": verification_data["current_step"],
-        "inconsistencias_count": len(inconsistencias_folio),
+        "current_step": current_step,
+
+        "inconsistencias": serialized_inconsistencias,
+        "inconsistencias_count": len(serialized_inconsistencias),
+
+        "confirmed_count": verification_data["progress_count"],
+        "total_steps": verification_data["total_steps"],
+
         "last_activity": session.last_message_at,
     }
 # =========================================
