@@ -21,6 +21,7 @@ class SendFileRequest(BaseModel):
     media_url: str
     file_name: str | None = None
     type: str  # image | document
+    content: str | None = None
 
 @router.post("/send")
 async def send_message(
@@ -73,11 +74,13 @@ async def send_file_message(
     # -----------------------
     # 💾 GUARDAR EN DB
     # -----------------------
+    content = payload.content if payload.content and payload.content != "[MEDIA]" else None
+
     msg = Message(
         session_id=chat.id,
         phone=phone,
         direction="agent",
-        content="[MEDIA]",
+        content=content,
         type=payload.type,
         media_url=payload.media_url,
         file_name=payload.file_name
@@ -85,7 +88,7 @@ async def send_file_message(
 
     db.add(msg)
 
-    chat.last_message = "[MEDIA]"
+    chat.last_message = payload.content if payload.content else "📎 Archivo"
     chat.last_message_at = datetime.utcnow()
     chat.unread_count = 0
 
@@ -100,7 +103,7 @@ async def send_file_message(
         "session_id": chat.id,
         "message": {
             "id": msg.id,
-            "content": None,
+            "content": msg.content,
             "direction": "agent",
             "type": payload.type,
             "media_url": payload.media_url,
@@ -113,11 +116,13 @@ async def send_file_message(
     # 📤 WHATSAPP
     # -----------------------
     try:
+        caption = payload.content if payload.content and payload.content != "[MEDIA]" else None
         await send_whatsapp_media(
             phone=phone,
             media_url=payload.media_url,
             media_type=payload.type,
-            filename=payload.file_name
+            filename=payload.file_name,
+            caption=caption
         )
     except Exception as e:
         print(f"[WHATSAPP ERROR] phone={phone} error={e}")

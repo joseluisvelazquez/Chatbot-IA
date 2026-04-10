@@ -942,12 +942,17 @@ async def send_agent_file(
     # =========================
     # 💾 1. GUARDAR PRIMERO
     # =========================
+    content = payload.get("content")
+
+    if not content or content == "[MEDIA]":
+        content = "[MEDIA]"
+
     try:
         message = Message(
             session_id=session.id,
             phone=phone,
             direction="agent",
-            content="[MEDIA]",
+            content=content,
             type=media_type,
             media_url=media_url,
             file_name=file_name
@@ -974,6 +979,7 @@ async def send_agent_file(
         "session_id": session.id,
         "message": {
             "id": message.id,
+            "content": message.content,
             "direction": "agent",
             "type": media_type,
             "media_url": media_url,
@@ -989,10 +995,13 @@ async def send_agent_file(
         try:
             print("📤 ENVIANDO MEDIA A WHATSAPP:", media_url)
 
+            caption = message.content if message.content else None
+
             await send_whatsapp_media(
                 phone=phone,
                 media_url=media_url,
                 media_type=media_type,
+                caption=caption,
                 filename=file_name
             )
 
