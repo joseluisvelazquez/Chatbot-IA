@@ -202,6 +202,29 @@ export function dispatch(action) {
             upsertVerification(action.payload)
             break
         }
+        case "verifications/patch": {
+            const session_id = String(action.payload.session_id)
+            const changes = action.payload.changes
+
+            const current = state.verifications.bySessionId[session_id]
+            if (!current) break
+
+            // MUTAR ESTADO REAL
+            state.verifications.bySessionId[session_id] = {
+                ...current,
+                ...changes
+            }
+
+            if (state.verifications.selected?.session_id == session_id) {
+                state.verifications.selected = updated
+            }
+
+            break
+        }
+        case "verifications/select": {
+            state.verifications.selected = String(action.payload)
+            break
+        }
 
         default:
             return

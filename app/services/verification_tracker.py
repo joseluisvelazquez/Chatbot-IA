@@ -10,15 +10,19 @@ STEP_MAP = {
     ChatState.CONFIRMAR_DOMICILIO: "domicilio",
     ChatState.CONFIRMAR_FECHA: "fecha",
     ChatState.CONFIRMAR_PRODUCTO: "producto",
+
     ChatState.CONFIRMAR_COMPONENTES: "componentes",
     ChatState.CONFIRMAR_ESTADO_PRODUCTO: "componentes",
+
     ChatState.CONFIRMAR_PAGO_INICIAL: "pagoInicial",
     ChatState.INFO_PAGOS: "pagos",
     ChatState.INFO_PLAN_3_MESES: "plan3meses",
     ChatState.INFO_OTROS_PLANES: "planes",
     ChatState.INFO_METODOS_PAGO: "bancos",
+
     ChatState.INFO_BENEFICIOS: "beneficios",
     ChatState.INFO_BENEFICIOS2: "beneficios",
+    
     ChatState.FINALIZADO: "finalizado",
 
 }

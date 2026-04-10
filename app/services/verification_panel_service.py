@@ -4,91 +4,74 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, Optional
 
+from sqlalchemy.orm import Session
+
 from app.core.verification_steps import STEP_ORDER
 from app.core.verification_schema import normalize_progress_payload
 from app.siga.siga_repository import obtener_venta_por_folio
-from sqlalchemy.orm import Session
 from app.services.verification_service import VerificationService
 from app.db.models import ChatSessions, VerificacionCuenta, Inconsistencias
+from app.utils.inconsistencias_serializer import serialize_inconsistencias
 
 INACTIVITY_MINUTES = 30
-
-# --------------------------------------
-# 🧠 SNAPSHOT PARA PANEL / WEBSOCKET
-# --------------------------------------
 
 
 def build_verification_snapshot(
     db: Session,
     session: ChatSessions,
 ) -> Optional[dict]:
-
-    # -------------------------
-    # 1. Resolver no_cuenta (cacheado )
-    # -------------------------
     service = VerificationService(db)
 
-    no_cuenta = service.resolve_no_cuenta_from_folio(str(session.folio)) if session.folio else None
+    no_cuenta = (
+        service.resolve_no_cuenta_from_folio(str(session.folio))
+        if session.folio
+        else None
+    )
 
     if not no_cuenta:
         return None
 
-    # -------------------------
-    # 2. Obtener verificación
-    # -------------------------
-    verif = db.query(VerificacionCuenta).filter(
-        VerificacionCuenta.no_cuenta == no_cuenta
-    ).first()
+    verif = (
+        db.query(VerificacionCuenta)
+        .filter(VerificacionCuenta.no_cuenta == no_cuenta)
+        .first()
+    )
 
     if not verif:
         return None
 
     progress_json = verif.json or {}
-
-    # -------------------------
-    # 3. Calcular métricas (YA EXISTENTE ✔)
-    # -------------------------
     verification_data = compute_verification(progress_json)
 
-    # -------------------------
-    # 4. Inconsistencias (agrupadas por folio)
-    # -------------------------
-    inconsistencias = db.query(Inconsistencias).filter(
-        Inconsistencias.folio == str(session.folio),
-        Inconsistencias.estatus == "ABIERTA"
+    inconsistencias = (
+        db.query(Inconsistencias)
+        .filter(Inconsistencias.folio == str(session.folio))
+        .all()
     )
 
-    grouped = group_inconsistencias_by_folio(inconsistencias)
-    items = grouped.get(str(session.folio), [])
+    serialized_inconsistencias = serialize_inconsistencias(inconsistencias)
+    open_inconsistencia = has_open_inconsistencia(serialized_inconsistencias)
 
-    open_inconsistencia = has_open_inconsistencia(items)
-
-    # -------------------------
-    # 5. Clasificar estado (YA EXISTENTE ✔)
-    # -------------------------
     status = classify_panel_status(
         verification_data=verification_data,
         has_open_inconsistencia=open_inconsistencia,
         last_activity=session.last_message_at,
-        requires_human=False,  # luego puedes conectar esto
+        requires_human=False,
     )
 
-    # -------------------------
-    # 6. Construir snapshot final
-    # -------------------------
     return {
         "session_id": session.id,
         "folio": str(session.folio) if session.folio else "",
         "phone": session.phone,
         "no_cuenta": no_cuenta,
-
         "status": status,
         "progress_pct": verification_data["progress_pct"],
         "current_step": verification_data["current_step"],
-        "inconsistencias_count": len(items),
-
+        "inconsistencias": serialized_inconsistencias,
+        "inconsistencias_count": len(serialized_inconsistencias),
         "last_activity": session.last_message_at.isoformat()
-        if session.last_message_at else "",
+        if session.last_message_at
+        else "",
     }
 def compute_verification(progress: Optional[Dict[str, int]]) -> Dict[str, Any]:
     normalized = normalize_progress_payload(progress or {})
@@ -194,18 +177,22 @@ def group_inconsistencias_by_folio(inconsistencias: Iterable[Any]) -> Dict[str, 
 
     return grouped
 
-
 def has_open_inconsistencia(items: list[Any]) -> bool:
     if not items:
         return False
 
     for item in items:
-        # Ajusta este bloque si tu modelo usa otro nombre de campo
-        if hasattr(item, "activa"):
-            if bool(getattr(item, "activa")):
+        if isinstance(item, dict):
+            if (item.get("estado") or "").upper() == "ABIERTA":
                 return True
-        else:
-            # Si no existe bandera de cierre, asumimos activa
+            continue
+
+        estatus = getattr(item, "estatus", None)
+        if isinstance(estatus, str) and estatus.upper() == "ABIERTA":
+            return True
+
+        activa = getattr(item, "activa", None)
+        if activa is True:
             return True
 
     return False

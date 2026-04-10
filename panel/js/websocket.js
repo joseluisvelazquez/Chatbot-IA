@@ -1,7 +1,15 @@
 import { dispatch } from "./store.js" 
+import { getVerificationBySession } from "../js/api.js"
 let socket = null
 let listeners = new Set()
+
+const pendingRefetch = new Map()
+
+
 export function initWebSocket() {
+    
+
+    
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
         return socket
     }
@@ -95,6 +103,7 @@ export function initWebSocket() {
                     unread_count: data.unread_count ?? 0
                 }
             })
+
         }
 
         // -------------------------
@@ -111,10 +120,26 @@ export function initWebSocket() {
         // 📋 VERIFICATIONS
         // -------------------------
         if (data.type === "verification_update" && data.payload) {
+            
+            const p = data.payload
+
             dispatch({
-                type: "verifications/upsert",
-                payload: data.payload
+                type: "verifications/patch",
+                payload: {
+                    session_id: String(p.session_id),
+                    changes: {
+                        progress_pct: p.progress_pct,
+                        current_step: p.current_step,
+                        status: p.status,
+                        last_activity: p.last_activity,
+                        inconsistencias_count: p.inconsistencias_count,
+                        inconsistencias: p.inconsistencias
+                    }
+                }
             })
+        
+
+            
         }
 
         // -------------------------
