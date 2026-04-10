@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from app.core.states import ChatState
+from app.core.states.states import ChatState
 
 
 class IncomingMessage(BaseModel):

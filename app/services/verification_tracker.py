@@ -1,6 +1,6 @@
 # app/services/verification_tracker.py
 
-from app.core.states import ChatState
+from app.core.states.states import ChatState
 from app.services.verification_service import VerificationService
 
 

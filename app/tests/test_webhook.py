@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import app
-from app.core.states import ChatState
+from app.core.states.states import ChatState
 
 client = TestClient(app)
 

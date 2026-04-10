@@ -1,5 +1,8 @@
 from app.content import messages
-
+from decimal import Decimal
+from app.pricing.payment_plans import PLANES_POR_MESES
+from decimal import Decimal
+from app.pricing.payment_plans import _redondear_entero_amigable
 
 class MessageBuilder:
 
@@ -8,8 +11,8 @@ class MessageBuilder:
         return messages.CONFIRMAR_NOMBRE.format(nombre_completo=nombre)
 
     @staticmethod
-    def confirmar_producto(producto: str) -> str:
-        return messages.CONFIRMAR_PRODUCTO.format(nombre_producto=producto)
+    def confirmar_producto(articulo: str, producto: str) -> str:
+        return messages.CONFIRMAR_PRODUCTO.format(articulo=articulo, nombre_producto=producto)
     
     @staticmethod
     def confirmar_estado_producto(producto: str) -> str:
@@ -55,3 +58,54 @@ class MessageBuilder:
     @staticmethod
     def info_beneficios2(producto: str) -> str:
         return messages.INFO_BENEFICIOS2.format(producto=producto)
+    
+    @staticmethod
+    def build_descuento_desglose(venta) -> str:
+
+        if not venta:
+            return "No se pudo obtener la información de tu cuenta."
+
+        plan_3m = PLANES_POR_MESES.get(3)
+
+        if not plan_3m:
+            return "No se pudo obtener la información del plan."
+
+        # Redondeo amigable para mostrar precios cerrados 
+        precio = Decimal(_redondear_entero_amigable(plan_3m["precio"]))
+
+        pago = Decimal(str(venta.pago)) if venta.pago else Decimal("0")
+        subsidio = Decimal(str(venta.subsidio)) if venta.subsidio else Decimal("0")
+
+        saldo = precio - pago - subsidio
+        if saldo < 0:
+            saldo = Decimal("0")
+
+        def money(val):
+            return f"${val:,.2f}"
+
+        # Alineación exacta usando caracteres y el formato monospace de WhatsApp (```)
+        col = 20  
+        
+        def line(label, value):
+            # ljust rellena con espacios a la derecha, rjust a la izquierda
+            return f"{label.ljust(col)}{money(value).rjust(10)}"
+
+        return (
+            "Claro, con gusto te comparto el desglose de tu cuenta:\n\n"
+            "```"
+            f"{line('Precio del equipo', precio)}\n"
+            f"{line('- Pago inicial', pago)}\n"
+            f"{line('- Subsidio', subsidio)}\n"
+            f"{'-' * 30}\n"
+            f"{line('Saldo restante', saldo)}"
+            "```"
+        )
+    
+    @staticmethod
+    def build_devolucion_confirmacion() -> str:
+        return (
+            "¡Claro que sí! Es posible realizar la devolución del equipo, solo necesitas seguir el siguiente proceso:\n\n"
+            "- Se deberá cubrir un cargo de $850 por gastos de traslado y gestión.\n"
+            "- Posteriormente se le notificará el día de recolección.\n\n"
+            "¿Deseas continuar con la devolución?"
+        )

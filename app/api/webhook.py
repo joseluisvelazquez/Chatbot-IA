@@ -5,7 +5,7 @@ from app.db.session import get_db
 from app.adapters.meta_webhook import parse_meta_payload
 from app.services.session_service import get_or_create_session, update_session
 from app.adapters.whatsapp_client import send_whatsapp_message
-from app.core.flow_engine import process_message
+from app.core.flow.flow_engine import process_message
 from app.config.settings import settings
 import asyncio
 import time
@@ -13,7 +13,7 @@ from app.services.inconsistencias_service import (
     open_or_patch_inconsistencia,
     close_open_inconsistencia,
 )
-from app.core.states import ChatState
+from app.core.states.states import ChatState
 
 router = APIRouter()
 import asyncio
@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.session import get_db
-from app.core.flow_engine import process_message
 from app.services.session_service import get_or_create_session, update_session
 from app.services.reminder_service import upsert_inactivity_reminders
 
@@ -126,27 +125,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 patch=result.inconsistencia_patch,
             )
 
-        # 2) Si caímos en estados "problemáticos" -> también abrimos/registramos evento
-        if next_state in [
-            ChatState.INCONSISTENCIA,
-            ChatState.ACLARACION,
-            ChatState.LLAMADA,
-        ]:
-            open_or_patch_inconsistencia(
-                db=db,
-                phone=phone,
-                folio=chat.folio,
-                session_id=chat.id,
-                patch={
-                    "evento": {
-                        "ultimo_estado": chat.state,
-                        "causa_estado": next_state.value,
-                        "ultimo_mensaje": text,
-                    }
-                },
-            )
-
-        # 3) Si finaliza -> cerramos inconsistencia abierta (si existe)
+        # 2) Si finaliza → cerramos inconsistencia abierta (si existe)
         if next_state == ChatState.FINALIZADO:
             close_open_inconsistencia(
                 db=db,
@@ -164,7 +143,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             last_message=text,
             previous_state=previous_state,
             message_id=message_id,
-            last_message_at=now,  # ✅ clave
+            last_message_at=now,
         )
 
         # Reprograma reminders en cada actividad real

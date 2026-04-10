@@ -6,7 +6,7 @@ from typing import Dict, Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.verification_schema import (
+from app.core.verification.verification_schema import (
     DEFAULT_VERIFICATION_PROGRESS,
     assert_valid_step,
     normalize_progress_payload,
