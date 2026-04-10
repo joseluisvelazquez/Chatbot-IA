@@ -865,7 +865,7 @@ async def send_agent_file(
             session_id=session.id,
             phone=phone,
             direction="agent",
-            content="[MEDIA]",
+            content = payload.get("content") or "[MEDIA]",
             type=media_type,
             media_url=media_url,
             file_name=file_name
@@ -892,6 +892,7 @@ async def send_agent_file(
         "session_id": session.id,
         "message": {
             "id": message.id,
+            "content": message.content,
             "direction": "agent",
             "type": media_type,
             "media_url": media_url,
@@ -911,6 +912,7 @@ async def send_agent_file(
                 phone=phone,
                 media_url=media_url,
                 media_type=media_type,
+                caption=message.content,
                 filename=file_name
             )
 

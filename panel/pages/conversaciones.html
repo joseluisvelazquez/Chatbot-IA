@@ -74,64 +74,68 @@
 
         <!-- INPUT -->
         <div
-            class="relative shrink-0 p-3 flex gap-2 items-end
+            class="relative shrink-0 p-3 flex flex-col gap-2
             bg-gray-50 dark:bg-slate-800
             border-t border-gray-200 dark:border-slate-700"
         >
-            <!-- 📎 FILE -->
-            <label
-                class="h-[42px] w-[42px] flex items-center justify-center 
-                rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
-                transition text-xl shrink-0 cursor-pointer"
-            >
-                📎
-                <input id="fileInput" type="file" class="hidden" />
-            </label>
-        
-            <!-- 😊 EMOJI -->
-            <button id="emojiBtn"
-                class="h-[42px] w-[42px] flex items-center justify-center 
+
+            <div id="filePreview" class="hidden flex justify-end"></div>
+
+            <div class="flex gap-2 items-end">
+                <!-- 📎 FILE -->
+                <label
+                    class="h-[42px] w-[42px] flex items-center justify-center 
                     rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
-                    transition text-xl shrink-0">
-                😊
-            </button>
+                    transition text-xl shrink-0 cursor-pointer"
+                >
+                    📎
+                    <input id="fileInput" type="file" multiple class="hidden" />
+                </label>
+            
+                <!-- 😊 EMOJI -->
+                <button id="emojiBtn"
+                    class="h-[42px] w-[42px] flex items-center justify-center 
+                        rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
+                        transition text-xl shrink-0">
+                    😊
+                </button>
 
-            <!-- TEXTAREA -->
-            <textarea 
-                id="messageInput"
-                placeholder="Escribe un mensaje..."
-                class="flex-1 px-3 py-2 border rounded-lg text-sm outline-none resize-none max-h-[120px] overflow-y-auto
-                       bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600 text-black dark:text-white"
-                oninput="handleTyping(); autoResize(this)"
-            ></textarea>
+                <!-- TEXTAREA -->
+                <textarea 
+                    id="messageInput"
+                    placeholder="Escribe un mensaje..."
+                    class="flex-1 px-3 py-2 border rounded-lg text-sm outline-none resize-none max-h-[120px] overflow-y-auto
+                        bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600 text-black dark:text-white"
+                    oninput="handleTyping(); autoResize(this)"
+                ></textarea>
 
-            <!-- ENVIAR -->
-            <button onclick="send()"
-                class="h-[42px] px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg shrink-0">
-                Enviar
-            </button>
+                <!-- ENVIAR -->
+                <button onclick="send()"
+                    class="h-[42px] px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg shrink-0">
+                    Enviar
+                </button>
 
-            <!-- EMOJI PICKER -->
-            <div id="emojiPickerContainer"
-                class="hidden absolute bottom-[60px] left-2 w-[260px] h-[340px]
-                    bg-white dark:bg-slate-800
-                    border border-gray-200 dark:border-slate-700
-                    rounded-xl shadow-lg
-                    flex flex-col p-2 z-30">
+                <!-- EMOJI PICKER -->
+                <div id="emojiPickerContainer"
+                    class="hidden absolute bottom-[60px] left-2 w-[260px] h-[340px]
+                        bg-white dark:bg-slate-800
+                        border border-gray-200 dark:border-slate-700
+                        rounded-xl shadow-lg
+                        flex flex-col p-2 z-30">
 
-                <input id="emojiSearch"
-                    placeholder="Buscar emoji..."
-                    class="h-8 mb-2 px-2 rounded border 
-                        border-gray-300 dark:border-slate-600
-                        bg-white dark:bg-slate-900
-                        text-black dark:text-white
-                        text-sm outline-none focus:border-green-500">
+                    <input id="emojiSearch"
+                        placeholder="Buscar emoji..."
+                        class="h-8 mb-2 px-2 rounded border 
+                            border-gray-300 dark:border-slate-600
+                            bg-white dark:bg-slate-900
+                            text-black dark:text-white
+                            text-sm outline-none focus:border-green-500">
 
-                <div id="emojiGrid"
-                    class="flex-1 grid grid-cols-8 gap-1 overflow-y-auto">
+                    <div id="emojiGrid"
+                        class="flex-1 grid grid-cols-8 gap-1 overflow-y-auto">
+                    </div>
                 </div>
             </div>
         </div>
-        
     </div>
 </div>

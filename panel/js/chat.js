@@ -41,6 +41,10 @@ let paginationState = {
 let searchTerm = ""
 let filterMode = "all" // "all" | "unread"
 
+//Para imagenes 
+let selectedFiles = []
+let selectedPreviewIndex = 0
+
 // =========================
 // INIT
 // =========================
@@ -141,15 +145,17 @@ export async function initConversationsPage() {
         setupVirtualScroll()
         setupBottomSeparatorCleaner()
         setupSearchAndFilters()
+        setupDragAndDrop()
 
         const fileInput = document.getElementById("fileInput")
 
         if (fileInput && !fileInput.dataset.bound) {
             fileInput.addEventListener("change", (e) => {
-                const file = e.target.files?.[0]
-
-                if (file) {
-                    sendFile(file)
+                const files = Array.from(e.target.files || [])
+                if (files.length > 0) {
+                    selectedFiles = [...selectedFiles, ...files]
+                    selectedPreviewIndex = 0
+                    renderMultiPreview()
                 }
 
                 fileInput.value = ""
@@ -499,7 +505,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
                 <div class="flex flex-col gap-1">
                     <img
                         src="${mediaUrl}"
-                        class="max-w-[220px] rounded-lg cursor-pointer hover:opacity-90"
+                        class="max-w-[380px] max-h-[420px] object-contain rounded-lg cursor-pointer hover:opacity-90"
                         onclick="window.open('${mediaUrl}', '_blank')"
                         loading="lazy"
                     />
@@ -856,17 +862,62 @@ export async function send() {
     if (!input) return
 
     const content = input.value.trim()
-    if (!content || !currentSessionId) return
+
+    if (!content && selectedFiles.length === 0) return
+    if (!currentSessionId) return
+
+    const textToSend = content
 
     input.value = ""
     input.focus()
     removeTyping()
 
     try {
-        await sendMessage({
-            session_id: currentSessionId,
-            content
-        })
+        // 📦 SI HAY ARCHIVOS
+        if (selectedFiles.length > 0) {
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file = selectedFiles[i]
+
+                const formData = new FormData()
+                formData.append("file", file)
+
+                const res = await fetch(`${API_BASE}/api/panel/upload`, {
+                    method: "POST",
+                    body: formData
+                })
+
+                if (!res.ok) {
+                    throw new Error("Error subiendo archivo")
+                }
+
+                const data = await res.json()
+
+                await apiRequest(`/panel/messages/file`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        media_url: data.url,
+                        file_name: data.filename,
+                        type: file.type.startsWith("image") ? "image" : "document",
+                        content: i === 0 ? (textToSend || null) : null
+                    })
+                })
+            }
+
+            removeAllFiles()
+        } 
+        // 💬 SOLO TEXTO
+        else {
+            await sendMessage({
+                session_id: currentSessionId,
+                content: textToSend
+            })
+        }
+
     } catch (error) {
         console.error("Error enviando mensaje:", error)
     }
@@ -1211,4 +1262,188 @@ function setupSearchAndFilters() {
             renderSidebarFromState(getState())
         }
     }
+}
+function renderMultiPreview() {
+    const container = document.getElementById("filePreview")
+    if (!container || selectedFiles.length === 0) return
+
+    const mainFile = selectedFiles[selectedPreviewIndex]
+    const mainUrl = URL.createObjectURL(mainFile)
+
+    const isImage = mainFile.type.startsWith("image")
+
+    container.classList.remove("hidden")
+
+    container.innerHTML = `
+        <div class="flex flex-col items-center w-full gap-2">
+
+            <div class="relative w-full max-w-[520px]">
+                ${
+                    isImage
+                    ? `
+                        <img 
+                            id="mainPreviewImage"
+                            src="${mainUrl}" 
+                            class="w-full max-h-[420px] object-contain rounded-xl"
+                        />
+                    `
+                    : `
+                        <div 
+                            id="mainPreviewImage"
+                            class="w-full max-w-[520px] h-[200px] flex items-center justify-center bg-gray-300 dark:bg-slate-700 rounded-xl text-sm"
+                        >
+                            📄 ${mainFile.name}
+                        </div>
+                    `
+                }
+
+                <button
+                    onclick="removeAllFiles()"
+                    class="absolute top-2 right-2 bg-black/70 text-white rounded-full w-7 h-7 flex items-center justify-center hover:bg-red-600"
+                >
+                    ✕
+                </button>
+            </div>
+
+            <div id="thumbContainer"
+                class="flex gap-2 overflow-x-auto max-w-[600px] px-2 pb-1 pt-1 items-center">
+            </div>
+        </div>
+    `
+    
+    const thumbContainer = document.getElementById("thumbContainer")
+
+    thumbContainer.innerHTML = selectedFiles.map((file, i) => {
+        const url = URL.createObjectURL(file)
+        return `
+            <div class="relative shrink-0 group">
+                <img
+                    src="${url}"
+                    data-thumb
+                    onclick="selectPreview(${i})"
+                    class="
+                        w-16 h-16 object-cover rounded-md cursor-pointer
+                        ${i === selectedPreviewIndex 
+                            ? "ring-2 ring-green-500" 
+                            : "opacity-70 hover:opacity-100"}
+                    "
+                />
+
+                <button
+                    onclick="removeFileAtIndex(${i})"
+                    class="absolute top-1 right-1 bg-black/70 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
+                >
+                    ✕
+                </button>
+            </div>
+        `
+    }).join("")
+}
+
+
+function updatePreviewUI() {
+    const mainImg = document.getElementById("mainPreviewImage")
+    if (!mainImg) return
+
+    const file = selectedFiles[selectedPreviewIndex]
+    if (!file) return
+
+    const isImage = file.type.startsWith("image")
+    if (isImage) {
+        mainImg.src = URL.createObjectURL(file)
+    } else {
+        mainImg.outerHTML = `
+            <div 
+                id="mainPreviewImage"
+                class="w-full max-w-[520px] h-[200px] flex items-center justify-center bg-gray-300 dark:bg-slate-700 rounded-xl text-sm"
+            >
+                📄 ${file.name}
+            </div>
+        `
+    }
+
+    document.querySelectorAll("[data-thumb]").forEach((el, i) => {
+        if (i === selectedPreviewIndex) {
+            el.classList.add("ring-2", "ring-green-500")
+            el.classList.remove("opacity-70")
+        } else {
+            el.classList.remove("ring-2", "ring-green-500")
+            el.classList.add("opacity-70")
+        }
+    })
+}
+
+
+window.selectPreview = function (index) {
+    selectedPreviewIndex = index
+    updatePreviewUI()
+}
+
+window.removeAllFiles = function () {
+    selectedFiles = []
+    selectedPreviewIndex = 0
+
+    const container = document.getElementById("filePreview")
+    if (container) {
+        container.classList.add("hidden")
+        container.innerHTML = ""
+    }
+}
+
+function setupDragAndDrop() {
+    const container = document.getElementById("messagesContainer")
+
+    if (!container) return
+
+    // 🔵 CUANDO ARRASTRAS ENCIMA
+    container.addEventListener("dragover", (e) => {
+        e.preventDefault()
+        container.classList.add("bg-green-100/30", "dark:bg-green-900/20")
+    })
+
+    // 🔴 CUANDO SALES
+    container.addEventListener("dragleave", () => {
+        container.classList.remove("bg-green-100/30", "dark:bg-green-900/20")
+    })
+
+    // 📥 CUANDO SUELTAS
+    container.addEventListener("drop", (e) => {
+        e.preventDefault()
+
+        container.classList.remove("bg-green-100/30", "dark:bg-green-900/20")
+
+        const files = e.dataTransfer.files
+        if (!files || files.length === 0) return
+
+        const droppedFiles = Array.from(files)
+
+        // Solo imágenes y docs básicos
+        const validFiles = droppedFiles.filter(file =>
+            file.type.startsWith("image") || file.type.includes("pdf")
+        )
+
+        if (validFiles.length === 0) {
+            alert("Tipo de archivo no soportado")
+            return
+        }
+
+        selectedFiles = [...selectedFiles, ...validFiles]
+        selectedPreviewIndex = 0
+        renderMultiPreview()
+    })
+}
+
+window.removeFileAtIndex = function (index) {
+    selectedFiles.splice(index, 1)
+
+    if (selectedPreviewIndex >= selectedFiles.length) {
+        selectedPreviewIndex = selectedFiles.length - 1
+    }
+
+    if (selectedFiles.length === 0) {
+        removeAllFiles()
+        return
+    }
+
+    renderMultiPreview()
 }

@@ -158,7 +158,7 @@ async def send_whatsapp_message(phone, text=None, buttons=None, document_url=Non
         await send_text(phone, text)
 
 
-async def send_whatsapp_media(phone, media_url, media_type, filename=None):
+async def send_whatsapp_media(phone, media_url, media_type, filename=None, caption=None):
     url = f"https://graph.facebook.com/{settings.META_API_VERSION}/{settings.PHONE_NUMBER_ID}/messages"
 
     clean_url = f"{settings.MEDIA_BASE_URL}{media_url}"
@@ -172,6 +172,8 @@ async def send_whatsapp_media(phone, media_url, media_type, filename=None):
                 "link": clean_url
             }
         }
+        if caption:
+            payload["image"]["caption"] = caption
 
     elif media_type == "document":
         payload = {
@@ -183,6 +185,8 @@ async def send_whatsapp_media(phone, media_url, media_type, filename=None):
                 "filename": filename or "archivo"
             }
         }
+        if caption:
+            payload["document"]["caption"] = caption
 
     else:
         raise Exception(f"Tipo no soportado: {media_type}")
