@@ -1,4 +1,4 @@
-﻿from typing import Optional
+from typing import Optional
 import datetime
 import decimal
 import enum
@@ -425,6 +425,49 @@ class ComprasComprobantesFiscales(Base):
     id_movimiento_comp_fiscal: Mapped[Optional[str]] = mapped_column(VARCHAR(15))
     comprobante_fiscal: Mapped[Optional[str]] = mapped_column(TEXT)
     fecha_registro: Mapped[Optional[datetime.date]] = mapped_column(Date)
+
+class Colaboradores(Base):
+    __tablename__ = 'colaboradores'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    nombre_resumido: Mapped[str] = mapped_column(TEXT, nullable=False)
+    premisas: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
+    estatus: Mapped[int] = mapped_column(Integer, nullable=False)
+    id_emp_col: Mapped[Optional[int]] = mapped_column(Integer)
+    id_matriz_col: Mapped[Optional[int]] = mapped_column(Integer)
+    fecha_ingreso: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    nombre: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    apellido_p: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    apellido_m: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    nombre_completo: Mapped[Optional[str]] = mapped_column(TEXT)
+    fecha_nac: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    curp: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    rfc: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    grado_estudios: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    profesion: Mapped[Optional[str]] = mapped_column(TEXT)
+    domicilio: Mapped[Optional[str]] = mapped_column(TEXT)
+    no_ext: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    no_int: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    colonia: Mapped[Optional[str]] = mapped_column(TEXT)
+    cp: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    estado: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    poblacion: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    tel1: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    tel2: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    tel3: Mapped[Optional[str]] = mapped_column(VARCHAR(25))
+    correo: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    puesto: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    jefe_directo: Mapped[Optional[str]] = mapped_column(TEXT)
+    tipo: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    tipo_usu: Mapped[Optional[int]] = mapped_column(Integer)
+    nombre_usuario: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    contrasena: Mapped[Optional[str]] = mapped_column(VARCHAR(255))
+    nss: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    cuenta_bancaria: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    institucion_bancaria: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    last_login: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    image: Mapped[Optional[str]] = mapped_column(VARCHAR(255), server_default=text("'no_image.jpg'"))
+
 
 class Cuentas(Base):
     __tablename__ = "cuentas"

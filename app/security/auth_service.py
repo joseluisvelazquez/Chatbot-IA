@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from app.config.settings import settings
-from app.db.models import AuthToken
+from app.db.models import AuthToken, Colaboradores, Cuentas
 from app.security.auth_models import PanelUser
 import secrets
 from app.db.models import PanelSession
@@ -38,6 +38,41 @@ class AuthError(HTTPException):
             detail=detail,
         )
 
+def get_nombre_resumido(db: Session, username: str) -> str | None:
+    colab = (
+        db.query(Colaboradores)
+        .filter(Colaboradores.nombre_usuario == username)
+        .first()
+    )
+
+    if not colab:
+        return None
+
+    return colab.nombre_resumido
+
+def restrict_to_assigned(query, user, db):
+    """
+    Filtra registros según rol del usuario.
+    """
+
+    # Roles que ven todo
+    if user.role in ("admin", "sistemas"):
+        return query
+
+    # Gestor de cobranza → solo lo suyo
+    if user.role == "cobranza":
+        nombre_resumido = get_nombre_resumido(db, user.username)
+
+        if not nombre_resumido:
+            # No tiene asignación válida → no ve nada
+            return query.filter(False)
+
+        return query.filter(
+            Cuentas.agente_verificador == nombre_resumido
+        )
+
+    # Cualquier otro rol → por defecto nada
+    return query.filter(False)
 
 def _get_shared_secret() -> str:
     secret = getattr(settings, "PANEL_SHARED_SECRET", None)
