@@ -17,6 +17,8 @@ let unsubscribeChatStore = null
 let lastLoadTrigger = 0
 let lastLoadedSessionId = null
 let isLoadingChat = false
+let firstViewerOpen = true
+let isFirstLoad = true
 
 const renderedMessageIdsBySession = new Map()
 
@@ -45,6 +47,10 @@ let filterMode = "all" // "all" | "unread"
 let selectedFiles = []
 let selectedPreviewIndex = 0
 
+let imageList = []
+let imageSet = new Set()
+let currentImageIndex = 0
+
 // =========================
 // INIT
 // =========================
@@ -67,22 +73,17 @@ export async function initConversationsPage() {
         const currentMessages = state.messages.bySessionId[currentSessionId] || []
 
         if (currentMessages !== lastMessagesRef) {
+            console.time("renderMessages")
             renderMessagesIncremental(state)
+            console.timeEnd("renderMessages")
             lastMessagesRef = currentMessages
         }
 
-        const signature = state.conversations.order
-            .map((id) => {
-                const c = state.conversations.byId[id]
-                return c
-                    ? `${c.id}:${c.last_message_at ?? ""}:${c.unread_count ?? 0}`
-                    : id
-            })
-            .join("|")
-
-        if (signature !== lastConversationSignature) {
+        if (state.conversations._version !== lastConversationSignature) {
+            console.time("renderSidebar")
             renderSidebarFromState(state)
-            lastConversationSignature = signature
+            console.timeEnd("renderSidebar")
+            lastConversationSignature = state.conversations._version
         }
     })
 
@@ -92,8 +93,18 @@ export async function initConversationsPage() {
         type: "conversations/loaded",
         payload: sessions
     })
+    
+    const savedSearch = localStorage.getItem("chatSearch")
+    if (savedSearch) {
+        searchTerm = savedSearch
 
+        const input = document.getElementById("searchInput")
+        if (input) input.value = savedSearch
+    }
+
+    console.time("renderSidebar initial")
     renderSidebarFromState(getState())
+    console.timeEnd("renderSidebar initial")
 
     const state = getState()
     let selected = getSelectedSession()
@@ -159,10 +170,26 @@ export async function initConversationsPage() {
                 }
 
                 fileInput.value = ""
+                setTimeout(() => {
+                    const input = document.getElementById("messageInput")
+                    if (input) input.focus()
+                }, 0)
             })
-
             fileInput.dataset.bound = "true"
         }
+    })
+
+    document.addEventListener("keydown", (e) => {
+        const viewer = document.getElementById("imageViewer")
+        if (!viewer || viewer.classList.contains("hidden")) return
+
+        if (["ArrowLeft", "ArrowRight", "Escape"].includes(e.key)) {
+            e.preventDefault()
+        }
+
+        if (e.key === "ArrowLeft") prevImage()
+        if (e.key === "ArrowRight") nextImage()
+        if (e.key === "Escape") closeImageViewer()
     })
 }
 
@@ -363,14 +390,26 @@ function renderSidebarFromState(state) {
     let sessions = state.conversations.order
         .map(id => state.conversations.byId[id])
         .filter(Boolean)
+        .sort((a, b) => {
+            const dateA = new Date(a.last_message_at || 0).getTime()
+            const dateB = new Date(b.last_message_at || 0).getTime()
+            return dateB - dateA
+        })
 
     // 🔍 FILTRO POR BÚSQUEDA
     if (searchTerm) {
         sessions = sessions.filter(s => {
             const phone = s.phone?.toLowerCase() || ""
             const name = s.name?.toLowerCase() || ""
+            const cuenta = String(s.no_cuenta || "").toLowerCase()
+            const folio = String(s.folio || "").toLowerCase()
 
-            return phone.includes(searchTerm) || name.includes(searchTerm)
+            return (
+                phone.includes(searchTerm) ||
+                name.includes(searchTerm) ||
+                cuenta.includes(searchTerm) ||
+                folio.includes(searchTerm)
+            )
         })
     }
 
@@ -441,9 +480,23 @@ function updateSidebarNode(node, s) {
 
     node.innerHTML = `
         <div class="min-w-0">
-            <div class="font-semibold truncate">${s.name || s.phone}</div>
-            <div class="text-xs text-gray-500">${s.last_message_at ?? ""}</div>
+            <div class="font-semibold truncate">
+                ${s.name || s.phone}
+            </div>
+
+            ${
+                s.no_cuenta
+                ? `<div class="text-xs text-gray-400">
+                        Cuenta: ${s.no_cuenta}
+                </div>`
+                : ""
+            }
+
+            <div class="text-xs text-gray-500">
+                ${s.last_message_at ?? ""}
+            </div>
         </div>
+
         ${s.unread_count > 0
             ? `<span class="bg-green-500 text-white text-xs px-2 py-1 rounded-full shrink-0">${s.unread_count}</span>`
             : ""
@@ -505,8 +558,9 @@ function createMessageNode(rawMsg, timeOverride = "") {
                 <div class="flex flex-col gap-1">
                     <img
                         src="${mediaUrl}"
+                        data-open-viewer
                         class="max-w-[380px] max-h-[420px] object-contain rounded-lg cursor-pointer hover:opacity-90"
-                        onclick="window.open('${mediaUrl}', '_blank')"
+                        onclick="openImageViewer('${mediaUrl}')"
                         loading="lazy"
                     />
                     ${
@@ -518,7 +572,9 @@ function createMessageNode(rawMsg, timeOverride = "") {
             `
         } else {
             bodyContent = `
-                <div class="flex items-center gap-3 p-2 rounded-lg bg-gray-100 dark:bg-slate-600">
+                <a href="${mediaUrl}" target="_blank" rel="noopener noreferrer"
+                    class="flex items-center gap-3 p-2 rounded-lg bg-gray-100 dark:bg-slate-600
+                        hover:bg-gray-200 dark:hover:bg-slate-500 transition cursor-pointer">
 
                     <div class="w-10 h-10 flex items-center justify-center bg-red-500 text-white rounded-md text-xs font-bold">
                         PDF
@@ -529,11 +585,11 @@ function createMessageNode(rawMsg, timeOverride = "") {
                             ${msg.file_name || "Archivo"}
                         </span>
                         <span class="text-xs text-gray-500 dark:text-gray-300">
-                            Documento
+                            Abrir documento
                         </span>
                     </div>
 
-                </div>
+                </a>
 
                 ${
                     cleanContent
@@ -599,18 +655,23 @@ function renderMessagesIncremental(state) {
     const renderedSet = getRenderedSet(currentSessionId)
     const wasAtBottom = isUserAtBottom(container)
     const fragment = document.createDocumentFragment()
+    let lastDate = getLastRenderedDate(list)
 
     for (let i = 0; i < messages.length; i++) {
         const msg = normalizeMessage(messages[i])
+        if (msg.type === "image" && msg.media_url) {
+            if (!imageSet.has(msg.media_url)) {
+                imageSet.add(msg.media_url)
+
+                if (!imageList.includes(msg.media_url)) {
+                    imageList.push(msg.media_url)
+                }
+            }
+        }
         if (!msg.id) continue
         const id = `msg-${msg.id}`
 
         if (renderedSet.has(id)) continue
-
-        if (document.querySelector(`[data-message-id="${id}"]`)) {
-            renderedSet.add(id)
-            continue
-        }
 
         const shouldShowNewSeparator =
             !wasAtBottom &&
@@ -619,9 +680,6 @@ function renderMessagesIncremental(state) {
             renderedSet.size > 0
 
         const currentDate = new Date(msg.created_at).toDateString()
-        const lastDate = fragment.querySelectorAll("[data-message-date]").length
-            ? fragment.querySelectorAll("[data-message-date]")[fragment.querySelectorAll("[data-message-date]").length - 1].dataset.messageDate
-            : getLastRenderedDate(list)
 
         if (lastDate !== currentDate) {
             const sep = document.createElement("div")
@@ -633,6 +691,7 @@ function renderMessagesIncremental(state) {
                 </div>
             `
             fragment.appendChild(sep)
+            lastDate = currentDate
         }
 
         if (shouldShowNewSeparator && !document.getElementById("newMessagesSeparator")) {
@@ -664,7 +723,14 @@ function renderMessagesIncremental(state) {
     if (fragment.childNodes.length > 0) {
         list.appendChild(fragment)
 
-        if (wasAtBottom) {
+        if (isFirstLoad) {
+            // SOLO UNA VEZ al abrir chat
+            requestAnimationFrame(() => {
+                container.scrollTop = container.scrollHeight
+            })
+            isFirstLoad = false
+        } else if (wasAtBottom) {
+            // solo si ya estabas abajo
             requestAnimationFrame(() => {
                 container.scrollTop = container.scrollHeight
                 removeNewMessagesSeparator()
@@ -762,6 +828,13 @@ async function loadMoreMessages() {
 // LOAD CHAT
 // =========================
 export async function loadChat(sessionId, phone, name = null) {
+
+    imageList = []
+    currentImageIndex = 0
+    thumbsRendered = false
+    imageSet = new Set()
+    closeImageViewer()
+    isFirstLoad = true
 
     const header = document.getElementById("chatHeader")
     const list = document.getElementById("messages")
@@ -1249,6 +1322,7 @@ function setupSearchAndFilters() {
     if (input) {
         input.addEventListener("input", (e) => {
             searchTerm = e.target.value.toLowerCase().trim()
+            localStorage.setItem("chatSearch", searchTerm)
             renderSidebarFromState(getState())
         })
     }
@@ -1379,6 +1453,9 @@ function renderMultiPreview() {
             </div>
         `
     }).join("")
+
+    const input = document.getElementById("messageInput")
+    if (input) input.focus()
 }
 
 
@@ -1394,14 +1471,9 @@ function updatePreviewUI() {
 
     const newUrl = URL.createObjectURL(file)
 
-    if (isImage) {
-        container.outerHTML = `
-            <img 
-                id="mainPreviewImage"
-                src="${newUrl}" 
-                class="w-full max-h-[420px] object-contain rounded-xl"
-            />
-        `
+    if (isImage && container.tagName === "IMG") {
+        container.src = newUrl // 🔥 sin parpadeo
+        return
     } 
     else if (isPDF) {
         container.outerHTML = `
@@ -1437,6 +1509,7 @@ function updatePreviewUI() {
 
 
 window.selectPreview = function (index) {
+    if (index === selectedPreviewIndex) return
     selectedPreviewIndex = index
     updatePreviewUI()
 }
@@ -1509,3 +1582,150 @@ window.removeFileAtIndex = function (index) {
 
     renderMultiPreview()
 }
+
+// =========================
+// IMAGE VIEWER (WhatsApp-style)
+// =========================
+window.openImageViewer = function (src) {
+    firstViewerOpen = true
+
+    const viewer = document.getElementById("imageViewer")
+    const img = document.getElementById("imageViewerImg")
+
+    if (!viewer || !img) return
+
+    currentImageIndex = imageList.indexOf(src)
+    if (currentImageIndex === -1) currentImageIndex = 0
+
+    showImage(currentImageIndex)
+
+    viewer.classList.remove("hidden")
+}
+
+window.closeImageViewer = function () {
+    const viewer = document.getElementById("imageViewer")
+    const img = document.getElementById("imageViewerImg")
+
+    if (!viewer || !img) return
+
+    img.src = ""
+    viewer.classList.add("hidden")
+}
+
+// cerrar al hacer click fuera de la imagen
+document.addEventListener("click", (e) => {
+    const viewer = document.getElementById("imageViewer")
+
+    if (!viewer || viewer.classList.contains("hidden")) return
+
+    // SOLO cerrar si das click directamente en el fondo
+    if (e.target === viewer) {
+        closeImageViewer()
+    }
+})
+
+// renderiza las miniaturas en el visor
+window.showImage = function (index) {
+    if (index < 0 || index >= imageList.length) return
+
+    const img = document.getElementById("imageViewerImg")
+    const newSrc = imageList[index]
+
+    const temp = new Image()
+    temp.src = newSrc
+
+    temp.onload = () => {
+        img.style.opacity = "0"
+
+        requestAnimationFrame(() => {
+            currentImageIndex = index
+            img.src = newSrc
+
+            renderThumbs()
+
+            requestAnimationFrame(() => {
+                img.style.opacity = "1"
+            })
+        })
+    }
+}
+
+window.prevImage = () => {
+    if (currentImageIndex > 0) {
+        showImage(currentImageIndex - 1)
+    }
+}
+
+window.nextImage = () => {
+    if (currentImageIndex < imageList.length - 1) {
+        showImage(currentImageIndex + 1)
+    }
+}
+
+// renderiza las miniaturas en el visor y resalta la actual
+let thumbsRendered = false
+
+window.renderThumbs = function () {
+    const box = document.getElementById("imageThumbs")
+    if (!box) return
+
+    if (!thumbsRendered || box.children.length !== imageList.length) {
+        box.innerHTML = imageList.map((url, i) => `
+            <img 
+                src="${url}"
+                data-index="${i}"
+                class="w-14 h-14 object-cover rounded cursor-pointer shrink-0"
+            />
+        `).join("")
+
+        // eventos
+        box.querySelectorAll("img").forEach(img => {
+            img.onclick = () => {
+                const index = Number(img.dataset.index)
+                showImage(index)
+            }
+        })
+
+        thumbsRendered = true
+    }
+
+    box.querySelectorAll("img").forEach((img, i) => {
+        if (i === currentImageIndex) {
+            img.classList.add("ring-2", "ring-green-500")
+            img.classList.remove("opacity-60")
+        } else {
+            img.classList.remove("ring-2", "ring-green-500")
+            img.classList.add("opacity-60")
+        }
+    })
+
+    // SCROLL
+    requestAnimationFrame(() => {
+        const activeThumb = box.children[currentImageIndex]
+        if (!activeThumb) return
+
+        const boxWidth = box.clientWidth
+        const thumbLeft = activeThumb.offsetLeft
+        const thumbWidth = activeThumb.clientWidth
+
+        const targetScroll =
+            thumbLeft - (boxWidth / 2) + (thumbWidth / 2)
+
+        const behavior = firstViewerOpen ? "auto" : "smooth"
+
+        box.scrollTo({
+            left: targetScroll,
+            behavior
+        })
+
+        firstViewerOpen = false
+    })
+}
+
+const style = document.createElement("style")
+style.innerHTML = `
+    #imageThumbs::-webkit-scrollbar {
+        display: none;
+    }
+`
+document.head.appendChild(style)

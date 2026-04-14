@@ -21,6 +21,8 @@ class ConversationResponse(BaseModel):
     last_message: Optional[str]
     last_message_at: Optional[datetime]
     unread_count: int = 0
+    no_cuenta: str | None = None
+    folio: str | None = None
 
 
 class MessageResponse(BaseModel):

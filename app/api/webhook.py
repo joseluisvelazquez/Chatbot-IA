@@ -76,7 +76,10 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     text = data.get("text") or ""
     message_id = data.get("message_id")
     button_id = data.get("button_id")
-    content = "[MEDIA]" if is_media else (text if text else button_id)
+    if is_media:
+        content = "📎 Archivo recibido"
+    else:
+        content = text if text else button_id
 
     print(
         "ABOUT TO PROCESS:",
@@ -173,6 +176,9 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         next_state = result.next_state
         buttons = result.buttons
         previous_state = result.previous_state
+
+
+        print("🤖 REPLY GENERADO:", repr(reply))
 
         if reply:
             try:

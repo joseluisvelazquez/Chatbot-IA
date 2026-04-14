@@ -741,6 +741,9 @@ def get_conversations(
         .all()
     )
 
+    folios = [str(s.folio) for s in sessions if s.folio]
+    folio_to_no_cuenta = resolve_cuentas_from_folios(folios, db, user)
+
     phone_to_name = {}
 
     for v in ventas:
@@ -759,6 +762,8 @@ def get_conversations(
             last_message=s.last_message,
             last_message_at=s.last_message_at,
             unread_count=s.unread_count,
+            no_cuenta=folio_to_no_cuenta.get(str(s.folio)) if s.folio else None,
+            folio=str(s.folio) if s.folio else None
         )
         for s in sessions
     ]
@@ -837,6 +842,7 @@ async def send_agent_message(
     user = Depends(get_current_panel_user)
 ):
     content = payload.content.strip()
+    print("🧨 TEXTO QUE VOY A ENVIAR:", repr(content))
 
     if not content:
         raise HTTPException(400, "Mensaje vacío")
@@ -944,8 +950,9 @@ async def send_agent_file(
     # =========================
     content = payload.get("content")
 
+    # 🚫 NO generar [MEDIA]
     if not content or content == "[MEDIA]":
-        content = "[MEDIA]"
+        content = " "
 
     try:
         message = Message(
