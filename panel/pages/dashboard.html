@@ -1,0 +1,78 @@
+<div class="flex flex-col gap-6 text-gray-900 dark:text-white">
+
+    <!-- HEADER -->
+    <div>
+        <h1 class="text-2xl font-semibold">Dashboard</h1>
+        <p class="text-sm text-gray-500 dark:text-slate-400">
+            Resumen general del sistema
+        </p>
+    </div>
+
+    <!-- KPIs -->
+    <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+
+        <div class="kpi-card">
+            <i data-lucide="message-circle"></i>
+            <h3 id="kpi-sessions"></h3>
+            <p>Sesiones</p>
+        </div>
+
+        <div class="kpi-card">
+            <i data-lucide="activity"></i>
+            <h3 id="kpi-active"></h3>
+            <p>Activas</p>
+        </div>
+
+        <div class="kpi-card">
+            <i data-lucide="arrow-down-circle"></i>
+            <h3 id="kpi-in"></h3>
+            <p>Entrantes</p>
+        </div>
+
+        <div class="kpi-card">
+            <i data-lucide="arrow-up-circle"></i>
+            <h3 id="kpi-out"></h3>
+            <p>Salientes</p>
+        </div>
+
+        <div class="kpi-card">
+            <i data-lucide="alert-triangle"></i>
+            <h3 id="kpi-issues"></h3>
+            <p>Inconsistencias</p>
+        </div>
+
+    </div>
+
+    <!-- FUNNEL -->
+    <div class="card">
+        <h3 class="card-title">Funnel</h3>
+        <div class="h-[300px]">
+            <canvas id="funnelChart"></canvas>
+        </div>
+    </div>
+
+    <!-- TABLE -->
+    <div class="card">
+        <h3 class="card-title">Tiempo entre estados</h3>
+
+        <div class="overflow-x-auto">
+            <table class="w-full min-w-[700px] text-sm">
+
+                <thead>
+                    <tr class="border-b border-gray-200 dark:border-slate-700 text-gray-500 dark:text-slate-400">
+                        <th class="px-4 py-3 text-left">Transición</th>
+                        <th class="px-4 py-3 text-left">Promedio</th>
+                        <th class="px-4 py-3 text-left">Máximo</th>
+                        <th class="px-4 py-3 text-left">Mínimo</th>
+                        <th class="px-4 py-3 text-left">Eventos</th>
+                    </tr>
+                </thead>
+
+                <tbody id="stateTableBody"></tbody>
+
+            </table>
+        </div>
+
+    </div>
+
+</div>

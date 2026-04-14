@@ -1,6 +1,8 @@
 import httpx
 from app.adapters.meta_parser import build_meta_buttons
 from app.config.settings import settings
+import requests
+import json
 
 HEADERS = {
     "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
@@ -156,3 +158,52 @@ async def send_whatsapp_message(phone, text=None, buttons=None, document_url=Non
     # solo texto
     elif text:
         await send_text(phone, text)
+
+
+async def send_whatsapp_media(phone, media_url, media_type, filename=None, caption=None):
+    url = f"https://graph.facebook.com/{settings.META_API_VERSION}/{settings.PHONE_NUMBER_ID}/messages"
+
+    clean_url = f"{settings.MEDIA_BASE_URL}{media_url}"
+
+    if media_type == "image":
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "image",
+            "image": {
+                "link": clean_url
+            }
+        }
+        if caption:
+            payload["image"]["caption"] = caption
+
+    elif media_type == "document":
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "document",
+            "document": {
+                "link": f"{settings.MEDIA_BASE_URL}{media_url}",
+                "filename": filename or "archivo"
+            }
+        }
+        if caption:
+            payload["document"]["caption"] = caption
+
+    else:
+        raise Exception(f"Tipo no soportado: {media_type}")
+
+    headers = {
+        "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            url,
+            headers=headers,
+            json=payload
+        )
+
+    if response.status_code >= 400:
+        raise Exception(response.text)

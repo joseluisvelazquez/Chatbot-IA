@@ -28,6 +28,8 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "type": "status",
                 "text": None,
                 "button_id": None,
+                "media_id": None,
+                "file_name": None,
                 "is_status": True,
                 "unsupported": False,
             }
@@ -44,7 +46,10 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         text = None
         button_id = None
+        media_id = None
+        file_name = None
         unsupported = False
+        caption = None
 
         # --------------------------------------------------
         # TEXT
@@ -66,13 +71,24 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 button_id = interactive.get("list_reply", {}).get("id")
 
         # --------------------------------------------------
-        # MEDIA (image, document, audio, video, sticker)
+        # IMAGE ✅
         # --------------------------------------------------
-        elif message_type in {"image", "document", "audio", "video", "sticker"}:
-            unsupported = True
+        elif message_type == "image":
+            image = message.get("image", {})
+            media_id = image.get("id")
+            caption = image.get("caption")
 
         # --------------------------------------------------
-        # LOCATION / CONTACTS / OTHERS
+        # DOCUMENT ✅
+        # --------------------------------------------------
+        elif message_type == "document":
+            document = message.get("document", {})
+            media_id = document.get("id")
+            file_name = document.get("filename")
+            caption = document.get("caption")
+
+        # --------------------------------------------------
+        # OTROS (audio, video, sticker, etc.)
         # --------------------------------------------------
         else:
             unsupported = True
@@ -81,8 +97,10 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "phone": phone,
             "message_id": message_id,
             "type": message_type,
-            "text": text,
+            "text": text or caption,
             "button_id": button_id,
+            "media_id": media_id,
+            "file_name": file_name,
             "is_status": False,
             "unsupported": unsupported,
         }

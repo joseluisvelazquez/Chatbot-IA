@@ -4,6 +4,7 @@ import decimal
 import enum
 from sqlalchemy import Boolean, Text
 from sqlalchemy.dialects.mysql import JSON as MYSQL_JSON
+from app.db.base import Base
 
 from sqlalchemy import (
     Column,
@@ -38,9 +39,20 @@ from sqlalchemy.dialects.mysql import (
     VARCHAR,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+class AuthToken(Base):
+    __tablename__ = "auth_tokens"
+    __table_args__ = (
+        Index("idx_auth_tokens_created_at", "created_at"),
+        Index("idx_auth_tokens_used_at", "used_at"),
+    )
 
-class Base(DeclarativeBase):
-    pass
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    used_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 class SolicitudesCambioUrgencia(str, enum.Enum):
     MUY_URGENTE = "Muy Urgente"
@@ -290,6 +302,7 @@ class ChatSessions(Base):
     ai_response_attempts = Column(Integer, default=0)
     ai_inconsistency_attempts = Column(Integer, default=0)
     invalid_folio_attempts = Column(Integer, default=0)
+    unread_count = Column(Integer, nullable=False, default=0)
 
 
 class Clientes(Base):
@@ -419,6 +432,49 @@ class ComprasComprobantesFiscales(Base):
     id_movimiento_comp_fiscal: Mapped[Optional[str]] = mapped_column(VARCHAR(15))
     comprobante_fiscal: Mapped[Optional[str]] = mapped_column(TEXT)
     fecha_registro: Mapped[Optional[datetime.date]] = mapped_column(Date)
+
+class Colaboradores(Base):
+    __tablename__ = 'colaboradores'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    nombre_resumido: Mapped[str] = mapped_column(TEXT, nullable=False)
+    premisas: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
+    estatus: Mapped[int] = mapped_column(Integer, nullable=False)
+    id_emp_col: Mapped[Optional[int]] = mapped_column(Integer)
+    id_matriz_col: Mapped[Optional[int]] = mapped_column(Integer)
+    fecha_ingreso: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    nombre: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    apellido_p: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    apellido_m: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    nombre_completo: Mapped[Optional[str]] = mapped_column(TEXT)
+    fecha_nac: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    curp: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    rfc: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    grado_estudios: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    profesion: Mapped[Optional[str]] = mapped_column(TEXT)
+    domicilio: Mapped[Optional[str]] = mapped_column(TEXT)
+    no_ext: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    no_int: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    colonia: Mapped[Optional[str]] = mapped_column(TEXT)
+    cp: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    estado: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    poblacion: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    tel1: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    tel2: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    tel3: Mapped[Optional[str]] = mapped_column(VARCHAR(25))
+    correo: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    puesto: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    jefe_directo: Mapped[Optional[str]] = mapped_column(TEXT)
+    tipo: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    tipo_usu: Mapped[Optional[int]] = mapped_column(Integer)
+    nombre_usuario: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    contrasena: Mapped[Optional[str]] = mapped_column(VARCHAR(255))
+    nss: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    cuenta_bancaria: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    institucion_bancaria: Mapped[Optional[str]] = mapped_column(VARCHAR(45))
+    last_login: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    image: Mapped[Optional[str]] = mapped_column(VARCHAR(255), server_default=text("'no_image.jpg'"))
+
 
 class Cuentas(Base):
     __tablename__ = "cuentas"
@@ -557,6 +613,42 @@ class EstadosCuentaDuplicate(Base):
     usuario: Mapped[Optional[str]] = mapped_column(TEXT)
     fecha_corte: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
+class FlowEvent(Base):
+    __tablename__ = "flow_events"
+    __table_args__ = (
+        Index("idx_flow_events_session_id", "session_id"),
+        Index("idx_flow_events_phone", "phone"),
+        Index("idx_flow_events_folio", "folio"),
+        Index("idx_flow_events_created_at", "created_at"),
+        Index("idx_flow_events_states", "from_state", "to_state"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    session_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    phone: Mapped[Optional[str]] = mapped_column(String(20))
+    folio: Mapped[Optional[int]] = mapped_column(Integer)
+
+    from_state: Mapped[Optional[str]] = mapped_column(String(50))
+    to_state: Mapped[Optional[str]] = mapped_column(String(50))
+
+    event_type: Mapped[Optional[str]] = mapped_column(String(50))
+    trigger_text: Mapped[Optional[str]] = mapped_column(Text)
+    detected_intent: Mapped[Optional[str]] = mapped_column(String(50))
+
+    event_payload: Mapped[Optional[dict[str, any]]] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("UTC_TIMESTAMP()"),
+    )
+
 class MotivosCancelacion(Base):
     __tablename__ = "motivos_cancelacion"
 
@@ -564,6 +656,38 @@ class MotivosCancelacion(Base):
     id_emp_motivo: Mapped[Optional[int]] = mapped_column(Integer)
     motivo: Mapped[Optional[str]] = mapped_column(TEXT)
 
+class PanelSession(Base):
+    __tablename__ = "panel_sessions"
+    __table_args__ = (
+        Index("idx_panel_session_token", "session_id"),
+        Index("idx_panel_session_user", "username"),
+        Index("idx_panel_session_exp", "exp"),
+        Index("idx_panel_session_revoked", "revoked_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    session_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+
+    username: Mapped[str] = mapped_column(VARCHAR(120), nullable=False)
+    puesto: Mapped[str] = mapped_column(VARCHAR(120), nullable=False)
+    empresa_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(VARCHAR(30), nullable=False)
+
+    jti: Mapped[Optional[str]] = mapped_column(String(64))
+
+    exp: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    ip: Mapped[Optional[str]] = mapped_column(String(45))
+    user_agent: Mapped[Optional[str]] = mapped_column(Text)
+
+    revoked_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
 
 class PlanesPago(Base):
     __tablename__ = "planes_pago"
@@ -772,4 +896,30 @@ class VentasDocumentos(Base):
 
     bitacora_ventas: Mapped["BitacoraVentas"] = relationship(
         "BitacoraVentas", back_populates="ventas_documentos"
+    )
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    session_id: Mapped[int] = mapped_column(Integer, index=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
+
+    direction = Column(
+        Enum("in", "out", "agent", name="message_direction"),
+        nullable=False
+    )
+
+    content = Column(Text)
+
+    message_id = Column(String(120), nullable=True)
+
+    type = Column(String(20), nullable=True)  # text, image, document
+    media_url = Column(Text, nullable=True)
+    file_name = Column(String(255), nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now()
     )

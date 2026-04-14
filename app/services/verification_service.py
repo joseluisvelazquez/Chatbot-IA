@@ -1,17 +1,18 @@
 from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.verification.verification_schema import (
+from app.api.panel_send import send_message
+from app.core.verification_schema import (
     DEFAULT_VERIFICATION_PROGRESS,
     assert_valid_step,
     normalize_progress_payload,
 )
-from app.db.models import VerificacionCuenta
+from app.db.models import FlowEvent, VerificacionCuenta
 from app.siga.siga_repository import obtener_venta_por_folio
 
 
@@ -19,6 +20,49 @@ from app.siga.siga_repository import obtener_venta_por_folio
 class VerificationResult:
     no_cuenta: str
     progress: Dict[str, int]
+
+def log_flow_event(
+    db: Session,
+    session,
+    from_state: str | None,
+    to_state: str | None,
+    trigger_text: str | None,
+    event_type: str,
+    detected_intent: str | None = None,
+    event_payload: dict | None = None,
+):
+    try:
+        event = FlowEvent(
+            session_id=session.id,
+            phone=session.phone,
+            folio=session.folio,
+            from_state=from_state,
+            to_state=to_state,
+            trigger_text=trigger_text,
+            event_type=event_type,
+            detected_intent=detected_intent,
+            event_payload=event_payload,
+        )
+
+        db.add(event)
+        db.flush()  #  NO commit aquí
+
+    except Exception:
+        #  nunca romper el flujo del chatbot
+        pass
+    
+def is_verification_complete(payload: Dict[str, Any]) -> bool:
+    """
+    Determina si la verificación ya fue completada.
+    Se considera completa si se llegó al paso 'beneficios'
+    o si explícitamente se marcó 'finalizado'.
+    """
+    print(f"DEBUG: Verificación recibida para check completo: {payload}")
+
+    data = normalize_progress_payload(payload)
+    print(f"DEBUG: Verificación normalizada para check completo: {data}")
+
+    return data["finalizado"] == 1
 
 
 class VerificationService:
@@ -66,7 +110,7 @@ class VerificationService:
             # otro request lo creó primero; aquí NO tumbamos la transacción externa
             pass
 
-    def update_step_atomic(self, no_cuenta: str, step: str, value: int = 1) -> VerificationResult:
+    def update_step_atomic(self, no_cuenta: str, step: str, value: int = 1, phone: str = None) -> VerificationResult:
 
         if not no_cuenta:
             raise ValueError("no_cuenta requerido")
@@ -74,7 +118,7 @@ class VerificationService:
         if not step:
             raise ValueError("step requerido")
 
-        if value not in (0, 1, 2):
+        if value not in (0, 1, 2, 3):
             raise ValueError("valor inválido de verificación")
 
         assert_valid_step(step)
@@ -109,8 +153,8 @@ class VerificationService:
 
         return VerificationResult(no_cuenta=no_cuenta, progress=progress)
 
-    def mark_step_from_folio(self, folio: str, step: str, value: int) -> Optional[VerificationResult]:
+    def mark_step_from_folio(self, folio: str, step: str, value: int, phone: str) -> Optional[VerificationResult]:
         no_cuenta = self.resolve_no_cuenta_from_folio(folio)
         if not no_cuenta:
             return None
-        return self.update_step_atomic(no_cuenta=no_cuenta, step=step, value=value)
+        return self.update_step_atomic(no_cuenta=no_cuenta, step=step, value=value, phone=phone)
