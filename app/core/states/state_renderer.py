@@ -147,6 +147,12 @@ def render_state(next_state, session, db):
         buttons = [{"id": k, "label": v["label"]} for k, v in disponibles.items()]
     elif next_state == ChatState.VERIFICAR_FOTO_COMPONENTE:
         intent_comp = getattr(session, "componente_en_verificacion", None)
+
+        if not intent_comp:
+            inc = get_open_inconsistencia(db, session.phone, session.folio, session.id)
+            if inc and inc.extra_json:
+                intent_comp = inc.extra_json.get("componentes_temp", {}).get("componente_en_verificacion")
+
         if intent_comp and intent_comp in COMPONENTES_MAP:
             componente = COMPONENTES_MAP[intent_comp]
             reply = f"Te envío una foto de referencia de: *{componente['label']}*.\n\nPor favor revisa bien tu paquete, ¿estás absolutamente seguro de que NO lo recibiste?"

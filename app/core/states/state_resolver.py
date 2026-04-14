@@ -36,6 +36,9 @@ def resolve_next_state(current_state, action, detected_intent=None, previous_sta
         if detected_intent in options:
             return options[detected_intent]
 
+        if detected_intent == "REANUDACION":
+            return current_state
+
         return None
 
     # --------------------------------------
@@ -66,7 +69,7 @@ def resolve_next_state(current_state, action, detected_intent=None, previous_sta
     # IA (fallback)
     # --------------------------------------
     if action == "ai":
-        return ChatState.FUERA_DE_FLUJO
+        return current_state
 
     # --------------------------------------
     # INICIO
@@ -74,4 +77,4 @@ def resolve_next_state(current_state, action, detected_intent=None, previous_sta
     if action == "start":
         return ChatState.INICIO
 
-    return None
+    return current_state

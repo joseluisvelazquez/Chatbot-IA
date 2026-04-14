@@ -88,7 +88,7 @@ class MessageBuilder:
         
         def line(label, value):
             # ljust rellena con espacios a la derecha, rjust a la izquierda
-            return f"{label.ljust(col)}{money(value).rjust(10)}"
+            return f"{label.ljust(col)}{money(value).rjust(15)}"
 
         return (
             "Claro, con gusto te comparto el desglose de tu cuenta:\n\n"
@@ -96,7 +96,7 @@ class MessageBuilder:
             f"{line('Precio del equipo', precio)}\n"
             f"{line('- Pago inicial', pago)}\n"
             f"{line('- Subsidio', subsidio)}\n"
-            f"{'-' * 30}\n"
+            f"{'-' * 40}\n"
             f"{line('Saldo restante', saldo)}"
             "```"
         )

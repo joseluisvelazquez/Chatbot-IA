@@ -118,12 +118,71 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         # 1. Detectar intención (con prioridad)
         # --------------------------------------
         text_clean = text.strip().lower()
-        
-        detected_intent, folio = detect_intent(text, current_state)
 
-        # detectar duda explícita si detect_intent no fue crítico
-        if is_doubt(text) and detected_intent not in ("human", "call", "start_verification"):
-            detected_intent = "doubt"
+        import re
+        import unicodedata
+
+        def clean_for_match(txt):
+            normalized = unicodedata.normalize('NFKD', txt).encode('ASCII', 'ignore').decode('utf-8')
+            return re.sub(r'[^a-z0-9\s]', '', normalized).strip()
+
+        text_norm = clean_for_match(text_clean)
+        
+        button_matched = False
+        state_buttons = FLOW.get(current_state, {}).get("buttons", [])
+        
+        duda_keywords_exact = {
+            "tengo una duda", "tengo duda", "tengo dudas", "una duda", 
+            "una pregunta", "tengo una pregunta", "pregunta", "duda", 
+            "hacer una pregunta", "quiero hacer una pregunta", "tengo preguntas",
+            "1 duda", "1 pregunta", "tengo 1 duda", "tengo 1 pregunta",
+            "tengo otra duda", "otra duda", "otra pregunta", "tengo otra pregunta"
+        }
+        es_duda_corta = text_norm in duda_keywords_exact
+
+        for btn in state_buttons:
+            # quitar emojis comunes y limpiar
+            label_clean = btn["label"].replace('✅', '').replace('❓', '').replace('📄', '').replace('❌', '').replace('▶️', '')
+            label_norm = clean_for_match(label_clean)
+            
+            # Match exacto o casi exacto
+            if text_norm == label_norm or text_norm == label_norm.rstrip('s') or text_norm.rstrip('s') == label_norm:
+                detected_intent = btn["id"]
+                action = "advance"
+                folio = None
+                button_matched = True
+                break
+            # Inclusión (para frases más largas, ej. "tengo duda" dentro de "tengo dudas")
+            elif len(text_norm) >= 4 and text_norm in label_norm:
+                detected_intent = btn["id"]
+                action = "advance"
+                folio = None
+                button_matched = True
+                break
+            # Mapeo a botones equivalentes si el texto es una de las frases cortas comunes evaluadas
+            elif es_duda_corta and ("duda" in label_norm or "pregunta" in label_norm):
+                detected_intent = btn["id"]
+                action = "advance"
+                folio = None
+                button_matched = True
+                break
+
+        if not button_matched:
+            # --- Atajos adicionales manuales ---
+            if current_state == ChatState.MENU_AYUDA and "pregunta" in text_clean:
+                detected_intent = "MENU_DUDA"
+                action = "advance"
+                folio = None
+            elif current_state == ChatState.MENU_AYUDA and "verificacion" in text_clean:
+                detected_intent = "MENU_VERIFICACION"
+                action = "advance"
+                folio = None
+            else:
+                detected_intent, folio = detect_intent(text, current_state)
+
+                # detectar duda explícita si detect_intent no fue crítico
+                if is_doubt(text) and detected_intent not in ("human", "call", "start_verification"):
+                    detected_intent = "doubt"
 
         # --------------------------------------
         # HARD RULES (máxima prioridad)
@@ -142,90 +201,91 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             else:
                 detected_intent = "negative"
 
-            # --------------------------------------
-            # DEFINIR INTENTS PROTEGIDOS
-            # --------------------------------------
+        # --------------------------------------
+        # DEFINIR INTENTS PROTEGIDOS
+        # --------------------------------------
 
-            PROTECTED_INTENTS = {
-                "affirmative",
-                "negative",
-                "call",
-                "human",
-                "later",
-                "start_verification"
-            }
+        PROTECTED_INTENTS = {
+            "affirmative",
+            "negative",
+            "call",
+            "human",
+            "later",
+            "start_verification"
+        }
 
-            # --------------------------------------
-            # DECIDIR SI IA DEBE INTERVENIR
-            # --------------------------------------
+        # --------------------------------------
+        # DECIDIR SI IA DEBE INTERVENIR
+        # --------------------------------------
 
-            context_temp = ConversationContext(
-                state=current_state,
-                previous_state=previous_state,
-                text=text,
-                intent=detected_intent,
-                phone=session.phone,
-                folio=session.folio,
-                venta=None,
-                session=session,
-                db=db
+        context_temp = ConversationContext(
+            state=current_state,
+            previous_state=previous_state,
+            text=text,
+            intent=detected_intent,
+            phone=session.phone,
+            folio=session.folio,
+            venta=None,
+            session=session,
+            db=db
+        )
+
+        state_type = get_state_type(current_state)
+
+        # decidir uso de IA según estado
+        if state_type == "confirmation":
+            use_ai = False  # casi nunca usar IA aquí
+
+        elif state_type == "information":
+            use_ai = True   # aquí sí es útil
+
+        elif state_type == "inconsistency":
+            use_ai = True   # siempre usar IA
+
+        else:
+            use_ai = should_use_ai(text, detected_intent, current_state)
+
+        # CASO 1: intent débil → IA decide
+        if detected_intent in ("other", "ambiguous", None) and use_ai:
+
+            ai_result = interpret_intent_with_ai(
+                text,
+                context_temp,
+                session=session
             )
 
-            state_type = get_state_type(current_state)
+            if ai_result:
+                ai_intent = ai_result.get("intent")
+                confidence = ai_result.get("confidence", "low")
 
-            # decidir uso de IA según estado
-            if state_type == "confirmation":
-                use_ai = False  # casi nunca usar IA aquí
+                if ai_intent and confidence in ("medium", "high"):
+                    logger.info(f"🤖 IA fallback → {ai_intent} ({confidence})")
+                    detected_intent = ai_intent
 
-            elif state_type == "information":
-                use_ai = True   # aquí sí es útil
+        # CASO 2: intent válido PERO mensaje complejo → IA puede reinterpretar
+        elif detected_intent in PROTECTED_INTENTS and use_ai:
 
-            elif state_type == "inconsistency":
-                use_ai = True   # siempre usar IA
+            ai_result = interpret_intent_with_ai(
+                text,
+                context_temp,
+                session=session
+            )
 
-            else:
-                use_ai = should_use_ai(text, detected_intent, current_state)
+            if ai_result:
+                ai_intent = ai_result.get("intent")
+                confidence = ai_result.get("confidence", "low")
 
-            # CASO 1: intent débil → IA decide
-            if detected_intent in ("other", "ambiguous", None) and use_ai:
-
-                ai_result = interpret_intent_with_ai(
-                    text,
-                    context_temp,
-                    session=session
-                )
-
-                if ai_result:
-                    ai_intent = ai_result.get("intent")
-                    confidence = ai_result.get("confidence", "low")
-
-                    if ai_intent and confidence in ("medium", "high"):
-                        logger.info(f"🤖 IA fallback → {ai_intent} ({confidence})")
-                        detected_intent = ai_intent
-
-            # CASO 2: intent válido PERO mensaje complejo → IA puede reinterpretar
-            elif detected_intent in PROTECTED_INTENTS and use_ai:
-
-                ai_result = interpret_intent_with_ai(
-                    text,
-                    context_temp,
-                    session=session
-                )
-
-                if ai_result:
-                    ai_intent = ai_result.get("intent")
-                    confidence = ai_result.get("confidence", "low")
-
-                    # SOLO si IA tiene alta confianza
-                    if ai_intent and confidence in ("medium", "high"):
-                        logger.info(f"🤖 IA override → {ai_intent} ({confidence})")
-                        detected_intent = ai_intent
+                # SOLO si IA tiene alta confianza
+                if ai_intent and confidence in ("medium", "high"):
+                    logger.info(f"🤖 IA override → {ai_intent} ({confidence})")
+                    detected_intent = ai_intent
 
         # --------------------------------------
         # ROUTING NORMAL
         # --------------------------------------
 
-        action = route_intent(current_state, detected_intent)
+        if not button_matched:
+            action = route_intent(current_state, detected_intent)
 
     # --------------------------------------
     # 2. Detectar folio automático
@@ -490,25 +550,32 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             desglose = MessageBuilder.build_descuento_desglose(venta)
 
             current_state = ChatState(session.state)
+            original_state_for_previous = current_state
 
-            reply_state, buttons, image_id = render_state(
-                current_state,
-                session,
-                db
-            )
+            is_finished = (current_state == ChatState.FINALIZADO) or (session.previous_state == "FINALIZADO")
 
-            if current_state not in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO] and reply_state:
-                reply = f"{desglose}\n\n{messages.CONTINUAR_VERIFICACION}\n\n{reply_state}"
+            if is_finished:
+                current_state = ChatState.FINALIZADO
+                reply = desglose
+                image_id = None
+                buttons = FLOW.get(ChatState.FINALIZADO, {}).get("buttons", [])
             else:
+                current_state = ChatState.MENU_AYUDA
                 reply = f"{desglose}\n\n{messages.EN_QUE_MAS_AYUDAR}"
                 buttons = FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
                 image_id = None
+
+            # Preservar el state original como previous_state para poder regresar a la verificación
+            if original_state_for_previous in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO]:
+                saved_previous = session.previous_state
+            else:
+                saved_previous = session.state
 
             return FlowResult(
                 reply=reply,
                 next_state=current_state,
                 buttons=buttons,
-                previous_state=session.state,
+                previous_state=saved_previous,
                 image_id=image_id
             )
         
@@ -564,7 +631,14 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             or is_info_state
         )
 
-        if not skip_verification_append and reply_state:
+        is_finished = (current_state == ChatState.FINALIZADO) or (session.previous_state == "FINALIZADO")
+
+        if is_finished:
+            current_state = ChatState.FINALIZADO
+            reply = faq_response
+            image_id = faq_image_id
+            buttons = FLOW.get(ChatState.FINALIZADO, {}).get("buttons", [])
+        elif not skip_verification_append and reply_state:
             reply = f"{faq_response}\n\n{messages.CONTINUAR_VERIFICACION}\n\n{reply_state}"
             image_id = faq_image_id or image_id
         else:
@@ -574,13 +648,12 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             image_id = faq_image_id
 
         # Si veníamos de DUDA/MENU_DUDA, preservar el previous_state de la sesión
-        # (apunta al estado de info real, e.g. INFO_PAGOS) en lugar de guardar DUDA.
         # Si veníamos de un estado de información directamente, también lo guardamos
         # como previous_state para que "Ir a verificación" regrese al lugar correcto.
-        if original_state_for_previous in [ChatState.MENU_DUDA, ChatState.DUDA]:
+        if original_state_for_previous in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO]:
             saved_previous = session.previous_state
         else:
-            saved_previous = session.state  # INFO_PAGOS, CONFIRMAR_xxx, etc.
+            saved_previous = session.state  
 
         return FlowResult(
             reply=reply,
@@ -599,7 +672,14 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         original_state_for_previous = current_state
         reply_state, buttons, image_id = render_state(current_state, session, db)
 
-        if current_state not in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO] and reply_state:
+        is_finished = (current_state == ChatState.FINALIZADO) or (session.previous_state == "FINALIZADO")
+
+        if is_finished:
+            current_state = ChatState.FINALIZADO
+            reply = "👋🏻 ¡Hola!"
+            image_id = None
+            buttons = FLOW.get(ChatState.FINALIZADO, {}).get("buttons", [])
+        elif current_state not in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO] and reply_state:
             reply = f"👋🏻 ¡Hola! \n\n{messages.CONTINUAR_VERIFICACION}\n\n{reply_state}"
         else:
             current_state = ChatState.MENU_AYUDA
@@ -607,8 +687,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             buttons = FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
             image_id = None
 
-        # Si veníamos de DUDA/MENU_DUDA, preservar el previous_state de la sesión
-        if original_state_for_previous in [ChatState.MENU_DUDA, ChatState.DUDA]:
+        # Si veníamos de DUDA/MENU_DUDA u otro estado fuera de flujo, preservar el previous_state de la sesión
+        if original_state_for_previous in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO]:
             saved_previous = session.previous_state
         else:
             saved_previous = session.state
@@ -662,6 +742,19 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         if not ai_reply or not ai_reply.strip():
             ai_reply = messages.ERROR_IA
 
+        # Detectar si la IA decidió escalar
+        from app.services.ai.agent_messages import AGENT_MESSAGES
+        if ai_reply.strip() in [
+            AGENT_MESSAGES["escalation"]["default"],
+            AGENT_MESSAGES["fallback"]["default"]
+        ] or "asesor" in ai_reply.lower():
+            return FlowResult(
+                reply=ai_reply,
+                next_state=ChatState.ACLARACION,
+                buttons=[],
+                previous_state=session.state
+            )
+
         current_state = ChatState(session.state)
         # Capturamos el estado original ANTES de cualquier reasignación
         original_state_for_previous = current_state
@@ -682,7 +775,14 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             or is_info_state
         )
 
-        if not skip_verification_append and reply_state:
+        is_finished = (current_state == ChatState.FINALIZADO) or (session.previous_state == "FINALIZADO")
+
+        if is_finished:
+            current_state = ChatState.FINALIZADO
+            reply = ai_reply
+            image_id = None
+            buttons = FLOW.get(ChatState.FINALIZADO, {}).get("buttons", [])
+        elif not skip_verification_append and reply_state:
             reply = f"{ai_reply}\n\n{messages.CONTINUAR_VERIFICACION}\n\n{reply_state}"
         else:
             current_state = ChatState.MENU_AYUDA
@@ -690,10 +790,10 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             buttons = FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
             image_id = None
 
-        # Si veníamos de DUDA/MENU_DUDA, preservar el previous_state de la sesión.
+        # Si veníamos de DUDA/MENU_DUDA u otro estado fuera de flujo, preservar el previous_state de la sesión.
         # Si veníamos de un estado de información directamente, también lo guardamos
         # como previous_state para que "Ir a verificación" regrese al lugar correcto.
-        if original_state_for_previous in [ChatState.MENU_DUDA, ChatState.DUDA]:
+        if original_state_for_previous in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO]:
             saved_previous = session.previous_state
         else:
             saved_previous = session.state  # INFO_PAGOS, CONFIRMAR_xxx, etc.

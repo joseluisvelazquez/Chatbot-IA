@@ -382,9 +382,7 @@ FLOW = {
 
     ChatState.ACLARACION: {
         "text": msg.ACLARACION,
-        "buttons": [
-            {"id": "REANUDACION", "label": "▶️ Continuar proceso"},
-        ],
+        "buttons": [],
         "options": {
             "REANUDACION": "__RESUME__",
         },
@@ -392,9 +390,7 @@ FLOW = {
 
     ChatState.LLAMADA: {
         "text": msg.ACLARACION,
-        "buttons": [
-            {"id": "REANUDACION", "label": "▶️ Continuar proceso"},
-        ],
+        "buttons": [],
         "options": {
             "REANUDACION": "__RESUME__",
         },
@@ -404,11 +400,9 @@ FLOW = {
         "text": msg.RECORDATORIO_1H,
         "buttons": [
             {"id": "REANUDACION", "label": "▶️ Continuar"},
-            {"id": "LLAMADA", "label": "📞 Hablar con asesor"},
         ],
         "options": {
             "REANUDACION": "__RESUME__",
-            "LLAMADA": ChatState.LLAMADA,
             "affirmative": "__RESUME__",
         },
     },
@@ -417,11 +411,9 @@ FLOW = {
         "text": msg.RECORDATORIO_2H,
         "buttons": [
             {"id": "REANUDACION", "label": "▶️ Continuar"},
-            {"id": "LLAMADA", "label": "📞 Hablar con asesor"},
         ],
         "options": {
             "REANUDACION": "__RESUME__",
-            "LLAMADA": ChatState.LLAMADA,
             "affirmative": "__RESUME__",
         },
     },
@@ -429,7 +421,11 @@ FLOW = {
 
     ChatState.FINALIZADO: {
         "text": msg.FINALIZADO,
-        "buttons": [],
-        "options": {},
+        "buttons": [
+            {"id": "MENU_DUDA", "label": "❓ Hacer una pregunta"},
+        ],
+        "options": {
+            "MENU_DUDA": ChatState.MENU_DUDA,
+        },
     },
 }

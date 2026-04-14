@@ -74,6 +74,7 @@ INTENT_KEYWORDS = {
         "perfecto",
         "claro",
         "claro que si",
+        "sip"
     ],
 
     "negative": [
@@ -96,6 +97,9 @@ INTENT_KEYWORDS = {
     "doubt": [
         "duda",
         "dudas",
+        "pregunta",
+        "preguntas",
+        "hacer una pregunta",
         "no entiendo",
         "no entiendo bien",
         "tengo duda",

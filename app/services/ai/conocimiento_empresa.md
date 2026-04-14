@@ -13,4 +13,83 @@ Es por eso que además de su característico hardware de alto desempeño, ésta 
 - Sábados: Cerrado
 - Domingos: Cerrado
 
+## Contrato: Términos y Condiciones
+
+* Aprobación de crédito: MXCOMP se reserva el derecho de aprobar el pedido. Evaluará la viabilidad de pago del cliente mediante análisis de información cuantitativa y cualitativa.
+* Investigación crediticia: El cliente autoriza expresamente a MXCOMP a realizar investigaciones sobre su comportamiento crediticio en sociedades de información crediticia.
+* Pagos y Moras:
+  * Los pagos son periódicos y consecutivos.
+  * La falta de pago puntual genera intereses moratorios sobre el saldo insoluto de hasta un 6% semanal.
+  * MXCOMP podrá condonar intereses si el crédito se liquida dentro del plazo límite estipulado.
+* Depósito de productos: Mientras no se haya pagado el total, el cliente asume la calidad de depositario de los productos, debiendo conservarlos en perfecto estado.
+* Liquidación anticipada: El cliente puede liquidar su saldo vigente en cualquier momento para obtener descuentos, según el tiempo transcurrido desde la recepción del producto.
+* Revocación: Conforme al Art. 56 de la Ley Federal de Protección al Consumidor, el cliente puede revocar su consentimiento dentro de los términos legales, cubriendo costos de flete.
+* Cancelación: MXCOMP puede aceptar la cancelación si el cliente ha cubierto al menos el 50% del valor del plan de pago vigente, cobrando un concepto de alquiler del bien (Art. 70 de la Ley Federal de Protección al Consumidor).
+* Software: MXCOMP no distribuye ni fomenta software sin licencia y se deslinda de responsabilidades por la instalación de programas ilegales por parte del cliente.
+
+## Póliza de Garantía: Términos y Condiciones
+
+* Cobertura: Garantía técnica contra defectos de fabricación o ensamble de hardware. No cubre pérdida de información (datos, fotos, música, etc.).
+* Vigencia: Estipulada en la descripción de los mismos al momento del pedido (en ningún caso será inferior a 60 días naturales a partir de la entrega).
+* Requisitos: Presentar contrato original y póliza de garantía.
+* Servicio: Se puede acudir a la sucursal o solicitar un técnico a domicilio (el cliente cubre costos de traslado/fletes).
+
+## Instrucciones de Uso y Cuidado
+* Uso obligatorio de regulador de voltaje (no usar "ladrones").
+* Esperar a que los componentes se apaguen totalmente (ventiladores y LEDs) antes de desconectar.
+* Apagar equipos ante variaciones de voltaje o tormentas eléctricas.
+* Mantener en áreas ventiladas, lejos de fuentes de calor y polvo.
+* No ingerir alimentos cerca de los equipos ni exponerlos al fuego o humedad.
+
+## Exclusiones de Garantía
+* Intervención por personas ajenas a la empresa.
+* Maltrato, accidentes, uso indebido o modificaciones.
+* Falta de pago puntual.
+* Omisión total o parcial de las instrucciones de uso.
+
+## Planes de Financiamiento
+
+El valor base del contrato es de $16,999.00.
+
+| Plan de Pago | Plazo | Pagos Semanales | Pago Inicial | Importe Total |
+| :--- | :--- | :--- | :--- | :--- |
+| Base (Sin descuento) | 78 semanas | $215.00 | $229.00 | $16,999.00 |
+| 10% Descuento | 15 meses (65 pagos) | $230.00 | $349.00 | $15,299.00 |
+| 20% Descuento | 12 meses (52 pagos) | $253.00 | $443.00 | $13,599.00 |
+| 30% Descuento | 9 meses (39 pagos) | $292.00 | $511.00 | $11,899.00 |
+| 40% Descuento | 6 meses (26 pagos) | $369.00 | $605.00 | $10,199.00 |
+| 50% Descuento | 3 meses (13 pagos) | $600.00 | $699.00 | $8,499.00 |
+
+## Sistema Operativo y Software (Endless OS - PC MÁXICA)
+
+### Pilares del Sistema
+* Aprende: Incluye la mayor enciclopedia del mundo, clases en video y programas sobre temas variados. PC MÁXICA pone el conocimiento al alcance del usuario.
+* Intuitivo: Diseñado para ser amigable y fácil de usar, ideal para personas sin experiencia previa en computación.
+* Trabaja: Herramienta poderosa para escuela y trabajo. Incluye una suite de office para crear documentos, presentaciones y hojas de cálculo.
+* Te Conecta: Permite navegar en la red, realizar búsquedas y comunicación con amigos al estar conectado a internet.
+* Contenido: Cientos de aplicaciones y recursos disponibles sin conexión a internet y libres de pago de licencia de por vida.
+
+### Beneficios Clave
+* Seguridad: Incluye protección nativa contra ataques de virus y otros riesgos cibernéticos. El contenido está previamente verificado y aprobado por un equipo de seguridad.
+* Eficiencia de Costos: Elimina costos de licencias y reduce significativamente los gastos de mantenimiento y soporte.
+* Facilidad de Uso: Reduce la curva de aprendizaje. Permite abrir aplicaciones con un solo “clic” y realizar búsquedas al instante, incluso sin conexión.
+* Ecosistema de Software: Centro de programas con gran contenido educativo y catálogo en línea con más de 800 aplicaciones gratuitas.
+
+### Apps Especializadas 
+Endless OS incluye herramientas profesionales para diversas disciplinas:
+* Diseño Gráfico: Alternativas compatibles con Photoshop™ e Ilustrator™.
+* Arquitectura e Ingeniería: Alternativa compatible con AutoCad™.
+* Desarrollo: Herramientas para Desarrolladores de videojuegos y Desarrollo de Software.
+* Creatividad 3D: Aplicaciones para Animación 3D.
+
+### Recursos para Docentes
+* Ciensación: Experimentos prácticos para la enseñanza de la ciencia.
+* Tutor Maxico: Asesor educativo con IA para resolución de dudas en tiempo real.
+* Ceibal: Formación docente e inclusión de TIC (Tecnopedagogía y accesibilidad).
+* Sikana: Videos y artículos sobre salud, medio ambiente y habilidades prácticas.
+* EiE Families: Actividades familiares para resiliencia y resolución de problemas.
+* Descartes: Recursos digitales interactivos especializados en matemáticas.
+* WiiXii: Juegos, lógica y fabricación de material didáctico con reciclaje.
+
+
 

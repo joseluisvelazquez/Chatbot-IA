@@ -4,7 +4,7 @@ AGENT_MESSAGES = {
     # ESCALACIÓN
     # --------------------------------------
     "escalation": {
-        "default": "Voy a pasar tu caso con un asesor para ayudarte mejor.",
+        "default": "⚠️ Voy a pasar tu caso con un asesor para ayudarte mejor.",
     },
 
     # --------------------------------------
@@ -23,24 +23,6 @@ AGENT_MESSAGES = {
     "missing_information": {
         "default": (
             "No tengo suficiente información para ayudarte con eso en este momento."
-        ),
-    },
-
-    # --------------------------------------
-    # CONFUSIÓN DEL CLIENTE
-    # --------------------------------------
-    "confusion": {
-        "default": (
-            "Quiero asegurarme de ayudarte correctamente. ¿Podrías explicarme un poco más tu duda?"
-        ),
-    },
-
-    # --------------------------------------
-    # REDIRECCIÓN AL FLUJO
-    # --------------------------------------
-    "return_to_flow": {
-        "default": (
-            "Continuemos con el proceso para terminar tu verificación."
         ),
     },
 

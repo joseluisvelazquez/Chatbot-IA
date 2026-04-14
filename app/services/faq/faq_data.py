@@ -8,7 +8,8 @@ FAQ_DATA = [
             "cuando primer pago",
             "puedo pagar cualquier dia",
             "cuando puedo hacer el primer pago",
-            "primer pago dia"
+            "primer pago dia",
+            "puedo pagar antes"
         ],
         "response": "Así es, siempre y cuando no supere el dia limite indicado en su verificación, puede realizarlo antes sin problema.",
         "response_dinamica": "Así es, siempre y cuando no sea después del *{fecha_limite}* puede realizarlo antes sin problema."

@@ -125,7 +125,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 patch=result.inconsistencia_patch,
             )
 
-        # 2) Si finaliza → cerramos inconsistencia abierta (si existe)
+        # 3) Si finaliza → cerramos inconsistencia abierta (si existe)
         if next_state == ChatState.FINALIZADO:
             close_open_inconsistencia(
                 db=db,

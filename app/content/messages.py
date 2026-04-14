@@ -88,7 +88,10 @@ INFO_BENEFICIOS2 = (
     "¿Tienes alguna duda sobre tu contrato o tu *{producto}*?"
 )
 
-FINALIZADO = "✅ Verificación completada. Gracias por tu tiempo."
+FINALIZADO = (
+    "✅ Verificación completada. Gracias por tu tiempo.\n\n"
+    "¿Hay algo más en lo que te pueda ayudar?"
+)
 
 INCONSISTENCIA = "Entiendo. Por favor, indícame qué parte de la información está incorrecta."
 INCONSISTENCIA_NOMBRE = "Entiendo. ¿Me podrías escribir cómo es tu nombre correcto, por favor?"
@@ -103,7 +106,7 @@ FUERA_DE_FLUJO = (
     "Fuera de flujo, un asesor te contactará para atender tu caso."
 )
 
-ACLARACION = "💬 Puedo ayudarte a aclarar tu duda o continuar el proceso."
+ACLARACION = "Entendido. Voy a transferir tu caso con un asesor para que te brinde atención personalizada lo más pronto posible."
 
 RECORDATORIO_1H = (
     "👋🏼 Solo paso a recordarte que podemos continuar con tu verificación cuando gustes.\n\n"
