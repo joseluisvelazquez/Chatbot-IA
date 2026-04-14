@@ -2,6 +2,7 @@ from typing import Optional
 import datetime
 import decimal
 import enum
+from sqlalchemy import Boolean, Text
 from sqlalchemy.dialects.mysql import JSON as MYSQL_JSON
 from app.db.base import Base
 
@@ -114,6 +115,8 @@ class Inconsistencias(Base):
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime, nullable=True
     )
+    devolucion = Column(Boolean, default=False)
+    motivo_devolucion = Column(Text, nullable=True)
 
 class BitacoraInventario(Base):
     __tablename__ = "bitacora_inventario"
@@ -295,6 +298,10 @@ class ChatSessions(Base):
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     last_message_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
     reminders = relationship("Reminder", back_populates="session")
+    ai_intent_attempts = Column(Integer, default=0)
+    ai_response_attempts = Column(Integer, default=0)
+    ai_inconsistency_attempts = Column(Integer, default=0)
+    invalid_folio_attempts = Column(Integer, default=0)
     unread_count = Column(Integer, nullable=False, default=0)
 
 

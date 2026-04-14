@@ -64,6 +64,7 @@ def is_verification_complete(payload: Dict[str, Any]) -> bool:
 
     return data["finalizado"] == 1
 
+
 class VerificationService:
     """Persistencia del avance de verificación por CUENTA (no por sesión).
 

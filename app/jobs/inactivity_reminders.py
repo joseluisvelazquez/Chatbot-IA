@@ -7,9 +7,8 @@ from app.db.session import SessionLocal
 from app.db.models import Reminder, ChatSessions
 from app.services.reminder_service import TYPE_1H, TYPE_2H
 from app.adapters.whatsapp_client import send_whatsapp_message
-from app.core.flow import FLOW
-from app.core.states import ChatState
-from app.core.flow_engine import TRANSITIONS
+from app.core.flow.flow import FLOW
+from app.core.states.states import ChatState
 
 
 # 🔒 Opcional: limitar a un número durante pruebas

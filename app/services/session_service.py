@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.db.models import ChatSessions
-from app.core.states import ChatState
+from app.core.states.states import ChatState
 
 def attach_folio_to_session(db, session, folio):
     

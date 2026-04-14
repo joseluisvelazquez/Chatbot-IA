@@ -9,6 +9,7 @@ import asyncio
 from app.db.session import get_db
 from app.adapters.meta_webhook import parse_meta_payload
 from app.adapters.whatsapp_client import send_whatsapp_message
+
 from app.config.settings import settings
 
 from app.core.flow_engine import process_message
@@ -25,6 +26,7 @@ from app.services.verification_panel_service import build_verification_snapshot
 from app.services.media_service import handle_incoming_media
 
 from app.websockets.manager import manager
+
 
 
 router = APIRouter()
@@ -249,6 +251,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                     }
                 },
             )
+
 
         if next_state == ChatState.FINALIZADO:
             close_open_inconsistencia(

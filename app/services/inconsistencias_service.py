@@ -23,41 +23,45 @@ def _deep_merge(base: dict, patch: dict) -> dict:
 
 def _apply_append_ops(extra_json: dict, patch: dict) -> dict:
     """
-    Soporta formato especial:
-      {"componentes": {"faltantes_append": ["Monitor"]}}
-    que se vuelve:
-      extra_json["componentes"]["faltantes"] = [..., "Monitor"] (sin duplicados)
+    Soporta formato especial con sufijo _append:
+      {"inconsistencias_append": [{...}]}  → agrega a extra_json["inconsistencias"]
+      {"contador": {...}}                  → reemplaza completo (preserva orden)
+      {"_delete_keys": ["clave"]}          → elimina claves de extra_json
     """
-    for section_key, section_patch in patch.items():
-        if not isinstance(section_patch, dict):
-            # merge normal
-            extra_json[section_key] = section_patch
-            continue
+    # Claves que siempre se reemplazan completas (no deep-merge) para preservar orden
+    REPLACE_KEYS = {"contador"}
 
-        section = extra_json.get(section_key, {})
-        if not isinstance(section, dict):
-            section = {}
+    # Procesar eliminaciones primero
+    for key in patch.get("_delete_keys", []):
+        extra_json.pop(key, None)
 
-        for k, v in section_patch.items():
-            if k.endswith("_append") and isinstance(v, list):
-                real_key = k.replace("_append", "")
-                current_list = section.get(real_key, [])
-                if not isinstance(current_list, list):
-                    current_list = []
+    for k, v in patch.items():
+        if k == "_delete_keys":
+            continue  # ya procesado
 
-                for item in v:
-                    if item not in current_list:
-                        current_list.append(item)
+        if k.endswith("_append") and isinstance(v, list):
+            real_key = k.replace("_append", "")
+            current_list = extra_json.get(real_key, [])
+            if not isinstance(current_list, list):
+                current_list = []
 
-                section[real_key] = current_list
-            else:
-                # merge normal dentro de la sección
-                if isinstance(v, dict) and isinstance(section.get(k), dict):
-                    section[k] = _deep_merge(section[k], v)
-                else:
-                    section[k] = v
+            for item in v:
+                if isinstance(item, dict):
+                    current_list.append(item)
+                elif item not in current_list:
+                    current_list.append(item)
 
-        extra_json[section_key] = section
+            extra_json[real_key] = current_list
+
+        elif k in REPLACE_KEYS:
+            # Reemplazar completo para preservar el orden de claves
+            extra_json[k] = v
+
+        elif isinstance(v, dict) and isinstance(extra_json.get(k), dict):
+            extra_json[k] = _deep_merge(extra_json[k], v)
+
+        else:
+            extra_json[k] = v
 
     return extra_json
 
