@@ -11,6 +11,7 @@ const state = {
         byId: {},
         order: [],
         loaded: false,
+        _version: 0
     },
     messages: {
         bySessionId: {},
@@ -128,17 +129,20 @@ export function dispatch(action) {
             })
 
             state.conversations.loaded = true
+            state.conversations._version++
             break
         }
 
         case "conversations/upsert": {
             upsertConversation(action.payload)
+            state.conversations._version++
             break
         }
 
         case "conversations/move_top": {
             if (action.payload?.session_id) {
                 moveConversationToTop(action.payload.session_id)
+                state.conversations._version++
             }
             break
         }
@@ -151,6 +155,7 @@ export function dispatch(action) {
                 ...state.conversations.byId[session_id],
                 unread_count,
             }
+            state.conversations._version++
             break
         }
 
@@ -165,6 +170,18 @@ export function dispatch(action) {
         case "messages/add": {
             const { sessionId, message } = action.payload || {}
             upsertMessage(sessionId, message)
+
+            if (sessionId && state.conversations.byId[sessionId]) {
+                state.conversations.byId[sessionId] = {
+                    ...state.conversations.byId[sessionId],
+                    last_message_at: message.created_at || state.conversations.byId[sessionId].last_message_at,
+                    last_message: message.content || state.conversations.byId[sessionId].last_message,
+                }
+
+                moveConversationToTop(sessionId)
+                state.conversations._version++
+            }
+
             break
         }
         case "messages/prepend": {
@@ -216,7 +233,7 @@ export function dispatch(action) {
             }
 
             if (state.verifications.selected?.session_id == session_id) {
-                state.verifications.selected = updated
+                state.verifications.selected = state.verifications.bySessionId[session_id]
             }
 
             break

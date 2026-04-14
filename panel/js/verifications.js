@@ -424,7 +424,7 @@ document.addEventListener("click", (e) => {
 window.goToSiga = function(noCuenta) {
     const form = document.createElement("form")
     form.method = "POST"
-    form.action = "http://localhost/PruebasP/app/cuentas/datos_cuenta.php"
+    form.action = "http://localhost/siga/app/cuentas/datos_cuenta.php"
     form.target = "_blank" // opcional
 
     const input = document.createElement("input")
