@@ -13,7 +13,7 @@ from app.schemas.panel import (
 
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.db.session import get_db
-from app.security.auth_service import decode_panel_session
+from app.security.auth_service import decode_panel_session, restrict_to_assigned
 from app.services.verification_service import VerificationService
 from app.websockets.manager import manager
 from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message, FlowEvent
@@ -368,6 +368,7 @@ def dashboard_summary(
 # =========================================
 # Obtener verificaciones (PAGINADO + DTO + LÓGICA DE NEGOCIO)
 # =========================================
+
 @router.get("/verifications")
 def get_verifications(
     limit: int = 100,
@@ -403,17 +404,19 @@ def get_verifications(
     # =========================
     # 📦 OBTENER SESIONES
     # =========================
+    
     sessions = (
-        db.query(ChatSessions)
+        restrict_to_assigned(db.query(ChatSessions), user, db)
         .filter(ChatSessions.folio.isnot(None))
         .order_by(ChatSessions.last_message_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
     )
+    
 
     total = (
-        db.query(func.count(ChatSessions.id))
+        restrict_to_assigned(db.query(func.count(ChatSessions.id)), user, db)
         .filter(ChatSessions.folio.isnot(None))
         .scalar()
     )
@@ -455,7 +458,7 @@ def get_verifications(
     })
 
     ventas = (
-        db.query(BitacoraVentas.tel_1, BitacoraVentas.nombre_completo)
+        restrict_to_assigned(db.query(BitacoraVentas.tel_1, BitacoraVentas.nombre_completo), user, db)
         .filter(
             func.right(BitacoraVentas.tel_1, 10).in_(normalized_phones),
             BitacoraVentas.id_emp_bv == 1
@@ -500,7 +503,7 @@ def get_verifications(
     # ⚠️ INCONSISTENCIAS (BATCH)
     # =========================
     inconsistencias = (
-        db.query(Inconsistencias)
+        restrict_to_assigned(db.query(Inconsistencias), user, db)
         .filter(Inconsistencias.folio.in_(folios))
         .all()
     )
@@ -706,7 +709,7 @@ def get_conversations(
         limit = 100
 
     sessions = (
-        db.query(ChatSessions)
+        restrict_to_assigned(db.query(ChatSessions), user, db)
         .order_by(desc(ChatSessions.last_message_at))
         .offset(offset)
         .limit(limit)
