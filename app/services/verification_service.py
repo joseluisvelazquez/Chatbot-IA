@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.panel_send import send_message
-from app.core.verification_schema import (
+from app.core.verification.verification_schema import (
     DEFAULT_VERIFICATION_PROGRESS,
     assert_valid_step,
     normalize_progress_payload,

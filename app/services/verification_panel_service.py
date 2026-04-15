@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, Optional
 from sqlalchemy.orm import Session
 
 from app.core.verification_steps import STEP_ORDER
-from app.core.verification_schema import normalize_progress_payload
+from app.core.verification.verification_schema import normalize_progress_payload
 from app.siga.siga_repository import obtener_venta_por_folio
 from app.services.verification_service import VerificationService
 from app.db.models import ChatSessions, VerificacionCuenta, Inconsistencias

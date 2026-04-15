@@ -12,13 +12,15 @@ from app.core.states.state_handlers import handle_special_cases, handle_flow_ski
 from app.core.context.conversation_context import ConversationContext
 from app.core.states.state_types import get_state_type
 from app.core.flow.flow import FLOW
+from app.config.settings import settings
 
 from app.content import messages
 from app.content.message_builder import MessageBuilder
-from app.siga.siga_repository import obtener_venta_por_folio
+from app.services import verification_service
+from app.siga.siga_repository import obtener_venta_por_folio, obtener_verificacion_por_no_cuenta
 from app.utils.folio_parser import extraer_folio
 
-from app.services.verification_service import VerificationService
+from app.services.verification_service import VerificationService, log_flow_event
 from app.services.verification_tracker import track_verification
 from app.services.ai.ai_service import analyze_inconsistency, generate_ai_response
 from app.services.inconsistencias_service import open_or_patch_inconsistencia
@@ -100,6 +102,47 @@ def is_devolucion_query(text: str) -> bool:
 # --------------------------------------
 
 def process_message(session, text: str, intent: str | None = None, db=None) -> FlowResult:
+
+    # --------------------------------------
+    # Si mandó folio para iniciar
+    # --------------------------------------
+    def _check_verification_complete(folio: str) -> FlowResult | None:    
+        no_cuenta = VerificationService(db).resolve_no_cuenta_from_folio(folio)
+        verificacion = obtener_verificacion_por_no_cuenta(db,no_cuenta)
+        print(f"DEBUG: Folio detectado {folio_detectado} con no_cuenta {no_cuenta}")
+
+        if no_cuenta and verificacion and (session.phone not in settings.TEST_PHONE_ONLY):
+
+            print(verification_service.is_verification_complete(verificacion.json))
+
+            if verification_service.is_verification_complete(verificacion.json):
+                return FlowResult(
+                    reply="✅ Esta cuenta ya fue verificada anteriormente.",
+                    next_state=ChatState.MENU_AYUDA,
+                    buttons= FLOW[ChatState.MENU_AYUDA].get("buttons", []),
+                    previous_state=None,
+                )
+    # --------------------------------------
+    #  LOG FLOW EVENT (CLAVE)
+    # --------------------------------------
+    def _log():
+        
+        if db:
+            try:
+                log_flow_event(
+                    db=db,
+                    session=session,
+                    from_state=current_state.value if current_state else None,
+                    to_state=next_state.value if next_state else None,
+                    trigger_text=text if text else intent,
+                    event_type="message" if text else "button",
+                    detected_intent=detected_intent,
+                    event_payload={
+                        "buttons": [b.get("id") for b in (FLOW.get(next_state, {}).get("buttons", []))],
+                    },
+                )
+            except Exception:
+                pass
 
     current_state = ChatState(session.state)
     previous_state = session.previous_state
@@ -304,6 +347,13 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 target_state = ChatState.CONFIRMAR_FOLIO_DEVOLUCION
             elif current_state == ChatState.CAMBIAR_FOLIO_DESCUENTO:
                 target_state = ChatState.CONFIRMAR_FOLIO_DESCUENTO
+            
+            verification_result = _check_verification_complete(folio)
+
+            if verification_result:
+                return verification_result
+            
+            _log()
 
             return FlowResult(
                 reply=messages.CONFIRMAR_FOLIO_DETECTADO.format(folio=folio_detectado),
@@ -335,11 +385,20 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 current_state,
                 FLOW.get(current_state, {}).get("buttons", [])
             )
+        
+        verification_result = _check_verification_complete(folio)
+
+        if verification_result:
+            return verification_result
 
         session.folio = folio
 
+        
+
         _try_mark_step(db, session, "inicio")
         _try_mark_step(db, session, "folio")
+
+        _log()
 
         return FlowResult(
             reply=messages.CONFIRMAR_FOLIO_DETECTADO.format(folio=folio),
@@ -485,6 +544,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         reply_state, buttons, image_id = render_state(next_state, session, db)
         reply = f"{messages.CORRECCION_REGISTRADA}\n\n{reply_state}" if reply_state else messages.CORRECCION_REGISTRADA
 
+        _log()
+
         return FlowResult(
             reply=reply,
             next_state=next_state,
@@ -515,6 +576,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------
 
     if action == "escalate":
+        _log()
         return FlowResult(
             reply=messages.ACLARACION,
             next_state=ChatState.ACLARACION,
@@ -523,6 +585,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         )
 
     if action == "escalate_call":
+        _log()
         return FlowResult(
             reply=messages.ACLARACION,
             next_state=ChatState.LLAMADA,
@@ -592,6 +655,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 buttons=[],
                 previous_state=session.state
             )
+        
+
 
         return FlowResult(
             reply=MessageBuilder.build_devolucion_confirmacion(),
@@ -653,7 +718,10 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         if original_state_for_previous in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO]:
             saved_previous = session.previous_state
         else:
-            saved_previous = session.state  
+            saved_previous = session.state 
+
+        _log()
+         
 
         return FlowResult(
             reply=reply,
@@ -729,6 +797,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         # "Si no pudo ayudarlo (supera intentos de frustración), escalar el caso"
         if ai_attempts >= MAX_AI_RESPONSES:
+            _log()
+        
             return FlowResult(
                 reply=messages.ACLARACION,
                 next_state=ChatState.ACLARACION,
@@ -848,7 +918,6 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         session=session,
         current_state=current_state,
         detected_intent=detected_intent,
-        next_state=next_state
     )
 
     # --------------------------------------
@@ -866,6 +935,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         session,
         db
     )
+    _log()
+        
 
     return FlowResult(
         reply=reply,

@@ -12,8 +12,8 @@ from app.adapters.whatsapp_client import send_whatsapp_message
 
 from app.config.settings import settings
 
-from app.core.flow_engine import process_message
-from app.core.states import ChatState
+from app.core.flow.flow_engine import process_message
+from app.core.states.states import ChatState
 
 from app.services.session_service import get_or_create_session, update_session
 from app.services.message_service import save_message
