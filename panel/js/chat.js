@@ -132,20 +132,35 @@ export async function initConversationsPage() {
     }
 
     if (selected?.sessionId) {
-        const sessionIdNum = Number(selected.sessionId)
-        const sessionFromStore = state.conversations.byId[sessionIdNum]
+    const sessionIdNum = Number(selected.sessionId)
+    const sessionFromStore = state.conversations.byId[sessionIdNum]
 
-        await loadChat(
-            sessionIdNum,
-            selected.phone || sessionFromStore?.phone || "",
-            selected.name || sessionFromStore?.name || null
-        )
-    } else {
+    if (!sessionFromStore) {
+            console.warn("Sesión inválida desde localStorage, limpiando...")
+            setSelectedSession(null)
+            localStorage.removeItem("lastSession")
+            selected = null
+        } else {
+            await loadChat(
+                sessionIdNum,
+                selected.phone || sessionFromStore.phone,
+                selected.name || sessionFromStore.name || null
+            )
+        }
+    }
+
+    if (!getSelectedSession()?.sessionId) {
         const firstId = state.conversations.order[0]
+
+        if (!firstId) {
+            console.warn("No hay conversaciones disponibles")
+            return
+        }
+
         const session = state.conversations.byId[firstId]
 
         if (session) {
-            await loadChat(session.id, session.phone)
+            await loadChat(session.id, session.phone, session.name || null)
         }
     }
 
@@ -828,7 +843,6 @@ async function loadMoreMessages() {
 // LOAD CHAT
 // =========================
 export async function loadChat(sessionId, phone, name = null) {
-
     imageList = []
     currentImageIndex = 0
     thumbsRendered = false
@@ -841,38 +855,43 @@ export async function loadChat(sessionId, phone, name = null) {
 
     if (isLoadingChat) return
 
-    // solo evita recargar si la vista actual YA tiene renderizado ese chat
+    const sessionIdNum = Number(sessionId)
+
     const alreadyRendered =
-        currentSessionId === Number(sessionId) &&
-        lastLoadedSessionId === Number(sessionId) &&
+        currentSessionId === sessionIdNum &&
+        lastLoadedSessionId === sessionIdNum &&
         header &&
         header.textContent?.trim() &&
         list &&
         list.childElementCount > 0
 
     if (alreadyRendered) return
-    const previousSessionId = currentSessionId
-    const isSameChat = previousSessionId === sessionId
 
-    currentSessionId = Number(sessionId)
+    const previousSessionId = currentSessionId
+    const isSameChat = previousSessionId === sessionIdNum
+
+    const state = getState()
+    const sessionInfo = state.conversations.byId[sessionIdNum]
+
+    if (!sessionInfo) {
+        console.warn("Intentando cargar sesión inexistente:", sessionId)
+        return
+    }
+
+    currentSessionId = sessionIdNum
     setSelectedSession({
-        sessionId: Number(sessionId),
+        sessionId: sessionIdNum,
         phone,
         name
     })
-    
+
     renderSidebarFromState(getState())
     isLoadingChat = true
-    const state = getState()
-    const sessionInfo = state.conversations.byId[Number(sessionId)]
-    const displayName = sessionInfo?.name || `+${phone}`
-
 
     try {
         if (header) {
             header.innerHTML = `
                 <div class="flex items-center justify-between w-full">
-                    
                     <div class="flex flex-col">
                         <span class="font-semibold text-sm">
                             ${name || "+" + phone}
@@ -881,14 +900,45 @@ export async function loadChat(sessionId, phone, name = null) {
                             ${name ? "+" + phone : "En conversación"}
                         </span>
                     </div>
-
                 </div>
             `
         }
 
-        await apiRequest(`/panel/conversations/${sessionId}/read`, {
-            method: "POST"
-        })
+        try {
+            await apiRequest(`/panel/conversations/${sessionIdNum}/read`, {
+                method: "POST"
+            })
+        } catch (err) {
+            console.error("Sesión no existe, reseteando...", err)
+
+            setSelectedSession(null)
+            localStorage.removeItem("lastSession")
+
+            const fallbackState = getState()
+            const firstId = fallbackState.conversations.order[0]
+            const firstSession = fallbackState.conversations.byId[firstId]
+
+            if (firstSession && Number(firstSession.id) !== sessionIdNum) {
+                isLoadingChat = false
+                return loadChat(
+                    firstSession.id,
+                    firstSession.phone,
+                    firstSession.name || null
+                )
+            }
+
+            currentSessionId = null
+            lastLoadedSessionId = null
+
+            if (list) list.innerHTML = ""
+            if (header) {
+                header.innerHTML = `
+                    <div class="text-sm text-gray-400">Sin conversación seleccionada</div>
+                `
+            }
+
+            return
+        }
 
         paginationState = {
             offset: 0,
@@ -898,11 +948,11 @@ export async function loadChat(sessionId, phone, name = null) {
 
         if (!isSameChat && list) {
             list.innerHTML = ""
-            clearRenderedSession(sessionId)
+            clearRenderedSession(sessionIdNum)
             removeNewMessagesSeparator()
         }
 
-        const messages = await getMessages(sessionId, PAGE_SIZE, 0)
+        const messages = await getMessages(sessionIdNum, PAGE_SIZE, 0)
 
         let messagesList = []
 
@@ -915,13 +965,14 @@ export async function loadChat(sessionId, phone, name = null) {
             dispatch({
                 type: "messages/loaded",
                 payload: {
-                    sessionId,
+                    sessionId: sessionIdNum,
                     items: messagesList
                 }
             })
         }
+
         paginationState.offset = messagesList.length
-        lastLoadedSessionId = sessionId
+        lastLoadedSessionId = sessionIdNum
 
     } finally {
         isLoadingChat = false
