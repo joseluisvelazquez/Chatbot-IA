@@ -444,6 +444,7 @@ export function dispatch(action) {
             state.verifications.selected = toSessionKey(action.payload)
             break
         }
+        
         case "verifications/update_inconsistencia": {
             const { id, resolved_by_panel, resolved_by_siga } = action.payload || {}
 
@@ -455,23 +456,37 @@ export function dispatch(action) {
             const verification = state.verifications.bySessionId[selected]
             if (!verification?.inconsistencias) break
 
-            const updated = verification.inconsistencias.map(inc => {
+            // 1. actualizar SOLO la inconsistencia correcta
+            const updatedInconsistencias = verification.inconsistencias.map(inc => {
                 if (inc.ui_id !== id) return inc
+
+                const isResolved = resolved_by_panel || resolved_by_siga
 
                 return {
                     ...inc,
                     resolved_by_panel,
                     resolved_by_siga,
-                    estado: (resolved_by_panel || resolved_by_siga) ? "RESUELTA" : "ABIERTA",
+                    estado: isResolved ? "RESUELTA" : "ABIERTA",
                 }
             })
 
+            // 2. recalcular status (CLAVE DEL KPI)
+            const hasOpen = updatedInconsistencias.some(
+                inc => String(inc.estado || "").toUpperCase() === "ABIERTA"
+            )
+
+            const nextStatus = hasOpen ? "inconsistent" : "completed"
+
+            // 3. aplicar cambios completos
             state.verifications.bySessionId[selected] = {
                 ...verification,
-                inconsistencias: updated,
+                inconsistencias: updatedInconsistencias,
+                status: nextStatus,
             }
 
+            // 4. bump version SIEMPRE
             state.verifications._version++
+
             break
         }
 

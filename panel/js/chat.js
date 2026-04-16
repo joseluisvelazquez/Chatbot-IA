@@ -4,7 +4,8 @@ import {
     markConversationRead,
     sendFileMessage,
     sendMessage,
-    uploadPanelFile
+    uploadPanelFile,
+    apiRequest
 } from "./api.js"
 import { resolveMediaUrl } from "./config.js"
 import { EMOJIS } from "./emojis.js"
@@ -1518,7 +1519,7 @@ function renderMultiPreview() {
                 }
 
                 <button
-                    onclick="removeAllFiles()"
+                    onclick="removeCurrentFile()"
                     class="absolute top-2 right-2 bg-black/70 text-white rounded-full w-7 h-7 flex items-center justify-center hover:bg-red-600"
                 >
                     ✕
@@ -1860,3 +1861,21 @@ style.innerHTML = `
     }
 `
 document.head.appendChild(style)
+
+window.removeCurrentFile = function () {
+    syncPreviewFromStore()
+
+    if (selectedFiles.length === 0) return
+
+    removePreviewFile(selectedPreviewIndex)
+
+    if (selectedFiles.length === 0) {
+        removeAllFiles()
+        return
+    }
+
+    const nextIndex = Math.max(0, selectedPreviewIndex - 1)
+    setPreviewIndex(nextIndex)
+
+    renderMultiPreview()
+}
