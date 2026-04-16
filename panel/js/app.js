@@ -1,34 +1,35 @@
 import { renderHeader, renderSidebar } from "./ui.js";
 import { initVerificationsPage } from "./verifications.js";
-import { initConversationsPage, loadChat } from "./chat.js";
+import { initConversationsPage } from "./chat.js";
 import { initDashboardPage } from "./dashboard.js";
 import { initSidebar } from "./sidebar.js";
 import { setLayout } from "./layoutmanager.js";
+import { getAuthUrl, getPanelHomeUrl, getPanelPageUrl, isLocalPanelEnvironment } from "./config.js";
 import { initWebSocket } from "./websocket.js"
+import { dispatch, getState } from "./store.js"
 
 
 // =========================
 // CONFIG
 // =========================
-const AUTH_BASE_URL = `${window.location.protocol}//${window.location.hostname}:8000`
 const PAGE_CONFIG = {
     dashboard: {
-        path: "/pages/dashboard.html",
+        path: getPanelPageUrl("pages/dashboard.html"),
         layout: "default",
         init: initDashboardPage
     },
     conversations: {
-        path: "/pages/conversaciones.html",
+        path: getPanelPageUrl("pages/conversaciones.html"),
         layout: "chat",
         init: initConversationsPage
     },
     verifications: {
-        path: "/pages/verificaciones.html",
+        path: getPanelPageUrl("pages/verificaciones.html"),
         layout: "default",
         init: initVerificationsPage
     },
     cobranza: {
-        path: "/pages/cobranza.html",
+        path: getPanelPageUrl("pages/cobranza.html"),
         layout: "default",
         init: null
     }
@@ -36,7 +37,7 @@ const PAGE_CONFIG = {
 export function startSessionHeartbeat() {
     setInterval(async () => {
         try {
-            const res = await fetch(`${AUTH_BASE_URL}/api/auth/me`, {
+            const res = await fetch(getAuthUrl("me"), {
                 credentials: "include"
             })
 
@@ -77,15 +78,44 @@ let isNavigating = false;
 let selectedSession = null
 
 export function setSelectedSession(session) {
-    selectedSession = session
-
-    if (session) {
-        localStorage.setItem("lastSession", JSON.stringify(session))
+    if (session == null) {
+        selectedSession = null
+        localStorage.removeItem("lastSession")
+        dispatch({
+            type: "chat/select_session",
+            payload: null
+        })
+        return
     }
+
+    const normalized =
+        typeof session === "object"
+            ? {
+                sessionId: Number(session.sessionId ?? session.id ?? session.session_id),
+                phone: session.phone ?? null,
+                name: session.name ?? null
+            }
+            : {
+                sessionId: Number(session),
+                phone: null,
+                name: null
+            }
+
+    if (!normalized.sessionId || Number.isNaN(normalized.sessionId)) {
+        return
+    }
+
+    selectedSession = normalized
+    localStorage.setItem("lastSession", JSON.stringify(normalized))
+    dispatch({
+        type: "chat/select_session",
+        payload: normalized
+    })
 }
 
 export function getSelectedSession() {
-    return selectedSession
+    const stateSelected = getState().chat.selectedSession
+    return stateSelected || selectedSession
 }
 
 // =========================
@@ -178,7 +208,7 @@ export function renderNetworkError() {
                 </p>
 
                 <p class="text-xs text-red-400">
-                    Verifica que el backend esté corriendo en localhost:8000
+                    Verifica la conexión con el servidor del panel e inténtalo de nuevo.
                 </p>
 
             </div>
@@ -216,7 +246,7 @@ function renderUnauthorized(message = "Debes acceder desde SIGA para continuar."
 }
 export async function logout() {
     try {
-        await fetch(`${AUTH_BASE_URL}/api/auth/logout`, {
+        await fetch(getAuthUrl("logout"), {
             method: "POST",
             credentials: "include"
         })
@@ -229,7 +259,7 @@ export async function logout() {
     localStorage.removeItem("lastSession")
 
     // reload limpio
-    window.location.href = "/"
+    window.location.href = getPanelHomeUrl()
 }
 async function initAuth() {
     const params = new URLSearchParams(window.location.search)
@@ -239,7 +269,7 @@ async function initAuth() {
 
         // 🔐 1. SI VIENE TOKEN → hacer exchange
         if (token) {
-            const res = await fetch(`${AUTH_BASE_URL}/api/auth/exchange`, {
+            const res = await fetch(getAuthUrl("exchange"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
@@ -256,7 +286,7 @@ async function initAuth() {
         }
 
         // 🔐 2. SIEMPRE intentar validar sesión (cookie)
-        const me = await fetch(`${AUTH_BASE_URL}/api/auth/me`, {
+        const me = await fetch(getAuthUrl("me"), {
             credentials: "include"
         })
 
@@ -272,8 +302,8 @@ async function initAuth() {
 
         // 🔐 3. SI NO hay sesión → fallback
 
-        if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-            const res = await fetch(`${AUTH_BASE_URL}/api/auth/dev-login`, {
+        if (isLocalPanelEnvironment()) {
+            const res = await fetch(getAuthUrl("dev-login"), {
                 method: "POST",
                 credentials: "include"
             })
@@ -283,7 +313,7 @@ async function initAuth() {
                 return false
             }
 
-            const me2 = await fetch(`${AUTH_BASE_URL}/api/auth/me`, {
+            const me2 = await fetch(getAuthUrl("me"), {
                 credentials: "include"
             })
 

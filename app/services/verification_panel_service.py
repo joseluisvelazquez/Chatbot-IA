@@ -11,7 +11,10 @@ from app.core.verification.verification_schema import normalize_progress_payload
 from app.siga.siga_repository import obtener_venta_por_folio
 from app.services.verification_service import VerificationService
 from app.db.models import ChatSessions, VerificacionCuenta, Inconsistencias
-from app.utils.inconsistencias_serializer import serialize_inconsistencias
+from app.utils.inconsistencias_serializer import (
+    serialize_inconsistencias,
+    summarize_inconsistencias,
+)
 
 INACTIVITY_MINUTES = 30
 
@@ -51,6 +54,7 @@ def build_verification_snapshot(
 
     serialized_inconsistencias = serialize_inconsistencias(inconsistencias)
     open_inconsistencia = has_open_inconsistencia(serialized_inconsistencias)
+    inconsistencia_summary = summarize_inconsistencias(serialized_inconsistencias)
 
     status = classify_panel_status(
         verification_data=verification_data,
@@ -64,11 +68,14 @@ def build_verification_snapshot(
         "folio": str(session.folio) if session.folio else "",
         "phone": session.phone,
         "no_cuenta": no_cuenta,
+        "siga_url": f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}",
         "status": status,
         "progress_pct": verification_data["progress_pct"],
         "current_step": verification_data["current_step"],
         "inconsistencias": serialized_inconsistencias,
         "inconsistencias_count": len(serialized_inconsistencias),
+        "severity_counts": inconsistencia_summary["severity_counts"],
+        "highest_severity": inconsistencia_summary["highest_severity"],
         "last_activity": session.last_message_at.isoformat()
         if session.last_message_at
         else "",

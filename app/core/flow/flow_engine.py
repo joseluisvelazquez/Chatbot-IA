@@ -437,7 +437,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     if current_state == ChatState.INCONSISTENCIA or is_direct_inconsistency:
 
         result = analyze_inconsistency(text, context, session=session)
-        print("🔥 RESULTADO IA:", result)
+        print(" RESULTADO IA:", result)
 
         severidad = result["severidad"]
 

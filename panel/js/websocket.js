@@ -1,176 +1,141 @@
-import { dispatch } from "./store.js" 
-import { getVerificationBySession } from "../js/api.js"
-let socket = null
-let listeners = new Set()
+import { getWebSocketUrl } from "./config.js";
+import { dispatch } from "./store.js";
 
-const pendingRefetch = new Map()
+let socket = null;
+const listeners = new Set();
 
+function stripUndefinedEntries(value) {
+    return Object.fromEntries(
+        Object.entries(value).filter(([, item]) => item !== undefined)
+    );
+}
 
 export function initWebSocket() {
-    
-
-    
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-        return socket
+        return socket;
     }
 
-    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const url = `${wsProtocol}//${window.location.hostname}:8000/api/panel/ws`
-
-    socket = new WebSocket(url)
-
-    socket.onopen = () => {
-        console.log("🟢 WS conectado")
-    }
+    socket = new WebSocket(getWebSocketUrl("/api/panel/ws"));
 
     socket.onmessage = (event) => {
-        const data = JSON.parse(event.data)
+        const data = JSON.parse(event.data);
 
-        console.log(" WS EVENT:", data)
-
-        // -------------------------
-        // 💬 MENSAJES
-        // -------------------------
         if (data.type === "new_message") {
-            const sessionId = data.session_id
-            const message = data.message
-            
-            
+            const sessionId = data.session_id;
+            const message = data.message || {};
+            const conversation = {
+                ...(data.conversation || {}),
+                id: sessionId,
+                phone: data.phone || data.conversation?.phone || message.phone || null,
+                name: data.name || data.conversation?.name || null,
+                last_message: message.content || data.conversation?.last_message || "",
+                last_message_at: message.created_at || data.conversation?.last_message_at || "",
+            };
+
             dispatch({
                 type: "conversations/upsert",
-                payload: {
-                    id: sessionId,
-                    last_message: message.content,
-                    last_message_at: message.created_at
-                }
-            })
+                payload: conversation,
+            });
 
             dispatch({
                 type: "messages/add",
                 payload: {
                     sessionId,
-                    message
-                }
-            })
+                    message,
+                    conversation,
+                },
+            });
 
-            // mover conversación arriba
             dispatch({
                 type: "conversations/move_top",
                 payload: {
-                    session_id: sessionId
-                }
-            })
+                    session_id: sessionId,
+                },
+            });
 
-            // unread count
             if (typeof data.unread_count === "number") {
                 dispatch({
                     type: "conversations/set_unread",
                     payload: {
                         session_id: sessionId,
-                        unread_count: data.unread_count
-                    }
-                })
-            }
-
-            // dashboard delta
-            if (message?.direction === "in") {
-                dispatch({
-                    type: "dashboard/apply_delta",
-                    payload: {
-                        messages_in_delta: 1
-                    }
-                })
-            }
-
-            if (message?.direction === "out" || message?.direction === "agent") {
-                dispatch({
-                    type: "dashboard/apply_delta",
-                    payload: {
-                        messages_out_delta: 1
-                    }
-                })
+                        unread_count: data.unread_count,
+                    },
+                });
             }
         }
 
-        // -------------------------
-        // 🔔 UNREAD
-        // -------------------------
         if (data.type === "update_unread") {
             dispatch({
                 type: "conversations/set_unread",
                 payload: {
                     session_id: data.session_id,
-                    unread_count: data.unread_count ?? 0
-                }
-            })
-
+                    unread_count: data.unread_count ?? 0,
+                },
+            });
         }
 
-        // -------------------------
-        // 📊 DASHBOARD
-        // -------------------------
         if (data.type === "dashboard_update" && data.payload) {
             dispatch({
                 type: "dashboard/apply_delta",
-                payload: data.payload
-            })
+                payload: data.payload,
+            });
         }
+        
 
-        // -------------------------
-        // 📋 VERIFICATIONS
-        // -------------------------
         if (data.type === "verification_update" && data.payload) {
-            
-            const p = data.payload
+            const payload = data.payload;
 
             dispatch({
                 type: "verifications/patch",
                 payload: {
-                    session_id: String(p.session_id),
-                    changes: {
-                        progress_pct: p.progress_pct,
-                        current_step: p.current_step,
-                        status: p.status,
-                        last_activity: p.last_activity,
-                        inconsistencias_count: p.inconsistencias_count,
-                        inconsistencias: p.inconsistencias
-                    }
-                }
-            })
-        
-
-            
+                    session_id: payload.session_id,
+                    changes: stripUndefinedEntries({
+                        progress_pct: payload.progress_pct,
+                        current_step: payload.current_step,
+                        status: payload.status,
+                        last_activity: payload.last_activity,
+                        inconsistencias_count: payload.inconsistencias_count,
+                        inconsistencias: payload.inconsistencias,
+                        severity_counts: payload.severity_counts,
+                        highest_severity: payload.highest_severity,
+                        no_cuenta: payload.no_cuenta,
+                        siga_url: payload.siga_url,
+                    }),
+                },
+            });
+        }
+        if (data.type === "inconsistencia_updated" && data.payload) {
+            dispatch({
+                type: "verifications/update_inconsistencia",
+                payload: data.payload,
+            });
         }
 
-        // -------------------------
-        // 👀 listeners opcionales (typing, etc.)
-        // -------------------------
-        listeners.forEach(fn => fn(data))
-    }
+        listeners.forEach(fn => fn(data));
+    };
 
     socket.onclose = () => {
-        console.warn("🔴 WS cerrado")
-        socket = null
+        socket = null;
         setTimeout(() => {
-            initWebSocket()
-        }, 2000)
-    }
+            initWebSocket();
+        }, 2000);
+    };
 
-    socket.onerror = (err) => {
-        console.error("WS error:", err)
-    }
+    socket.onerror = () => {
+        socket?.close();
+    };
 
-    return socket
+    return socket;
 }
 
 export function getWebSocket() {
-    return socket
+    return socket;
 }
 
 export function subscribe(fn) {
-    listeners.add(fn)
+    listeners.add(fn);
 
     return () => {
-        listeners.delete(fn)
-    }
+        listeners.delete(fn);
+    };
 }

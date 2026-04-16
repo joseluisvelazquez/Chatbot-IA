@@ -1,4 +1,31 @@
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
+
+
+def _clean_text(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).replace("\x00", "").strip()
+    return text[:4000] if text else None
+
+
+def _clean_phone(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    phone = "".join(ch for ch in str(value) if ch.isdigit())
+    return phone or None
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    try:
+        if value is None:
+            return None
+
+        return datetime.fromtimestamp(int(value), tz=timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -40,9 +67,10 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         message = messages[0]
 
-        phone = message.get("from")
-        message_id = message.get("id")
+        phone = _clean_phone(message.get("from"))
+        message_id = _clean_text(message.get("id"))
         message_type = message.get("type")
+        timestamp = _parse_timestamp(message.get("timestamp"))
 
         text = None
         button_id = None
@@ -55,7 +83,7 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # TEXT
         # --------------------------------------------------
         if message_type == "text":
-            text = message.get("text", {}).get("body")
+            text = _clean_text(message.get("text", {}).get("body"))
 
         # --------------------------------------------------
         # BUTTONS / LISTS
@@ -65,27 +93,27 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             i_type = interactive.get("type")
 
             if i_type == "button_reply":
-                button_id = interactive.get("button_reply", {}).get("id")
+                button_id = _clean_text(interactive.get("button_reply", {}).get("id"))
 
             elif i_type == "list_reply":
-                button_id = interactive.get("list_reply", {}).get("id")
+                button_id = _clean_text(interactive.get("list_reply", {}).get("id"))
 
         # --------------------------------------------------
         # IMAGE ✅
         # --------------------------------------------------
         elif message_type == "image":
             image = message.get("image", {})
-            media_id = image.get("id")
-            caption = image.get("caption")
+            media_id = _clean_text(image.get("id"))
+            caption = _clean_text(image.get("caption"))
 
         # --------------------------------------------------
         # DOCUMENT ✅
         # --------------------------------------------------
         elif message_type == "document":
             document = message.get("document", {})
-            media_id = document.get("id")
-            file_name = document.get("filename")
-            caption = document.get("caption")
+            media_id = _clean_text(document.get("id"))
+            file_name = _clean_text(document.get("filename"))
+            caption = _clean_text(document.get("caption"))
 
         # --------------------------------------------------
         # OTROS (audio, video, sticker, etc.)
@@ -101,6 +129,7 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "button_id": button_id,
             "media_id": media_id,
             "file_name": file_name,
+            "timestamp": timestamp,
             "is_status": False,
             "unsupported": unsupported,
         }

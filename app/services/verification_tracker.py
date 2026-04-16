@@ -1,7 +1,9 @@
-# app/services/verification_tracker.py
+import logging
 
 from app.core.states.states import ChatState
-from app.services.verification_service import VerificationService
+from app.services.verification_service import VerificationService, VerificationTransitionError
+
+logger = logging.getLogger(__name__)
 
 
 STEP_MAP = {
@@ -94,9 +96,23 @@ def track_verification(
         value = 3
     
 
-    VerificationService(db).mark_step_from_folio(
-        str(folio),
-        step,
-        value=value,
-        phone=session.phone,
-    )
+    try:
+        VerificationService(db).mark_step_from_folio(
+            str(folio),
+            step,
+            value=value,
+            phone=session.phone,
+            event_id=getattr(session, "last_message_id", None),
+        )
+    except VerificationTransitionError as exc:
+        logger.warning(
+            "verification_transition_rejected",
+            extra={
+                "session_id": getattr(session, "id", None),
+                "phone": getattr(session, "phone", None),
+                "folio": folio,
+                "step": step,
+                "value": value,
+                "reason": str(exc),
+            },
+        )

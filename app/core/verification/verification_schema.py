@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-# Progreso de verificación (0/1) por paso.
-# Mantén esto como contrato estable del JSON guardado en DB.
 DEFAULT_VERIFICATION_PROGRESS: Dict[str, int] = {
-    "inicio": 0,
     "folio": 0,
     "nombre": 0,
     "domicilio": 0,
@@ -18,22 +15,30 @@ DEFAULT_VERIFICATION_PROGRESS: Dict[str, int] = {
     "plan3meses": 0,
     "planes": 0,
     "beneficios": 0,
+    "finalizado": 0,
 }
+
+VERIFICATION_STEP_ORDER = list(DEFAULT_VERIFICATION_PROGRESS.keys())
 
 
 def assert_valid_step(step: str) -> None:
     if step not in DEFAULT_VERIFICATION_PROGRESS:
-        raise ValueError(f"Paso de verificación desconocido: {step}")
+        raise ValueError(f"Paso de verificacion desconocido: {step}")
 
 
-def normalize_progress_payload(payload):
+def normalize_progress_payload(payload: Dict[str, Any] | None) -> Dict[str, int]:
     if not isinstance(payload, dict):
         payload = {}
 
-    data = payload.copy()
+    data: Dict[str, int] = {}
 
-    for k in DEFAULT_VERIFICATION_PROGRESS.keys():
-        if k not in data:
-            data[k] = 0
+    for key in VERIFICATION_STEP_ORDER:
+        raw_value = payload.get(key, 0)
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            value = 0
+
+        data[key] = value if value in (0, 1, 2, 3) else 0
 
     return data

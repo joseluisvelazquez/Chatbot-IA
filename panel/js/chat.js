@@ -1,9 +1,16 @@
-import { getMessages, sendMessage, apiRequest } from "../js/api.js"
+import {
+    getConversations,
+    getMessages,
+    markConversationRead,
+    sendFileMessage,
+    sendMessage,
+    uploadPanelFile
+} from "./api.js"
+import { resolveMediaUrl } from "./config.js"
 import { EMOJIS } from "./emojis.js"
 import { getWebSocket } from "./websocket.js"
 import { dispatch } from "./store.js"
 import { subscribeStore, getState } from "./store.js"
-import { getConversations } from "../js/api.js"
 import { getSelectedSession, setSelectedSession } from "./app.js"
 
 
@@ -19,6 +26,12 @@ let lastLoadedSessionId = null
 let isLoadingChat = false
 let firstViewerOpen = true
 let isFirstLoad = true
+let forceRender = false
+let viewerShortcutsBound = false
+let chatLoadRequestId = 0
+let lastMessagesVersion = -1
+let lastMessagesSessionKey = null
+let lastPreviewVersion = -1
 
 const renderedMessageIdsBySession = new Map()
 
@@ -29,10 +42,6 @@ const sidebarNodes = new Map()
 const LOAD_COOLDOWN = 500
 const MAX_RENDERED_MESSAGES = 300
 const PAGE_SIZE = 30
-
-const API_BASE = window.location.origin.includes("5500")
-    ? "http://localhost:8000"
-    : ""
 
 let paginationState = {
     offset: 0,
@@ -51,6 +60,44 @@ let imageList = []
 let imageSet = new Set()
 let currentImageIndex = 0
 
+function syncPreviewFromStore() {
+    const preview = getState().chat.preview
+    selectedFiles = Array.isArray(preview.files) ? preview.files : []
+    selectedPreviewIndex = Number(preview.selectedIndex || 0)
+}
+
+function setPreviewFiles(files, selectedIndex = 0) {
+    dispatch({
+        type: "chat/preview/set_files",
+        payload: {
+            files: Array.isArray(files) ? files.filter(Boolean) : [],
+            selectedIndex
+        }
+    })
+    syncPreviewFromStore()
+}
+
+function setPreviewIndex(index) {
+    dispatch({
+        type: "chat/preview/select",
+        payload: { index }
+    })
+    syncPreviewFromStore()
+}
+
+function removePreviewFile(index) {
+    dispatch({
+        type: "chat/preview/remove_at",
+        payload: { index }
+    })
+    syncPreviewFromStore()
+}
+
+function clearPreviewFiles() {
+    dispatch({ type: "chat/preview/clear" })
+    syncPreviewFromStore()
+}
+
 // =========================
 // INIT
 // =========================
@@ -63,20 +110,35 @@ export async function initConversationsPage() {
     // reset visual de la vista al volver a entrar al módulo
     lastLoadedSessionId = null
     isLoadingChat = false
+    lastMessagesVersion = -1
+    lastMessagesSessionKey = null
+    lastPreviewVersion = -1
+    forceRender = true
 
     if (unsubscribeChatStore) unsubscribeChatStore()
 
-    let lastMessagesRef = null
     let lastConversationSignature = ""
 
     unsubscribeChatStore = subscribeStore((state) => {
-        const currentMessages = state.messages.bySessionId[currentSessionId] || []
+        const sessionKey = currentSessionId == null ? null : String(currentSessionId)
+        const currentMessagesVersion = sessionKey
+            ? Number(state.messages.versionsBySessionId[sessionKey] || 0)
+            : -1
 
-        if (currentMessages !== lastMessagesRef) {
+        if (
+                sessionKey &&
+                (
+                    forceRender || 
+                    sessionKey !== lastMessagesSessionKey ||
+                    currentMessagesVersion !== lastMessagesVersion
+                )
+            ) {
             console.time("renderMessages")
             renderMessagesIncremental(state)
+            forceRender = false
             console.timeEnd("renderMessages")
-            lastMessagesRef = currentMessages
+            lastMessagesVersion = currentMessagesVersion
+            lastMessagesSessionKey = sessionKey
         }
 
         if (state.conversations._version !== lastConversationSignature) {
@@ -84,6 +146,11 @@ export async function initConversationsPage() {
             renderSidebarFromState(state)
             console.timeEnd("renderSidebar")
             lastConversationSignature = state.conversations._version
+        }
+
+        if (state.chat._previewVersion !== lastPreviewVersion) {
+            syncPreviewFromStore()
+            lastPreviewVersion = state.chat._previewVersion
         }
     })
 
@@ -179,8 +246,7 @@ export async function initConversationsPage() {
             fileInput.addEventListener("change", (e) => {
                 const files = Array.from(e.target.files || [])
                 if (files.length > 0) {
-                    selectedFiles = [...selectedFiles, ...files]
-                    selectedPreviewIndex = 0
+                    setPreviewFiles([...selectedFiles, ...files], 0)
                     renderMultiPreview()
                 }
 
@@ -194,18 +260,22 @@ export async function initConversationsPage() {
         }
     })
 
-    document.addEventListener("keydown", (e) => {
-        const viewer = document.getElementById("imageViewer")
-        if (!viewer || viewer.classList.contains("hidden")) return
+    if (!viewerShortcutsBound) {
+        document.addEventListener("keydown", (e) => {
+            const viewer = document.getElementById("imageViewer")
+            if (!viewer || viewer.classList.contains("hidden")) return
 
-        if (["ArrowLeft", "ArrowRight", "Escape"].includes(e.key)) {
-            e.preventDefault()
-        }
+            if (["ArrowLeft", "ArrowRight", "Escape"].includes(e.key)) {
+                e.preventDefault()
+            }
 
-        if (e.key === "ArrowLeft") prevImage()
-        if (e.key === "ArrowRight") nextImage()
-        if (e.key === "Escape") closeImageViewer()
-    })
+            if (e.key === "ArrowLeft") prevImage()
+            if (e.key === "ArrowRight") nextImage()
+            if (e.key === "Escape") closeImageViewer()
+        })
+
+        viewerShortcutsBound = true
+    }
 }
 
 // =========================
@@ -231,8 +301,8 @@ function normalizeMessage(msg) {
         normalized.type = "image"
     }
 
-    if (normalized.media_url && normalized.media_url.startsWith("/media")) {
-        normalized.media_url = `${API_BASE}${normalized.media_url}`
+    if (normalized.media_url) {
+        normalized.media_url = resolveMediaUrl(normalized.media_url)
     }
 
     if (!normalized.created_at) {
@@ -240,6 +310,17 @@ function normalizeMessage(msg) {
     }
 
     return normalized
+}
+
+function escapeHtml(value) {
+    if (value == null) return ""
+
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
 }
 
 function formatTime(dateString) {
@@ -274,7 +355,7 @@ function formatDateSeparator(dateString) {
 function formatWhatsAppText(text) {
     if (!text) return ""
 
-    return text
+    return escapeHtml(text)
         .replace(/\n/g, "<br>")
         .replace(/\*(.*?)\*/g, "<b>$1</b>")
         .replace(/_(.*?)_/g, "<i>$1</i>")
@@ -484,6 +565,7 @@ function createSidebarNode(s) {
 
 function updateSidebarNode(node, s) {
     const isActive = s.id === currentSessionId
+    const displayName = s.display_name || s.name || s.phone || "Cliente sin nombre"
 
     node.className = `
         px-4 py-3 cursor-pointer border-b flex justify-between items-center
@@ -496,19 +578,19 @@ function updateSidebarNode(node, s) {
     node.innerHTML = `
         <div class="min-w-0">
             <div class="font-semibold truncate">
-                ${s.name || s.phone}
+                ${escapeHtml(displayName)}
             </div>
 
             ${
                 s.no_cuenta
                 ? `<div class="text-xs text-gray-400">
-                        Cuenta: ${s.no_cuenta}
+                        Cuenta: ${escapeHtml(s.no_cuenta)}
                 </div>`
                 : ""
             }
 
             <div class="text-xs text-gray-500">
-                ${s.last_message_at ?? ""}
+                ${escapeHtml(s.last_message_at ?? "")}
             </div>
         </div>
 
@@ -613,10 +695,10 @@ function createMessageNode(rawMsg, timeOverride = "") {
                 }
             `
         }
+    } else if (typeof msg.content === "string" && msg.content.trim().startsWith("[BOTON]")) {
+        bodyContent = `<div>${formatButtonMessage(msg.content)}</div>`
     } else {
-        const content = formatButtonMessage(msg.content)
-        const finalText = formatWhatsAppText(content)
-        bodyContent = `<div>${finalText}</div>`
+        bodyContent = `<div>${formatWhatsAppText(msg.content)}</div>`
     }
 
     const metaClass =
@@ -789,6 +871,7 @@ async function loadMoreMessages() {
         }
 
         paginationState.offset += newMessages.length
+        paginationState.hasMore = Boolean(res?.has_more) || newMessages.length === PAGE_SIZE
 
         const renderedSet = getRenderedSet(currentSessionId)
         const fragment = document.createDocumentFragment()
@@ -843,6 +926,7 @@ async function loadMoreMessages() {
 // LOAD CHAT
 // =========================
 export async function loadChat(sessionId, phone, name = null) {
+    const requestId = ++chatLoadRequestId
     imageList = []
     currentImageIndex = 0
     thumbsRendered = false
@@ -867,37 +951,49 @@ export async function loadChat(sessionId, phone, name = null) {
 
     if (alreadyRendered) return
 
+    if (isLoadingChat && currentSessionId === Number(sessionId)) return
+
     const previousSessionId = currentSessionId
-    const isSameChat = previousSessionId === sessionIdNum
+    const numericSessionId = Number(sessionId)
+    const isSameChat = previousSessionId === numericSessionId
 
-    const state = getState()
-    const sessionInfo = state.conversations.byId[sessionIdNum]
-
-    if (!sessionInfo) {
-        console.warn("Intentando cargar sesión inexistente:", sessionId)
-        return
-    }
-
-    currentSessionId = sessionIdNum
+    currentSessionId = numericSessionId
     setSelectedSession({
-        sessionId: sessionIdNum,
+        sessionId: numericSessionId,
         phone,
         name
     })
 
     renderSidebarFromState(getState())
     isLoadingChat = true
+    dispatch({
+        type: "chat/set_loading",
+        payload: { sessionId: numericSessionId }
+    })
+    const state = getState()
+    const sessionInfo = state.conversations.byId[numericSessionId]
+
+    if (!sessionInfo) {
+        console.warn("Intentando cargar sesión inexistente:", sessionId)
+        return
+    }
+
+    const safePhone = phone || sessionInfo?.phone || ""
+    const displayName = sessionInfo?.display_name || sessionInfo?.name || name || safePhone || "Cliente sin nombre"
+
 
     try {
+        if (requestId !== chatLoadRequestId) return
+
         if (header) {
             header.innerHTML = `
                 <div class="flex items-center justify-between w-full">
                     <div class="flex flex-col">
                         <span class="font-semibold text-sm">
-                            ${name || "+" + phone}
+                            ${escapeHtml(displayName)}
                         </span>
                         <span class="text-xs text-gray-400">
-                            ${name ? "+" + phone : "En conversación"}
+                            ${escapeHtml(safePhone ? `+${safePhone}` : "En conversacion")}
                         </span>
                     </div>
                 </div>
@@ -939,6 +1035,7 @@ export async function loadChat(sessionId, phone, name = null) {
 
             return
         }
+        await markConversationRead(numericSessionId)
 
         paginationState = {
             offset: 0,
@@ -946,13 +1043,19 @@ export async function loadChat(sessionId, phone, name = null) {
             hasMore: true
         }
 
-        if (!isSameChat && list) {
+        if (list) {
             list.innerHTML = ""
-            clearRenderedSession(sessionIdNum)
+            clearRenderedSession(numericSessionId)
             removeNewMessagesSeparator()
         }
 
-        const messages = await getMessages(sessionIdNum, PAGE_SIZE, 0)
+        const cachedMessages = state.messages.bySessionId[String(numericSessionId)] || []
+        if (cachedMessages.length > 0 && list && list.childElementCount === 0) {
+            renderMessagesIncremental(state)
+        }
+
+        const messages = await getMessages(numericSessionId, PAGE_SIZE, 0)
+        if (requestId !== chatLoadRequestId) return
 
         let messagesList = []
 
@@ -965,17 +1068,24 @@ export async function loadChat(sessionId, phone, name = null) {
             dispatch({
                 type: "messages/loaded",
                 payload: {
-                    sessionId: sessionIdNum,
+                    sessionId: numericSessionId,
                     items: messagesList
                 }
             })
         }
 
         paginationState.offset = messagesList.length
-        lastLoadedSessionId = sessionIdNum
+        paginationState.hasMore = Boolean(messages?.has_more) || messagesList.length === PAGE_SIZE
+        lastLoadedSessionId = numericSessionId
 
     } finally {
-        isLoadingChat = false
+        if (requestId === chatLoadRequestId) {
+            isLoadingChat = false
+            dispatch({
+                type: "chat/set_loading",
+                payload: { sessionId: null }
+            })
+        }
     }
 }
 
@@ -990,6 +1100,7 @@ function handleKeyDown(event) {
 }
 
 export async function send() {
+    syncPreviewFromStore()
     const input = document.getElementById("messageInput")
     if (!input) return
 
@@ -1011,32 +1122,14 @@ export async function send() {
             for (let i = 0; i < selectedFiles.length; i++) {
                 const file = selectedFiles[i]
 
-                const formData = new FormData()
-                formData.append("file", file)
+                const data = await uploadPanelFile(file)
 
-                const res = await fetch(`${API_BASE}/api/panel/upload`, {
-                    method: "POST",
-                    body: formData
-                })
-
-                if (!res.ok) {
-                    throw new Error("Error subiendo archivo")
-                }
-
-                const data = await res.json()
-
-                await apiRequest(`/panel/messages/file`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                        session_id: currentSessionId,
-                        media_url: data.url,
-                        file_name: data.filename,
-                        type: file.type.startsWith("image") ? "image" : "document",
-                        content: i === 0 ? (textToSend || null) : null
-                    })
+                await sendFileMessage({
+                    session_id: currentSessionId,
+                    media_url: data.url,
+                    file_name: data.filename,
+                    type: file.type.startsWith("image") ? "image" : "document",
+                    content: i === 0 ? (textToSend || null) : null
                 })
             }
 
@@ -1063,33 +1156,15 @@ async function sendFile(file) {
         return
     }
 
-    const formData = new FormData()
-    formData.append("file", file)
-
     try {
-        const res = await fetch(`${API_BASE}/api/panel/upload`, {
-            method: "POST",
-            body: formData
-        })
-
-        if (!res.ok) {
-            throw new Error(`Upload error: ${res.status}`)
-        }
-
-        const data = await res.json()
+        const data = await uploadPanelFile(file)
 
         //  NO render optimista para evitar duplicados con WS
-        await apiRequest(`/panel/messages/file`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                session_id: currentSessionId,
-                media_url: data.url,
-                file_name: data.filename,
-                type: file.type.startsWith("image") ? "image" : "document"
-            })
+        await sendFileMessage({
+            session_id: currentSessionId,
+            media_url: data.url,
+            file_name: data.filename,
+            type: file.type.startsWith("image") ? "image" : "document"
         })
     } catch (err) {
         console.error("Error subiendo archivo:", err)
@@ -1397,9 +1472,8 @@ function setupSearchAndFilters() {
     }
 }
 
-selectedFiles = selectedFiles.filter(Boolean)
-
 function renderMultiPreview() {
+    syncPreviewFromStore()
     const container = document.getElementById("filePreview")
     if (!container || selectedFiles.length === 0) return
 
@@ -1511,6 +1585,7 @@ function renderMultiPreview() {
 
 
 function updatePreviewUI() {
+    syncPreviewFromStore()
     const container = document.getElementById("mainPreviewImage")
     if (!container) return
 
@@ -1523,8 +1598,7 @@ function updatePreviewUI() {
     const newUrl = URL.createObjectURL(file)
 
     if (isImage && container.tagName === "IMG") {
-        container.src = newUrl // 🔥 sin parpadeo
-        return
+        container.src = newUrl //  sin parpadeo
     } 
     else if (isPDF) {
         container.outerHTML = `
@@ -1561,13 +1635,12 @@ function updatePreviewUI() {
 
 window.selectPreview = function (index) {
     if (index === selectedPreviewIndex) return
-    selectedPreviewIndex = index
+    setPreviewIndex(index)
     updatePreviewUI()
 }
 
 window.removeAllFiles = function () {
-    selectedFiles = []
-    selectedPreviewIndex = 0
+    clearPreviewFiles()
 
     const container = document.getElementById("filePreview")
     if (container) {
@@ -1613,18 +1686,13 @@ function setupDragAndDrop() {
             return
         }
 
-        selectedFiles = [...selectedFiles, ...validFiles]
-        selectedPreviewIndex = 0
+        setPreviewFiles([...selectedFiles, ...validFiles], 0)
         renderMultiPreview()
     })
 }
 
 window.removeFileAtIndex = function (index) {
-    selectedFiles.splice(index, 1)
-
-    if (selectedPreviewIndex >= selectedFiles.length) {
-        selectedPreviewIndex = selectedFiles.length - 1
-    }
+    removePreviewFile(index)
 
     if (selectedFiles.length === 0) {
         removeAllFiles()
@@ -1647,6 +1715,13 @@ window.openImageViewer = function (src) {
 
     currentImageIndex = imageList.indexOf(src)
     if (currentImageIndex === -1) currentImageIndex = 0
+    dispatch({
+        type: "chat/viewer/open",
+        payload: {
+            images: imageList,
+            selectedIndex: currentImageIndex
+        }
+    })
 
     showImage(currentImageIndex)
 
@@ -1661,6 +1736,7 @@ window.closeImageViewer = function () {
 
     img.src = ""
     viewer.classList.add("hidden")
+    dispatch({ type: "chat/viewer/close" })
 }
 
 // cerrar al hacer click fuera de la imagen
@@ -1678,6 +1754,10 @@ document.addEventListener("click", (e) => {
 // renderiza las miniaturas en el visor
 window.showImage = function (index) {
     if (index < 0 || index >= imageList.length) return
+    dispatch({
+        type: "chat/viewer/show",
+        payload: { index }
+    })
 
     const img = document.getElementById("imageViewerImg")
     const newSrc = imageList[index]

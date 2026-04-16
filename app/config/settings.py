@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     VERIFY_TOKEN: str
     WHATSAPP_TOKEN: str
     PHONE_NUMBER_ID: str
+    META_APP_SECRET: str | None = None
 
     # ============================================================
     # WhatsApp Cloud API (opcionales / IDs de Imágenes)

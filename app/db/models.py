@@ -96,6 +96,7 @@ class Inconsistencias(Base):
         Index("idx_phone", "phone"),
         Index("idx_estatus", "estatus"),
         Index("idx_session_id", "session_id"),
+        Index("idx_inconsistencias_resolution", "resolved_by_panel", "resolved_by_siga"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -106,6 +107,8 @@ class Inconsistencias(Base):
     folio: Mapped[str] = mapped_column(VARCHAR(50), nullable=False)
 
     estatus: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default=text("'ABIERTA'"))
+    resolved_by_panel = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    resolved_by_siga = Column(Boolean, nullable=False, server_default=text("0"), default=False)
 
     extra_json: Mapped[dict] = mapped_column(MYSQL_JSON, nullable=False)
 
@@ -863,6 +866,7 @@ class VerificacionCuenta(Base):
 
     # IMPORTANTE: En MySQL el tipo JSON existe. Si tu columna se llama diferente, ajusta aquí.
     json = Column(JSON, nullable=False)
+    version = Column(Integer, nullable=False, server_default=text("0"), default=0)
 
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
@@ -900,6 +904,10 @@ class VentasDocumentos(Base):
 
 class Message(Base):
     __tablename__ = "messages"
+    __table_args__ = (
+        UniqueConstraint("message_id", name="uq_messages_message_id"),
+        Index("idx_messages_session_created", "session_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     session_id: Mapped[int] = mapped_column(Integer, index=True)

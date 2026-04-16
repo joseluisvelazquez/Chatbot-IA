@@ -154,7 +154,7 @@ BIN_NEGATIVE = {
 
 # Orden importa mucho
 CRITICAL_PRIORITY = [
-    "call",     # 🔥 primero llamada
+    "call",     #  primero llamada
     "human",    # luego asesor
     "doubt",    # luego dudas
 ]

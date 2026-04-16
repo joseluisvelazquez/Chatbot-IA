@@ -11,15 +11,36 @@ const state = {
         byId: {},
         order: [],
         loaded: false,
-        _version: 0
+        _version: 0,
     },
     messages: {
         bySessionId: {},
+        versionsBySessionId: {},
+    },
+    chat: {
+        selectedSessionId: null,
+        selectedSession: null,
+        loadingSessionId: null,
+        loadRequestId: 0,
+        preview: {
+            files: [],
+            selectedIndex: 0,
+        },
+        viewer: {
+            images: [],
+            selectedIndex: 0,
+            open: false,
+        },
+        _version: 0,
+        _previewVersion: 0,
+        _viewerVersion: 0,
     },
     verifications: {
         bySessionId: {},
         order: [],
         loaded: false,
+        selected: null,
+        _version: 0,
     },
 }
 
@@ -43,55 +64,148 @@ function emit() {
     listeners.forEach(fn => fn(snapshot))
 }
 
-function upsertConversation(session) {
-    if (!session?.id) return
+function toSessionKey(value) {
+    if (value == null) return null
+    return String(value)
+}
 
-    state.conversations.byId[session.id] = {
-        ...(state.conversations.byId[session.id] || {}),
+function toSessionId(value) {
+    const id = Number(value)
+    return Number.isFinite(id) && id > 0 ? id : null
+}
+
+function normalizeConversation(session = {}) {
+    const id = toSessionId(session.id ?? session.session_id)
+    if (!id) return null
+
+    const current = state.conversations.byId[id] || {}
+    const phone = session.phone ?? current.phone ?? null
+    const name = session.name ?? current.name ?? null
+
+    return {
+        ...current,
         ...session,
+        id,
+        phone,
+        name,
+        display_name: name || phone || "Cliente sin nombre",
+    }
+}
+
+function upsertConversation(session) {
+    const normalized = normalizeConversation(session)
+    if (!normalized) return false
+
+    state.conversations.byId[normalized.id] = normalized
+
+    const exists = state.conversations.order.includes(normalized.id)
+    if (!exists) {
+        state.conversations.order.unshift(normalized.id)
     }
 
-    const exists = state.conversations.order.includes(session.id)
-    if (!exists) {
-        state.conversations.order.unshift(session.id)
-    }
+    return true
 }
 
 function moveConversationToTop(sessionId) {
+    const id = toSessionId(sessionId)
+    if (!id) return
+
     state.conversations.order = [
-        sessionId,
-        ...state.conversations.order.filter(id => id !== sessionId),
+        id,
+        ...state.conversations.order.filter(item => item !== id),
     ]
 }
 
-function upsertMessage(sessionId, message) {
-    if (!sessionId || !message) return
+function getMessageKey(message) {
+    if (!message) return null
+    return message.id ?? message.message_id ?? `${message.content || message.media_url || "message"}-${message.created_at || ""}`
+}
 
-    if (!state.messages.bySessionId[sessionId]) {
-        state.messages.bySessionId[sessionId] = []
+function bumpMessagesVersion(sessionId) {
+    const key = toSessionKey(sessionId)
+    if (!key) return
+
+    state.messages.versionsBySessionId[key] =
+        (state.messages.versionsBySessionId[key] || 0) + 1
+}
+
+function upsertMessage(sessionId, message) {
+    const key = toSessionKey(sessionId)
+    if (!key || !message) return false
+
+    if (!state.messages.bySessionId[key]) {
+        state.messages.bySessionId[key] = []
     }
 
-    const list = state.messages.bySessionId[sessionId]
-    const messageId = message.id ?? `${message.content}-${message.created_at}`
+    const list = state.messages.bySessionId[key]
+    const messageKey = getMessageKey(message)
+    if (!messageKey) return false
 
-    const exists = list.some(m => (m.id ?? `${m.content}-${m.created_at}`) === messageId)
-    if (exists) return
+    const exists = list.some(item => getMessageKey(item) === messageKey)
+    if (exists) return false
 
     list.push(message)
+    bumpMessagesVersion(key)
+    return true
 }
 
 function upsertVerification(item) {
-    if (!item?.session_id) return
+    if (!item?.session_id) return false
 
-    state.verifications.bySessionId[item.session_id] = {
-        ...(state.verifications.bySessionId[item.session_id] || {}),
+    const sessionKey = toSessionKey(item.session_id)
+
+    state.verifications.bySessionId[sessionKey] = {
+        ...(state.verifications.bySessionId[sessionKey] || {}),
         ...item,
     }
 
-    const exists = state.verifications.order.includes(item.session_id)
+    const exists = state.verifications.order.includes(sessionKey)
     if (!exists) {
-        state.verifications.order.unshift(item.session_id)
+        state.verifications.order.unshift(sessionKey)
     }
+
+    return true
+}
+
+function setSelectedSession(payload) {
+    if (payload == null) {
+        state.chat.selectedSessionId = null
+        state.chat.selectedSession = null
+        state.chat._version++
+        return
+    }
+
+    const sessionId = toSessionId(payload.sessionId ?? payload.id ?? payload.session_id)
+    if (!sessionId) return
+
+    const session = normalizeConversation({
+        id: sessionId,
+        phone: payload.phone ?? null,
+        name: payload.name ?? null,
+    }) || {
+        id: sessionId,
+        phone: payload.phone ?? null,
+        name: payload.name ?? null,
+        display_name: payload.name || payload.phone || "Cliente sin nombre",
+    }
+
+    state.chat.selectedSessionId = toSessionKey(sessionId)
+    state.chat.selectedSession = {
+        sessionId,
+        phone: session.phone,
+        name: session.name,
+        display_name: session.display_name,
+    }
+    state.chat._version++
+}
+
+function clampIndex(index, length) {
+    if (!length) return 0
+
+    const numericIndex = Number(index)
+    if (!Number.isFinite(numericIndex)) return 0
+
+    return Math.max(0, Math.min(length - 1, numericIndex))
 }
 
 export function dispatch(action) {
@@ -134,8 +248,9 @@ export function dispatch(action) {
         }
 
         case "conversations/upsert": {
-            upsertConversation(action.payload)
-            state.conversations._version++
+            if (upsertConversation(action.payload)) {
+                state.conversations._version++
+            }
             break
         }
 
@@ -149,10 +264,11 @@ export function dispatch(action) {
 
         case "conversations/set_unread": {
             const { session_id, unread_count } = action.payload || {}
-            if (!session_id || !state.conversations.byId[session_id]) break
+            const id = toSessionId(session_id)
+            if (!id || !state.conversations.byId[id]) break
 
-            state.conversations.byId[session_id] = {
-                ...state.conversations.byId[session_id],
+            state.conversations.byId[id] = {
+                ...state.conversations.byId[id],
                 unread_count,
             }
             state.conversations._version++
@@ -161,21 +277,28 @@ export function dispatch(action) {
 
         case "messages/loaded": {
             const { sessionId, items } = action.payload || {}
-            if (!sessionId) break
+            const key = toSessionKey(sessionId)
+            if (!key) break
 
-            state.messages.bySessionId[sessionId] = Array.isArray(items) ? items : []
+            state.messages.bySessionId[key] = Array.isArray(items) ? items : []
+            bumpMessagesVersion(key)
             break
         }
 
         case "messages/add": {
-            const { sessionId, message } = action.payload || {}
-            upsertMessage(sessionId, message)
+            const { sessionId, message, conversation } = action.payload || {}
+            const added = upsertMessage(sessionId, message)
 
-            if (sessionId && state.conversations.byId[sessionId]) {
-                state.conversations.byId[sessionId] = {
-                    ...state.conversations.byId[sessionId],
-                    last_message_at: message.created_at || state.conversations.byId[sessionId].last_message_at,
-                    last_message: message.content || state.conversations.byId[sessionId].last_message,
+            if (conversation) {
+                upsertConversation(conversation)
+                state.conversations._version++
+            }
+
+            if (added && sessionId && state.conversations.byId[Number(sessionId)]) {
+                state.conversations.byId[Number(sessionId)] = {
+                    ...state.conversations.byId[Number(sessionId)],
+                    last_message_at: message.created_at || state.conversations.byId[Number(sessionId)].last_message_at,
+                    last_message: message.content || state.conversations.byId[Number(sessionId)].last_message,
                 }
 
                 moveConversationToTop(sessionId)
@@ -184,21 +307,98 @@ export function dispatch(action) {
 
             break
         }
+
         case "messages/prepend": {
-            const { sessionId, items } = action.payload
+            const { sessionId, items } = action.payload || {}
+            const key = toSessionKey(sessionId)
+            if (!key) break
 
-            const current = state.messages.bySessionId[sessionId] || []
+            const current = state.messages.bySessionId[key] || []
+            const incoming = Array.isArray(items) ? items : []
+            const existingKeys = new Set(current.map(getMessageKey))
+            const deduped = incoming.filter(item => !existingKeys.has(getMessageKey(item)))
 
-            return {
-                ...state,
-                messages: {
-                    ...state.messages,
-                    bySessionId: {
-                        ...state.messages.bySessionId,
-                        [sessionId]: [...items, ...current]
-                    }
-                }
-            }
+            if (!deduped.length) break
+
+            state.messages.bySessionId[key] = [...deduped, ...current]
+            bumpMessagesVersion(key)
+            break
+        }
+
+        case "chat/select_session": {
+            setSelectedSession(action.payload)
+            break
+        }
+
+        case "chat/set_loading": {
+            const sessionId = action.payload?.sessionId
+            state.chat.loadingSessionId = sessionId == null ? null : toSessionKey(sessionId)
+            state.chat._version++
+            break
+        }
+
+        case "chat/next_load_request": {
+            state.chat.loadRequestId++
+            state.chat._version++
+            break
+        }
+
+        case "chat/preview/set_files": {
+            const files = Array.isArray(action.payload?.files) ? action.payload.files.filter(Boolean) : []
+            state.chat.preview.files = files
+            state.chat.preview.selectedIndex = clampIndex(action.payload?.selectedIndex || 0, files.length)
+            state.chat._previewVersion++
+            break
+        }
+
+        case "chat/preview/select": {
+            state.chat.preview.selectedIndex = clampIndex(action.payload?.index, state.chat.preview.files.length)
+            state.chat._previewVersion++
+            break
+        }
+
+        case "chat/preview/remove_at": {
+            const index = clampIndex(action.payload?.index, state.chat.preview.files.length)
+            state.chat.preview.files = state.chat.preview.files.filter((_, itemIndex) => itemIndex !== index)
+            state.chat.preview.selectedIndex = clampIndex(state.chat.preview.selectedIndex, state.chat.preview.files.length)
+            state.chat._previewVersion++
+            break
+        }
+
+        case "chat/preview/clear": {
+            state.chat.preview.files = []
+            state.chat.preview.selectedIndex = 0
+            state.chat._previewVersion++
+            break
+        }
+
+        case "chat/viewer/set_images": {
+            const images = Array.isArray(action.payload?.images) ? action.payload.images.filter(Boolean) : []
+            state.chat.viewer.images = images
+            state.chat.viewer.selectedIndex = clampIndex(action.payload?.selectedIndex || 0, images.length)
+            state.chat._viewerVersion++
+            break
+        }
+
+        case "chat/viewer/open": {
+            const images = Array.isArray(action.payload?.images) ? action.payload.images.filter(Boolean) : state.chat.viewer.images
+            state.chat.viewer.images = images
+            state.chat.viewer.selectedIndex = clampIndex(action.payload?.selectedIndex || 0, images.length)
+            state.chat.viewer.open = true
+            state.chat._viewerVersion++
+            break
+        }
+
+        case "chat/viewer/show": {
+            state.chat.viewer.selectedIndex = clampIndex(action.payload?.index, state.chat.viewer.images.length)
+            state.chat._viewerVersion++
+            break
+        }
+
+        case "chat/viewer/close": {
+            state.chat.viewer.open = false
+            state.chat._viewerVersion++
+            break
         }
 
         case "verifications/loaded": {
@@ -212,34 +412,66 @@ export function dispatch(action) {
             })
 
             state.verifications.loaded = true
+            state.verifications._version++
             break
         }
 
         case "verifications/upsert": {
-            upsertVerification(action.payload)
+            if (upsertVerification(action.payload)) {
+                state.verifications._version++
+            }
             break
         }
+
         case "verifications/patch": {
-            const session_id = String(action.payload.session_id)
-            const changes = action.payload.changes
+            const session_id = toSessionKey(action.payload?.session_id)
+            const changes = action.payload?.changes || {}
+            if (!session_id) break
 
             const current = state.verifications.bySessionId[session_id]
             if (!current) break
 
-            // MUTAR ESTADO REAL
             state.verifications.bySessionId[session_id] = {
                 ...current,
-                ...changes
+                ...changes,
             }
 
-            if (state.verifications.selected?.session_id == session_id) {
-                state.verifications.selected = state.verifications.bySessionId[session_id]
-            }
-
+            state.verifications._version++
             break
         }
+
         case "verifications/select": {
-            state.verifications.selected = String(action.payload)
+            state.verifications.selected = toSessionKey(action.payload)
+            break
+        }
+        case "verifications/update_inconsistencia": {
+            const { id, resolved_by_panel, resolved_by_siga } = action.payload || {}
+
+            if (!id) break
+
+            const selected = state.verifications.selected
+            if (!selected) break
+
+            const verification = state.verifications.bySessionId[selected]
+            if (!verification?.inconsistencias) break
+
+            const updated = verification.inconsistencias.map(inc => {
+                if (inc.ui_id !== id) return inc
+
+                return {
+                    ...inc,
+                    resolved_by_panel,
+                    resolved_by_siga,
+                    estado: (resolved_by_panel || resolved_by_siga) ? "RESUELTA" : "ABIERTA",
+                }
+            })
+
+            state.verifications.bySessionId[selected] = {
+                ...verification,
+                inconsistencias: updated,
+            }
+
+            state.verifications._version++
             break
         }
 

@@ -49,11 +49,13 @@ def _cookie_samesite() -> str:
 
 def _set_panel_session_cookie(response: Response, session_value: str, max_age: int) -> None:
     response.set_cookie(
-        key="panel_session",
+        key=_cookie_name(),
         value=session_value,
         httponly=True,
-        secure=False,   # correcto en dev
-        samesite="lax", # correcto
+        secure=_cookie_secure(),
+        samesite=_cookie_samesite(),
+        max_age=max_age,
+        path="/",
     )
 
 
@@ -160,4 +162,5 @@ def logout(
 
     _clear_panel_session_cookie(response)
 
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response

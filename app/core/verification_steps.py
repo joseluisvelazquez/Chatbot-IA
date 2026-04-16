@@ -1,15 +1,3 @@
-STEP_ORDER = [
-    "folio",
-    "nombre",
-    "domicilio",
-    "fecha",
-    "producto",
-    "componentes",
-    "pagoInicial",
-    "pagos",
-    "bancos",
-    "plan3meses",
-    "planes",
-    "beneficios",
-    "finalizado",
-]
+from app.core.verification.verification_schema import VERIFICATION_STEP_ORDER
+
+STEP_ORDER = VERIFICATION_STEP_ORDER

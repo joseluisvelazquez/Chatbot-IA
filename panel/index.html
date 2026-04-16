@@ -4,6 +4,18 @@
     <meta charset="UTF-8">
     <link rel="icon" href="data:,">
     <title>MXCOMP Panel</title>
+    <script>
+    (function () {
+      const path = window.location.pathname;
+      const basePath = path.endsWith(".html")
+        ? path.slice(0, path.lastIndexOf("/") + 1)
+        : path.endsWith("/")
+          ? path
+          : `${path}/`;
+
+      document.write(`<base href="${basePath}">`);
+    })();
+    </script>
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -45,8 +57,8 @@
         </div>
     </div>
 
-    <script src="/js/lucide.min.js"></script>
+    <script src="js/lucide.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" src="/js/app.js"></script>
+    <script type="module" src="js/app.js"></script>
 </body>
 </html>

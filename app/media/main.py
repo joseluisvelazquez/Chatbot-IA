@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
-from app.api.panel_send import router as panel_send_router
 
 from app.api.webhook import router as webhook_router
+from app.config.paths import MEDIA_DIR, PANEL_DIR
 from app.jobs.inactivity_reminders import run_inactivity_reminders_job
 from fastapi.staticfiles import StaticFiles
 
+from app.router.auth_router import router as auth_router
 from app.router.panel_router import router as panel_router
 
 
@@ -18,9 +19,9 @@ app = FastAPI(title="MXCOMP Chatbot")
 app.include_router(webhook_router)
 app.include_router(media_router)
 app.include_router(panel_router)
-app.include_router(panel_send_router)
-app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
-app.mount("/media", StaticFiles(directory="media"), name="media")
+app.include_router(auth_router)
+app.mount("/panel", StaticFiles(directory=str(PANEL_DIR), html=True), name="panel")
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
 scheduler = BackgroundScheduler(timezone="UTC")
 

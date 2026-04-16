@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, desc, func, text
@@ -17,18 +18,22 @@ from app.security.auth_service import decode_panel_session, restrict_to_assigned
 from app.services.verification_service import VerificationService
 from app.websockets.manager import manager
 from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message, FlowEvent
-from app.siga.siga_repository import obtener_venta_por_folio
 from app.security.auth_dependencies import get_current_panel_user
 from app.adapters.whatsapp_client import send_whatsapp_media
 from fastapi import Request
 from app.services.verification_tracker import STEP_MAP
-from app.utils.inconsistencias_serializer import serialize_inconsistencias
+from app.utils.inconsistencias_serializer import (
+    serialize_inconsistencias,
+    summarize_inconsistencias,
+)
 from app.services.verification_panel_service import (
+    build_verification_snapshot,
     classify_panel_status,
     compute_verification,
     group_inconsistencias_by_folio,
     has_open_inconsistencia,
 )
+from app.services.inconsistencias_service import mark_panel_resolution
 from app.db.models import BitacoraVentas
 
 # ORDEN REAL DEL FLOW 
@@ -51,6 +56,7 @@ router = APIRouter(
     prefix="/api/panel",
     tags=["panel"]
 )
+logger = logging.getLogger(__name__)
 
 
 # =========================================
@@ -135,26 +141,31 @@ async def mark_as_read(
 def resolve_cuentas_from_folios(folios: list[str], db: Session, user) -> dict:
     if user.empresa_id != 1:
         raise HTTPException(403, "No autorizado")
-    result = {}
 
-    for folio in folios:
-        try:
-            venta = obtener_venta_por_folio(db, folio)
+    unique_folios = [str(folio) for folio in dict.fromkeys(folios) if folio]
+    result = {folio: None for folio in unique_folios}
 
-            if not venta:
-                result[folio] = None
-                continue
+    if not unique_folios:
+        return result
 
-            no_cuenta = getattr(venta, "no_cuenta", None)
+    ventas = (
+        db.query(BitacoraVentas.folio, BitacoraVentas.no_cuenta)
+        .filter(
+            BitacoraVentas.folio.in_(unique_folios),
+            BitacoraVentas.id_emp_bv == 1,
+        )
+        .order_by(desc(BitacoraVentas.id_venta_b))
+        .all()
+    )
 
-            if not no_cuenta:
-                result[folio] = None
-                continue
+    for venta in ventas:
+        folio = str(venta.folio) if venta.folio else None
+        if not folio or folio not in result or result[folio] is not None:
+            continue
 
+        no_cuenta = getattr(venta, "no_cuenta", None)
+        if no_cuenta:
             result[folio] = str(no_cuenta)
-
-        except Exception:
-            result[folio] = None
 
     return result
 
@@ -405,15 +416,11 @@ def get_verifications(
     # 📦 OBTENER SESIONES
     # =========================
     
-    sessions = (
+    sessions_query = (
         restrict_to_assigned(db.query(ChatSessions), user, db)
         .filter(ChatSessions.folio.isnot(None))
         .order_by(ChatSessions.last_message_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
     )
-    
 
     total = (
         restrict_to_assigned(db.query(func.count(ChatSessions.id)), user, db)
@@ -421,10 +428,16 @@ def get_verifications(
         .scalar()
     )
 
+    sessions = (
+        sessions_query.all()
+        if status
+        else sessions_query.offset(offset).limit(limit).all()
+    )
+
     if not sessions:
         return {
             "data": [],
-            "total": total,
+            "total": 0 if status else total,
             "has_more": False,
         }
 
@@ -542,7 +555,8 @@ def get_verifications(
 
         inconsistencias_folio = inconsistencias_by_folio.get(folio, [])
 
-        open_inconsistencia = has_open_inconsistencia(inconsistencias_folio)
+        serialized_inconsistencias = serialize_inconsistencias(inconsistencias_folio)
+        open_inconsistencia = has_open_inconsistencia(serialized_inconsistencias)
 
         panel_status = classify_panel_status(
             verification_data=verification_data,
@@ -551,7 +565,7 @@ def get_verifications(
             requires_human=False,
         )
 
-        serialized_inconsistencias = serialize_inconsistencias(inconsistencias_folio)
+        inconsistencia_summary = summarize_inconsistencias(serialized_inconsistencias)
 
         item = {
             "session_id": session.id,
@@ -564,6 +578,8 @@ def get_verifications(
             "current_step": current_step,
             "inconsistencias": serialized_inconsistencias,
             "inconsistencias_count": len(serialized_inconsistencias),
+            "severity_counts": inconsistencia_summary["severity_counts"],
+            "highest_severity": inconsistencia_summary["highest_severity"],
             "confirmed_count": verification_data["progress_count"],
             "total_steps": verification_data["total_steps"],
             "last_activity": session.last_message_at,
@@ -575,10 +591,20 @@ def get_verifications(
 
         result.append(item)
 
+    if status:
+        filtered_total = len(result)
+        paginated_result = result[offset:offset + limit]
+
+        return {
+            "data": paginated_result,
+            "total": filtered_total,
+            "has_more": (offset + len(paginated_result)) < filtered_total,
+        }
+
     return {
         "data": result,
         "total": total,
-        "has_more": (offset + limit) < total,
+        "has_more": (offset + len(result)) < total,
     }
 @router.get("/verifications/{session_id}")
 def get_verification_by_session(
@@ -639,6 +665,7 @@ def get_verification_by_session(
     )
 
     serialized_inconsistencias = serialize_inconsistencias(inconsistencias)
+    inconsistencia_summary = summarize_inconsistencias(serialized_inconsistencias)
 
     open_inconsistencia = any(
         i["estado"] == "ABIERTA" for i in serialized_inconsistencias
@@ -688,11 +715,63 @@ def get_verification_by_session(
 
         "inconsistencias": serialized_inconsistencias,
         "inconsistencias_count": len(serialized_inconsistencias),
+        "severity_counts": inconsistencia_summary["severity_counts"],
+        "highest_severity": inconsistencia_summary["highest_severity"],
 
         "confirmed_count": verification_data["progress_count"],
         "total_steps": verification_data["total_steps"],
 
         "last_activity": session.last_message_at,
+        "siga_url": (
+            f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}"
+            if no_cuenta
+            else f"https://siga.mxcomp.com.mx/ventas/{folio}"
+        ),
+    }
+
+
+@router.patch("/inconsistencias/{inconsistencia_id}/resolution")
+async def update_inconsistencia_panel_resolution(
+    inconsistencia_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
+
+    payload = await request.json()
+    if "resolved_by_panel" not in payload or not isinstance(payload["resolved_by_panel"], bool):
+        raise HTTPException(400, "resolved_by_panel booleano requerido")
+
+    try:
+        inc = mark_panel_resolution(
+            db=db,
+            inconsistencia_id=inconsistencia_id,
+            resolved=payload["resolved_by_panel"],
+        )
+    except ValueError:
+        raise HTTPException(404, "Inconsistencia no encontrada")
+
+    db.commit()
+    db.refresh(inc)
+
+    if inc.session_id:
+        session = db.query(ChatSessions).filter(ChatSessions.id == inc.session_id).first()
+        if session:
+            await manager.send_to_all({
+                "type": "inconsistencia_updated",
+                "payload": {
+                    "id": inc.id,
+                    "resolved_by_panel": bool(inc.resolved_by_panel),
+                    "resolved_by_siga": bool(inc.resolved_by_siga),
+                }
+            })
+
+    return {
+        "id": inc.id,
+        "resolved_by_panel": bool(inc.resolved_by_panel),
+        "resolved_by_siga": bool(inc.resolved_by_siga),
     }
 # =========================================
 # Obtener conversaciones (PAGINADO + DTO)
@@ -705,8 +784,8 @@ def get_conversations(
     user = Depends(get_current_panel_user),
     # _: str = Depends(verify_api_key)
 ):
-    if limit > 100:
-        limit = 100
+    if limit > 500:
+        limit = 500
 
     sessions = (
         restrict_to_assigned(db.query(ChatSessions), user, db)
@@ -829,7 +908,7 @@ def get_messages(
             for m in messages
         ],
         total=total,
-        has_more = total > limit
+        has_more=(offset + len(messages)) < total
     )
 
 
@@ -887,6 +966,7 @@ async def send_agent_message(
 
         message_payload = {
             "id": message.id,
+            "phone": phone,
             "content": message.content,
             "direction": message.direction,
             "created_at": message.created_at.isoformat() if message.created_at else now.isoformat()
@@ -897,6 +977,16 @@ async def send_agent_message(
         await manager.send_to_all({
             "type": "new_message",
             "session_id": session.id,
+            "phone": session.phone,
+            "conversation": {
+                "id": session.id,
+                "phone": session.phone,
+                "name": None,
+                "last_message": message.content,
+                "last_message_at": message_payload["created_at"],
+                "unread_count": 0,
+                "folio": str(session.folio) if session.folio else None,
+            },
             "message": message_payload
         })
 
@@ -928,6 +1018,7 @@ async def send_agent_message(
 async def send_agent_file(
     request: Request,
     db: Session = Depends(get_db),
+    user=Depends(get_current_panel_user),
 ):
     payload = await request.json()
 
@@ -940,6 +1031,9 @@ async def send_agent_file(
 
     if not session_id or not media_url or not media_type:
         raise HTTPException(400, "Datos incompletos")
+
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
 
     session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
 
@@ -957,6 +1051,9 @@ async def send_agent_file(
     if not content or content == "[MEDIA]":
         content = " "
 
+    last_message = content.strip() if content and content.strip() else "Archivo adjunto"
+    now = datetime.utcnow()
+
     try:
         message = Message(
             session_id=session.id,
@@ -969,7 +1066,9 @@ async def send_agent_file(
         )
 
         db.add(message)
-        session.last_message_at = datetime.utcnow()
+        session.last_message = last_message
+        session.last_message_at = now
+        session.unread_count = 0
 
         db.commit()
         db.refresh(message)
@@ -987,16 +1086,51 @@ async def send_agent_file(
     await manager.send_to_all({
         "type": "new_message",
         "session_id": session.id,
+        "phone": session.phone,
+        "conversation": {
+            "id": session.id,
+            "phone": session.phone,
+            "name": None,
+            "last_message": last_message,
+            "last_message_at": message.created_at.isoformat(),
+            "unread_count": 0,
+            "folio": str(session.folio) if session.folio else None,
+        },
         "message": {
             "id": message.id,
+            "phone": session.phone,
             "content": message.content,
             "direction": "agent",
             "type": media_type,
             "media_url": media_url,
             "file_name": file_name,
             "created_at": message.created_at.isoformat()
-        }
+        },
+        "unread_count": 0,
     })
+
+    await manager.send_to_all({
+        "type": "dashboard_update",
+        "payload": {
+            "messages_in_delta": 0,
+            "messages_out_delta": 1,
+        },
+    })
+
+    snapshot = build_verification_snapshot(db, session)
+    if snapshot:
+        await manager.send_to_all({
+            "type": "verification_update",
+            "payload": snapshot,
+        })
+    else:
+        await manager.send_to_all({
+            "type": "verification_update",
+            "payload": {
+                "session_id": session.id,
+                "last_activity": now.isoformat(),
+            },
+        })
 
     # =========================
     # 📤 3. WHATSAPP (ASYNC)

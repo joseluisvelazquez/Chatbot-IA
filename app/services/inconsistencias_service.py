@@ -127,3 +127,25 @@ def close_open_inconsistencia(
         return None
     inc.estatus = "CERRADA"
     return inc
+
+
+def mark_panel_resolution(
+    db: Session,
+    inconsistencia_id: int,
+    resolved: bool,
+) -> Inconsistencias:
+    inc = (
+        db.query(Inconsistencias)
+        .filter(Inconsistencias.id == inconsistencia_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not inc:
+        raise ValueError("inconsistencia no encontrada")
+
+    inc.resolved_by_panel = bool(resolved)
+
+    if bool(resolved):
+        inc.estatus = "CERRADA"
+    return inc

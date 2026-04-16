@@ -45,6 +45,10 @@ const NAV_ITEMS = [
     { page: "cobranza", icon: "wallet", label: "Cobranza" }
 ];
 
+function getUserDisplayName() {
+    return window.currentUser?.puesto || window.currentUser?.username || "Panel";
+}
+
 // =========================
 // HEADER
 // =========================
@@ -91,7 +95,7 @@ export function renderHeader(layout = "default") {
                 </button>
 
                 <div class="text-sm text-gray-700 dark:text-slate-300">
-                    Admin
+                    ${escapeHtml(getUserDisplayName())}
                 </div>
             </div>
         `;
@@ -115,7 +119,7 @@ export function renderHeader(layout = "default") {
                         hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition-all duration-200">
                     🌙
                 </button>
-                <div class="text-sm text-gray-700 dark:text-slate-200">Admin</div>
+                <div class="text-sm text-gray-700 dark:text-slate-200">${escapeHtml(getUserDisplayName())}</div>
             </div>
         `;
     }
