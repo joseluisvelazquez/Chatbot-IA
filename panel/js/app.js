@@ -478,7 +478,7 @@ export async function navigateTo(page, push = true) {
         await animateContentOut(content);
 
         setLayout(config.layout);
-        renderHeader(config.layout);
+        renderHeader(config.layout, page);
 
         if (config.layout === "default") {
             renderSidebar();

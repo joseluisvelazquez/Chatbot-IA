@@ -35,10 +35,10 @@ export function setLayout(layout = "default") {
     }
 
     sidebar.className =
-        "w-64 bg-white dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 transition-all";
+        "hidden md:block md:w-64 bg-white dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 transition-all";
 
     content.className =
-        "flex-1 overflow-y-auto min-w-0 min-h-0 p-6 bg-gray-100 dark:bg-slate-900";
+        "flex-1 overflow-y-auto min-w-0 min-h-0 p-4 md:p-6 bg-gray-100 dark:bg-slate-900";
 }
 
 export function getCurrentLayout() {

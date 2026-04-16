@@ -140,7 +140,7 @@ function renderInconsistenciasCell(item) {
     if (counts.unknown > 0) breakdown.push(`${counts.unknown} sin grado`);
 
     return `
-        <div class="flex min-w-[180px] flex-col gap-1">
+        <div class="flex min-w-0 flex-col gap-1 md:min-w-[180px]">
             <div class="flex items-center gap-2">
                 <span class="text-sm font-semibold text-gray-900 dark:text-white">${counts.total}</span>
                 ${renderSeverityBadge(highestSeverity)}
@@ -603,16 +603,16 @@ function openVerificationDetail(item) {
 function updateVerificationRow(row, item) {
     row.className = "cursor-pointer border-b border-gray-100 transition hover:bg-gray-50 dark:border-slate-700 dark:hover:bg-slate-700/40";
     row.innerHTML = `
-        <td class="px-4 py-4">${ui.escapeHtml(item.no_cuenta || "-")}</td>
-        <td class="px-4 py-4">${ui.escapeHtml(item.folio || "-")}</td>
-        <td class="px-4 py-4">${ui.escapeHtml(item.phone || "-")}</td>
-        <td class="px-4 py-4">
+        <td data-label="No. cuenta" class="px-4 py-4">${ui.escapeHtml(item.no_cuenta || "-")}</td>
+        <td data-label="Folio" class="px-4 py-4">${ui.escapeHtml(item.folio || "-")}</td>
+        <td data-label="Telefono" class="px-4 py-4">${ui.escapeHtml(item.phone || "-")}</td>
+        <td data-label="Estado" class="px-4 py-4">
             <span class="${ui.statusClass(item.status)}">${ui.statusLabel(item.status)}</span>
         </td>
-        <td class="px-4 py-4">${ui.renderProgressBar(item.progress_pct)}</td>
-        <td class="px-4 py-4">${ui.escapeHtml(item.current_step || "-")}</td>
-        <td class="px-4 py-4">${renderInconsistenciasCell(item)}</td>
-        <td class="px-4 py-4 whitespace-nowrap">${ui.formatDateTime(item.last_activity)}</td>
+        <td data-label="Progreso" class="px-4 py-4">${ui.renderProgressBar(item.progress_pct)}</td>
+        <td data-label="Paso actual" class="px-4 py-4">${ui.escapeHtml(item.current_step || "-")}</td>
+        <td data-label="Inconsistencias" class="px-4 py-4">${renderInconsistenciasCell(item)}</td>
+        <td data-label="Ultima actividad" class="px-4 py-4 whitespace-nowrap">${ui.formatDateTime(item.last_activity)}</td>
     `;
 }
 

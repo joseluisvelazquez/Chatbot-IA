@@ -1,17 +1,17 @@
-<div class="flex h-full w-full overflow-hidden">
+<div id="chatShell" class="flex h-full w-full overflow-hidden">
 
     <!-- SIDEBAR -->
-    <div class="w-80 shrink-0 flex flex-col
+    <div id="conversationPane" class="w-80 shrink-0 flex flex-col
         bg-white dark:bg-slate-800
         border-r border-gray-200 dark:border-slate-700"
     >
 
-        <!-- 🔍 BUSCADOR -->
+        <!-- BUSCADOR -->
         <div class="p-3">
             <input
                 id="searchInput"
                 placeholder="Buscar chat..."
-                class="w-full px-3 py-2 rounded-lg 
+                class="w-full px-3 py-2 rounded-lg
                        bg-gray-100 dark:bg-slate-700
                        text-black dark:text-white
                        text-sm outline-none
@@ -19,43 +19,43 @@
             />
         </div>
 
-        <!-- 🔘 FILTROS -->
-        <div class="px-3 pb-2 flex gap-2">
+        <!-- FILTROS -->
+        <div class="px-3 pb-2 flex gap-2 overflow-x-auto">
 
             <button id="filterAll"
-                class="filter-btn px-3 py-1 text-xs rounded-lg transition
+                class="filter-btn shrink-0 px-3 py-1 text-xs rounded-lg transition
                     bg-green-600 text-white
                     dark:bg-green-500 dark:text-white">
                 Todos
             </button>
 
             <button id="filterUnread"
-                class="filter-btn px-3 py-1 text-xs rounded-lg transition
+                class="filter-btn shrink-0 px-3 py-1 text-xs rounded-lg transition
                     bg-gray-200 text-gray-700
                     dark:bg-slate-700 dark:text-gray-300">
-                No leídos
+                No leidos
             </button>
 
         </div>
 
-        <!-- 📋 LISTA -->
+        <!-- LISTA -->
         <div
             id="conversationList"
             class="flex-1 overflow-y-auto"
         ></div>
     </div>
-    
+
     <!-- CHAT -->
-    <div class="flex-1 flex flex-col min-w-0 min-h-0">
+    <div id="chatPane" class="flex-1 flex flex-col min-w-0 min-h-0">
 
         <!-- HEADER -->
         <div
             id="chatHeader"
-            class="shrink-0 px-4 py-3 font-semibold
+            class="shrink-0 px-3 py-3 md:px-4 font-semibold
             bg-white dark:bg-slate-800
             border-b border-gray-200 dark:border-slate-700"
         >
-            Selecciona una conversación
+            Selecciona una conversacion
         </div>
 
         <!-- MENSAJES -->
@@ -74,7 +74,7 @@
 
         <!-- INPUT -->
         <div
-            class="relative shrink-0 p-3 flex flex-col gap-2
+            class="relative shrink-0 p-2 md:p-3 flex flex-col gap-2
             bg-gray-50 dark:bg-slate-800
             border-t border-gray-200 dark:border-slate-700"
         >
@@ -82,37 +82,44 @@
             <div id="filePreview" class="hidden flex justify-end"></div>
 
             <div class="flex gap-2 items-end">
-                <!-- 📎 FILE -->
+                <!-- FILE -->
                 <label
-                    class="h-[42px] w-[42px] flex items-center justify-center 
-                    rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
-                    transition text-xl shrink-0 cursor-pointer"
+                    class="h-[42px] w-[42px] flex items-center justify-center
+                    rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700
+                    transition shrink-0 cursor-pointer"
+                    title="Adjuntar archivo"
+                    aria-label="Adjuntar archivo"
                 >
-                    📎
+                    <i data-lucide="paperclip" class="w-5 h-5"></i>
                     <input id="fileInput" type="file" multiple class="hidden" />
                 </label>
-            
-                <!-- 😊 EMOJI -->
+
+                <!-- EMOJI -->
                 <button id="emojiBtn"
-                    class="h-[42px] w-[42px] flex items-center justify-center 
-                        rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 
-                        transition text-xl shrink-0">
-                    😊
+                    class="h-[42px] w-[42px] flex items-center justify-center
+                        rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700
+                        transition shrink-0"
+                    title="Emoji"
+                    aria-label="Emoji">
+                    <i data-lucide="smile" class="w-5 h-5"></i>
                 </button>
 
                 <!-- TEXTAREA -->
-                <textarea 
+                <textarea
                     id="messageInput"
                     placeholder="Escribe un mensaje..."
-                    class="flex-1 px-3 py-2 border rounded-lg text-sm outline-none resize-none max-h-[120px] overflow-y-auto
+                    class="flex-1 min-w-0 px-3 py-2 border rounded-lg text-sm outline-none resize-none max-h-[120px] overflow-y-auto
                         bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600 text-black dark:text-white"
                     oninput="handleTyping(); autoResize(this)"
                 ></textarea>
 
                 <!-- ENVIAR -->
                 <button onclick="send()"
-                    class="h-[42px] px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg shrink-0">
-                    Enviar
+                    class="h-[42px] w-[42px] md:w-auto md:px-4 py-2 inline-flex items-center justify-center bg-green-500 hover:bg-green-600 text-white rounded-lg shrink-0"
+                    title="Enviar"
+                    aria-label="Enviar">
+                    <i data-lucide="send-horizontal" class="w-5 h-5 md:hidden"></i>
+                    <span class="hidden md:inline">Enviar</span>
                 </button>
 
                 <!-- EMOJI PICKER -->
@@ -125,7 +132,7 @@
 
                     <input id="emojiSearch"
                         placeholder="Buscar emoji..."
-                        class="h-8 mb-2 px-2 rounded border 
+                        class="h-8 mb-2 px-2 rounded border
                             border-gray-300 dark:border-slate-600
                             bg-white dark:bg-slate-900
                             text-black dark:text-white
@@ -139,16 +146,19 @@
         </div>
     </div>
 </div>
-<!-- 🖼️ IMAGE VIEWER GLOBAL -->
+
+<!-- IMAGE VIEWER GLOBAL -->
 <div
   id="imageViewer"
   class="hidden fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center"
 >
     <button
         onclick="closeImageViewer()"
-        class="absolute top-4 right-4 text-white text-2xl"
+        class="absolute top-4 right-4 text-white"
+        title="Cerrar"
+        aria-label="Cerrar"
     >
-        ✕
+        <i data-lucide="x" class="w-7 h-7"></i>
     </button>
 
     <div class="w-[90vw] h-[80vh] flex items-center justify-center">
@@ -157,11 +167,10 @@
             class="max-w-full max-h-full object-contain transition-opacity duration-200"
         />
     </div>
-    <!-- flechas -->
-    <button onclick="prevImage()" class="absolute left-4 text-white text-3xl">‹</button>
-    <button onclick="nextImage()" class="absolute right-4 text-white text-3xl">›</button>
 
-    <!-- miniaturas -->
+    <button onclick="prevImage()" class="absolute left-4 text-white text-3xl" aria-label="Imagen anterior">&lt;</button>
+    <button onclick="nextImage()" class="absolute right-4 text-white text-3xl" aria-label="Imagen siguiente">&gt;</button>
+
     <div
         id="imageThumbs"
         class="flex gap-2 overflow-x-auto max-w-full"
@@ -170,5 +179,5 @@
             -ms-overflow-style: none;
         "
     >
-</div>
+    </div>
 </div>

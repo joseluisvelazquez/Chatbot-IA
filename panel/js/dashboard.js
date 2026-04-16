@@ -82,11 +82,11 @@ async function loadStateTimes() {
                 "border-b border-gray-100 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/40 transition";
 
             tr.innerHTML = `
-                <td class="px-4 py-4">${row.transition ?? "-"}</td>
-                <td class="px-4 py-4">${row.avg_minutes ?? 0}</td>
-                <td class="px-4 py-4">${row.max_minutes ?? 0}</td>
-                <td class="px-4 py-4">${row.min_minutes ?? 0}</td>
-                <td class="px-4 py-4">${row.count ?? 0}</td>
+                <td data-label="Transicion" class="px-4 py-4">${row.transition ?? "-"}</td>
+                <td data-label="Promedio" class="px-4 py-4">${row.avg_minutes ?? 0}</td>
+                <td data-label="Maximo" class="px-4 py-4">${row.max_minutes ?? 0}</td>
+                <td data-label="Minimo" class="px-4 py-4">${row.min_minutes ?? 0}</td>
+                <td data-label="Eventos" class="px-4 py-4">${row.count ?? 0}</td>
             `;
 
             tbody.appendChild(tr);

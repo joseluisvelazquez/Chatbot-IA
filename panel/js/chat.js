@@ -52,6 +52,7 @@ let paginationState = {
 
 let searchTerm = ""
 let filterMode = "all" // "all" | "unread"
+let mobileResizeBound = false
 
 //Para imagenes 
 let selectedFiles = []
@@ -60,6 +61,26 @@ let selectedPreviewIndex = 0
 let imageList = []
 let imageSet = new Set()
 let currentImageIndex = 0
+
+function isMobileChatViewport() {
+    return window.matchMedia("(max-width: 767px)").matches
+}
+
+function getChatShell() {
+    return document.getElementById("chatShell")
+}
+
+function showMobileChat() {
+    const shell = getChatShell()
+    if (shell) shell.classList.add("mobile-chat-open")
+}
+
+function showMobileConversationList() {
+    const shell = getChatShell()
+    if (shell) shell.classList.remove("mobile-chat-open")
+}
+
+window.showMobileConversationList = showMobileConversationList
 
 function syncPreviewFromStore() {
     const preview = getState().chat.preview
@@ -115,6 +136,14 @@ export async function initConversationsPage() {
     lastMessagesSessionKey = null
     lastPreviewVersion = -1
     forceRender = true
+
+    if (!mobileResizeBound) {
+        window.addEventListener("resize", () => {
+            if (!isMobileChatViewport() || currentSessionId) return
+            showMobileConversationList()
+        })
+        mobileResizeBound = true
+    }
 
     if (unsubscribeChatStore) unsubscribeChatStore()
 
@@ -217,19 +246,22 @@ export async function initConversationsPage() {
         }
     }
 
-    if (!getSelectedSession()?.sessionId) {
+    if (!getSelectedSession()?.sessionId && !isMobileChatViewport()) {
         const firstId = state.conversations.order[0]
 
         if (!firstId) {
             console.warn("No hay conversaciones disponibles")
-            return
-        }
+        } else {
+            const session = state.conversations.byId[firstId]
 
-        const session = state.conversations.byId[firstId]
-
-        if (session) {
-            await loadChat(session.id, session.phone, session.name || null)
+            if (session) {
+                await loadChat(session.id, session.phone, session.name || null)
+            }
         }
+    }
+
+    if (!getSelectedSession()?.sessionId && isMobileChatViewport()) {
+        showMobileConversationList()
     }
 
     
@@ -555,6 +587,7 @@ function createSidebarNode(s) {
 
     div.onclick = async () => {
         if (currentSessionId === s.id && lastLoadedSessionId === s.id && !isLoadingChat) {
+            showMobileChat()
             return
         }
 
@@ -622,7 +655,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
     })
 
     const bubble = document.createElement("div")
-    let bubbleClass = "inline-block max-w-[70%] min-w-[80px] px-3 py-2 rounded-lg text-sm shadow-sm break-words"
+    let bubbleClass = "inline-block max-w-[88%] sm:max-w-[78%] md:max-w-[70%] min-w-[80px] px-3 py-2 rounded-lg text-sm shadow-sm break-words"
 
     if (msg.direction === "in") {
         wrapper.classList.add("justify-start")
@@ -657,7 +690,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
                     <img
                         src="${mediaUrl}"
                         data-open-viewer
-                        class="max-w-[380px] max-h-[420px] object-contain rounded-lg cursor-pointer hover:opacity-90"
+                        class="max-w-full sm:max-w-[380px] max-h-[420px] object-contain rounded-lg cursor-pointer hover:opacity-90"
                         onclick="openImageViewer('${mediaUrl}')"
                         loading="lazy"
                     />
@@ -950,7 +983,10 @@ export async function loadChat(sessionId, phone, name = null) {
         list &&
         list.childElementCount > 0
 
-    if (alreadyRendered) return
+    if (alreadyRendered) {
+        showMobileChat()
+        return
+    }
 
     if (isLoadingChat && currentSessionId === Number(sessionId)) return
 
@@ -964,6 +1000,7 @@ export async function loadChat(sessionId, phone, name = null) {
         phone,
         name
     })
+    showMobileChat()
 
     renderSidebarFromState(getState())
     isLoadingChat = true
@@ -975,7 +1012,8 @@ export async function loadChat(sessionId, phone, name = null) {
     const sessionInfo = state.conversations.byId[numericSessionId]
 
     if (!sessionInfo) {
-        console.warn("Intentando cargar sesión inexistente:", sessionId)
+        console.warn("Intentando cargar sesion inexistente:", sessionId)
+        isLoadingChat = false
         return
     }
 
@@ -988,17 +1026,28 @@ export async function loadChat(sessionId, phone, name = null) {
 
         if (header) {
             header.innerHTML = `
-                <div class="flex items-center justify-between w-full">
-                    <div class="flex flex-col">
-                        <span class="font-semibold text-sm">
+                <div class="flex items-center gap-3 w-full min-w-0">
+                    <button
+                        type="button"
+                        onclick="showMobileConversationList()"
+                        class="md:hidden h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-lg
+                        hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition"
+                        title="Volver a conversaciones"
+                        aria-label="Volver a conversaciones"
+                    >
+                        <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                    </button>
+                    <div class="flex min-w-0 flex-col">
+                        <span class="truncate font-semibold text-sm">
                             ${escapeHtml(displayName)}
                         </span>
-                        <span class="text-xs text-gray-400">
+                        <span class="truncate text-xs text-gray-400">
                             ${escapeHtml(safePhone ? `+${safePhone}` : "En conversacion")}
                         </span>
                     </div>
                 </div>
             `
+            if (window.lucide) lucide.createIcons()
         }
 
         try {
@@ -1183,7 +1232,7 @@ function showTyping(text = "✍️ escribiendo...") {
 
     const div = document.createElement("div")
     div.id = "typing"
-    div.className = "w-fit max-w-[42rem] text-xs text-gray-500 italic self-start bg-white px-3 py-2 rounded-lg shadow-sm"
+    div.className = "w-fit max-w-[88%] md:max-w-[42rem] text-xs text-gray-500 italic self-start bg-white px-3 py-2 rounded-lg shadow-sm"
     div.innerText = text
 
     container.appendChild(div)

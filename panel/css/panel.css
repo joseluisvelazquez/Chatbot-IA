@@ -1,0 +1,211 @@
+html,
+body {
+    width: 100%;
+    height: 100%;
+}
+
+body {
+    min-width: 320px;
+    overscroll-behavior: none;
+}
+
+#app {
+    min-height: 100vh;
+}
+
+@supports (height: 100dvh) {
+    body.h-screen,
+    body,
+    #app {
+        height: 100dvh;
+    }
+}
+
+#content,
+#drawerBody,
+#messagesContainer,
+#conversationList {
+    -webkit-overflow-scrolling: touch;
+}
+
+button,
+input,
+textarea {
+    font: inherit;
+}
+
+.kpi-card {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.5rem;
+    border: 1px solid rgb(226 232 240);
+    border-radius: 0.5rem;
+    background: #ffffff;
+    padding: 1rem;
+}
+
+.dark .kpi-card {
+    border-color: rgb(51 65 85);
+    background: rgb(30 41 59);
+}
+
+.kpi-card svg {
+    width: 1.25rem;
+    height: 1.25rem;
+    color: rgb(37 99 235);
+}
+
+.kpi-card h3 {
+    overflow-wrap: anywhere;
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.kpi-card p {
+    overflow-wrap: anywhere;
+    font-size: 0.875rem;
+    color: rgb(100 116 139);
+}
+
+.dark .kpi-card p {
+    color: rgb(148 163 184);
+}
+
+.card {
+    min-width: 0;
+    border: 1px solid rgb(226 232 240);
+    border-radius: 0.5rem;
+    background: #ffffff;
+    padding: 1rem;
+}
+
+.dark .card {
+    border-color: rgb(51 65 85);
+    background: rgb(30 41 59);
+}
+
+.card-title {
+    margin-bottom: 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+@media (max-width: 767px) {
+    #content {
+        padding: 1rem;
+    }
+
+    #chatShell {
+        position: relative;
+    }
+
+    #conversationPane {
+        width: 100%;
+        flex: 1 1 100%;
+        border-right-width: 0;
+    }
+
+    #chatPane {
+        display: none;
+        width: 100%;
+        flex: 1 1 100%;
+    }
+
+    #chatShell.mobile-chat-open #conversationPane {
+        display: none;
+    }
+
+    #chatShell.mobile-chat-open #chatPane {
+        display: flex;
+    }
+
+    #messages {
+        padding: 0.75rem;
+    }
+
+    #emojiPickerContainer {
+        left: 0.5rem;
+        right: 0.5rem;
+        width: auto;
+        max-width: none;
+    }
+
+    #verificationTableWrapper,
+    #stateTableWrapper {
+        overflow: visible;
+    }
+
+    #verificationTableWrapper table,
+    #verificationTableWrapper thead,
+    #verificationTableWrapper tbody,
+    #verificationTableWrapper tr,
+    #verificationTableWrapper td,
+    #stateTableWrapper table,
+    #stateTableWrapper thead,
+    #stateTableWrapper tbody,
+    #stateTableWrapper tr,
+    #stateTableWrapper td {
+        display: block;
+        width: 100%;
+        min-width: 0 !important;
+    }
+
+    #verificationTableWrapper thead,
+    #stateTableWrapper thead {
+        display: none;
+    }
+
+    #verificationTableWrapper tr,
+    #stateTableWrapper tr {
+        margin-bottom: 0.75rem;
+        overflow: hidden;
+        border: 1px solid rgb(226 232 240);
+        border-radius: 0.5rem;
+        background: #ffffff;
+    }
+
+    .dark #verificationTableWrapper tr,
+    .dark #stateTableWrapper tr {
+        border-color: rgb(51 65 85);
+        background: rgb(30 41 59);
+    }
+
+    #verificationTableWrapper td,
+    #stateTableWrapper td {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        border-bottom: 1px solid rgb(226 232 240);
+        padding: 0.75rem 1rem;
+        text-align: right;
+    }
+
+    .dark #verificationTableWrapper td,
+    .dark #stateTableWrapper td {
+        border-color: rgb(51 65 85);
+    }
+
+    #verificationTableWrapper td:last-child,
+    #stateTableWrapper td:last-child {
+        border-bottom-width: 0;
+    }
+
+    #verificationTableWrapper td::before,
+    #stateTableWrapper td::before {
+        content: attr(data-label);
+        flex: 0 0 42%;
+        text-align: left;
+        font-size: 0.75rem;
+        font-weight: 700;
+        line-height: 1.25rem;
+        color: rgb(100 116 139);
+    }
+
+    .dark #verificationTableWrapper td::before,
+    .dark #stateTableWrapper td::before {
+        color: rgb(148 163 184);
+    }
+}

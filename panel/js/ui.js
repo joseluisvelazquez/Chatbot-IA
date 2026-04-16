@@ -29,10 +29,7 @@ function toggleTheme() {
     localStorage.setItem("theme", isDark ? "dark" : "light");
 }
 
-// hacerlo global porque lo llamas inline desde header
 window.toggleTheme = toggleTheme;
-
-// cargar tema al importar módulo
 loadTheme();
 
 // =========================
@@ -49,77 +46,115 @@ function getUserDisplayName() {
     return window.currentUser?.puesto || window.currentUser?.username || "Panel";
 }
 
+function renderNavButton(item, activePage = "", extraClass = "") {
+    const activeClass = item.page === activePage
+        ? "bg-blue-500 text-white"
+        : "text-gray-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-700";
+
+    return `
+        <button
+            type="button"
+            data-page="${item.page}"
+            class="flex h-9 w-9 items-center justify-center rounded-lg ${activeClass}
+            active:scale-95 transition-all duration-200 ${extraClass}"
+            title="${item.label}"
+            aria-label="${item.label}"
+        >
+            <i data-lucide="${item.icon}" class="w-5 h-5"></i>
+        </button>
+    `;
+}
+
+function renderMobileNav(activePage = "") {
+    return `
+        <nav class="flex items-center gap-1 md:hidden" aria-label="Navegacion principal">
+            ${NAV_ITEMS.map(item => renderNavButton(item, activePage)).join("")}
+        </nav>
+    `;
+}
+
+function renderHeaderNav(activePage = "") {
+    return `
+        <nav class="flex items-center gap-1 md:gap-3" aria-label="Navegacion principal">
+            ${NAV_ITEMS.map(item => renderNavButton(item, activePage)).join("")}
+        </nav>
+    `;
+}
+
+function renderThemeButton() {
+    return `
+        <button
+            type="button"
+            onclick="toggleTheme()"
+            class="inline-flex h-9 w-9 items-center justify-center rounded-lg
+            text-gray-700 dark:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-700
+            active:scale-95 transition-all duration-200"
+            title="Cambiar tema"
+            aria-label="Cambiar tema"
+        >
+            <i data-lucide="moon" class="w-5 h-5"></i>
+        </button>
+    `;
+}
+
+function renderLogoutButton() {
+    return `
+        <button
+            type="button"
+            onclick="logout()"
+            class="inline-flex h-9 w-9 items-center justify-center rounded-lg
+            text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30
+            active:scale-95 transition-all duration-200"
+            title="Cerrar sesion"
+            aria-label="Cerrar sesion"
+        >
+            <i data-lucide="log-out" class="w-5 h-5"></i>
+        </button>
+    `;
+}
+
 // =========================
 // HEADER
 // =========================
-export function renderHeader(layout = "default") {
+export function renderHeader(layout = "default", activePage = "") {
     const header = document.getElementById("header");
     if (!header) return;
 
     if (layout === "chat") {
         header.className =
-            "h-14 flex items-center justify-between px-4 md:px-6 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-700 text-gray-900 dark:text-white transition-colors duration-300";
+            "h-14 flex items-center justify-between gap-2 px-3 md:px-6 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-700 text-gray-900 dark:text-white transition-colors duration-300";
 
         header.innerHTML = `
-            <div class="flex items-center gap-6">
+            <div class="flex min-w-0 items-center gap-3 md:gap-6">
                 <div class="font-bold text-sky-500 transition-transform duration-200 hover:scale-105">MXCOMP</div>
-
-                <nav class="flex items-center gap-3">
-                    ${NAV_ITEMS.map(item => `
-                        <button
-                            type="button"
-                            data-page="${item.page}"
-                            class="flex items-center justify-center rounded-lg p-2
-                            hover:bg-gray-100 dark:hover:bg-slate-700
-                            active:scale-95 transition-all duration-200"
-                            title="${item.label}"
-                        >
-                            <i data-lucide="${item.icon}" class="w-5 h-5"></i>
-                        </button>
-                    `).join("")}
-                </nav>
+                ${renderHeaderNav("conversations")}
             </div>
 
-            <div class="flex items-center gap-3">
-                <button onclick="logout()" class="text-sm text-red-400">
-                    Cerrar sesión
-                </button>
-                <button
-                    type="button"
-                    onclick="toggleTheme()"
-                    class="inline-flex h-8 w-10 items-center justify-center rounded-md
-                    hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95
-                    transition-all duration-200"
-                >
-                    🌙
-                </button>
-
-                <div class="text-sm text-gray-700 dark:text-slate-300">
+            <div class="flex min-w-0 items-center gap-1 md:gap-3">
+                ${renderLogoutButton()}
+                ${renderThemeButton()}
+                <div class="hidden max-w-[11rem] truncate text-sm text-gray-700 dark:text-slate-300 sm:block">
                     ${escapeHtml(getUserDisplayName())}
                 </div>
             </div>
         `;
     } else {
         header.className =
-            "h-14 flex items-center justify-between px-6 bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 transition-colors duration-300";
+            "h-14 flex items-center justify-between gap-2 px-3 md:px-6 bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 transition-colors duration-300";
 
         header.innerHTML = `
-            <div class="flex items-center gap-4">
+            <div class="flex min-w-0 items-center gap-3 md:gap-4">
                 <div class="font-bold text-blue-500 transition-transform duration-200 hover:scale-105">MXCOMP</div>
-                <div class="text-sm text-gray-500 dark:text-slate-400">Sistema Operativo</div>
+                <div class="hidden text-sm text-gray-500 dark:text-slate-400 sm:block">Sistema Operativo</div>
+                ${renderMobileNav(activePage)}
             </div>
 
-            <div class="flex items-center gap-3">
-                <button onclick="logout()" class="text-sm text-red-400">
-                    Cerrar sesión
-                </button>
-                <button onclick="toggleTheme()"
-                    class="inline-flex h-8 w-10 items-center justify-center rounded-md
-                    text-gray-700 dark:text-slate-200
-                        hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition-all duration-200">
-                    🌙
-                </button>
-                <div class="text-sm text-gray-700 dark:text-slate-200">${escapeHtml(getUserDisplayName())}</div>
+            <div class="flex min-w-0 items-center gap-1 md:gap-3">
+                ${renderLogoutButton()}
+                ${renderThemeButton()}
+                <div class="hidden max-w-[11rem] truncate text-sm text-gray-700 dark:text-slate-200 sm:block">
+                    ${escapeHtml(getUserDisplayName())}
+                </div>
             </div>
         `;
     }
@@ -143,6 +178,8 @@ export function renderSidebar() {
                     id="toggleSidebar"
                     type="button"
                     class="rounded-lg p-2 hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition-all duration-200"
+                    title="Contraer menu"
+                    aria-label="Contraer menu"
                 >
                     <i data-lucide="panel-left-close" class="w-5 h-5"></i>
                 </button>
@@ -171,6 +208,7 @@ export function renderSidebar() {
         lucide.createIcons();
     }
 }
+
 // =========================
 // NAVIGATION
 // =========================
@@ -215,9 +253,10 @@ function statusClass(status) {
 
     return `inline-flex items-center px-2.5 py-1 text-xs rounded-full font-medium ${map[status] || "bg-gray-400/20 text-gray-300"}`;
 }
+
 function kpiCard(icon, id, label) {
     return `
-        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-4 flex flex-col gap-2">
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-4 flex flex-col gap-2">
             <i data-lucide="${icon}" class="w-5 h-5 text-blue-500"></i>
             <h3 id="${id}" class="text-xl font-semibold">0</h3>
             <p class="text-sm text-gray-500 dark:text-slate-400">${label}</p>
@@ -229,7 +268,7 @@ function renderProgressBar(percent) {
     const safe = Math.max(0, Math.min(100, percent || 0));
 
     return `
-        <div class="flex items-center gap-2 min-w-[160px]">
+        <div class="flex min-w-[120px] items-center gap-2 md:min-w-[160px]">
             <div class="w-full h-2 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
                 <div class="h-full bg-blue-500 transition-all" style="width: ${safe}%"></div>
             </div>
