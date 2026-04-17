@@ -95,11 +95,12 @@ export async function getVerificationBySession(sessionId) {
     return apiRequest(`/panel/verifications/${sessionId}`);
 }
 
-export async function updateInconsistenciaPanelResolution(inconsistenciaId, resolvedByPanel) {
+export async function updateInconsistenciaPanelResolution(inconsistenciaId, resolvedByPanel, uiId = null) {
     return apiRequest(`/panel/inconsistencias/${inconsistenciaId}/resolution`, {
         method: "PATCH",
         body: JSON.stringify({
             resolved_by_panel: Boolean(resolvedByPanel),
+            ui_id: uiId,
         }),
     });
 }

@@ -744,6 +744,8 @@ async def update_inconsistencia_panel_resolution(
     if "resolved_by_panel" not in payload or not isinstance(payload["resolved_by_panel"], bool):
         raise HTTPException(400, "resolved_by_panel booleano requerido")
 
+    ui_id = payload.get("ui_id")
+
     try:
         inc = mark_panel_resolution(
             db=db,
@@ -763,6 +765,8 @@ async def update_inconsistencia_panel_resolution(
                 "type": "inconsistencia_updated",
                 "payload": {
                     "id": inc.id,
+                    "ui_id": ui_id,
+                    "session_id": inc.session_id,
                     "resolved_by_panel": bool(inc.resolved_by_panel),
                     "resolved_by_siga": bool(inc.resolved_by_siga),
                 }
@@ -770,6 +774,8 @@ async def update_inconsistencia_panel_resolution(
 
     return {
         "id": inc.id,
+        "ui_id": ui_id,
+        "session_id": inc.session_id,
         "resolved_by_panel": bool(inc.resolved_by_panel),
         "resolved_by_siga": bool(inc.resolved_by_siga),
     }

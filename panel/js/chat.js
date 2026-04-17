@@ -25,6 +25,7 @@ let unsubscribeChatStore = null
 let lastLoadTrigger = 0
 let lastLoadedSessionId = null
 let isLoadingChat = false
+let isSendingMessage = false
 let firstViewerOpen = true
 let isFirstLoad = true
 let forceRender = false
@@ -61,6 +62,13 @@ let selectedPreviewIndex = 0
 let imageList = []
 let imageSet = new Set()
 let currentImageIndex = 0
+
+function trackImageUrl(url) {
+    if (!url || imageSet.has(url)) return
+
+    imageSet.add(url)
+    imageList.push(url)
+}
 
 function isMobileChatViewport() {
     return window.matchMedia("(max-width: 767px)").matches
@@ -685,6 +693,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
 
     if (mediaUrl) {
         if (msg.type === "image") {
+            trackImageUrl(mediaUrl)
             bodyContent = `
                 <div class="flex flex-col gap-1">
                     <img
@@ -791,13 +800,7 @@ function renderMessagesIncremental(state) {
     for (let i = 0; i < messages.length; i++) {
         const msg = normalizeMessage(messages[i])
         if (msg.type === "image" && msg.media_url) {
-            if (!imageSet.has(msg.media_url)) {
-                imageSet.add(msg.media_url)
-
-                if (!imageList.includes(msg.media_url)) {
-                    imageList.push(msg.media_url)
-                }
-            }
+            trackImageUrl(msg.media_url)
         }
         if (!msg.id) continue
         const id = `msg-${msg.id}`
@@ -960,24 +963,15 @@ async function loadMoreMessages() {
 // LOAD CHAT
 // =========================
 export async function loadChat(sessionId, phone, name = null) {
-    const requestId = ++chatLoadRequestId
-    imageList = []
-    currentImageIndex = 0
-    thumbsRendered = false
-    imageSet = new Set()
-    closeImageViewer()
-    isFirstLoad = true
-
     const header = document.getElementById("chatHeader")
     const list = document.getElementById("messages")
+    const numericSessionId = Number(sessionId)
 
-    if (isLoadingChat) return
-
-    const sessionIdNum = Number(sessionId)
+    if (!Number.isFinite(numericSessionId) || numericSessionId <= 0) return
 
     const alreadyRendered =
-        currentSessionId === sessionIdNum &&
-        lastLoadedSessionId === sessionIdNum &&
+        currentSessionId === numericSessionId &&
+        lastLoadedSessionId === numericSessionId &&
         header &&
         header.textContent?.trim() &&
         list &&
@@ -988,10 +982,28 @@ export async function loadChat(sessionId, phone, name = null) {
         return
     }
 
-    if (isLoadingChat && currentSessionId === Number(sessionId)) return
+    if (isLoadingChat && currentSessionId === numericSessionId) {
+        showMobileChat()
+        return
+    }
+
+    const state = getState()
+    const sessionInfo = state.conversations.byId[numericSessionId]
+
+    if (!sessionInfo) {
+        console.warn("Intentando cargar sesion inexistente:", sessionId)
+        return
+    }
+
+    const requestId = ++chatLoadRequestId
+    imageList = []
+    currentImageIndex = 0
+    thumbsRendered = false
+    imageSet = new Set()
+    closeImageViewer()
+    isFirstLoad = true
 
     const previousSessionId = currentSessionId
-    const numericSessionId = Number(sessionId)
     const isSameChat = previousSessionId === numericSessionId
 
     currentSessionId = numericSessionId
@@ -1008,14 +1020,6 @@ export async function loadChat(sessionId, phone, name = null) {
         type: "chat/set_loading",
         payload: { sessionId: numericSessionId }
     })
-    const state = getState()
-    const sessionInfo = state.conversations.byId[numericSessionId]
-
-    if (!sessionInfo) {
-        console.warn("Intentando cargar sesion inexistente:", sessionId)
-        isLoadingChat = false
-        return
-    }
 
     const safePhone = phone || sessionInfo?.phone || ""
     const displayName = sessionInfo?.display_name || sessionInfo?.name || name || safePhone || "Cliente sin nombre"
@@ -1051,7 +1055,7 @@ export async function loadChat(sessionId, phone, name = null) {
         }
 
         try {
-            await apiRequest(`/panel/conversations/${sessionIdNum}/read`, {
+            await apiRequest(`/panel/conversations/${numericSessionId}/read`, {
                 method: "POST"
             })
         } catch (err) {
@@ -1064,7 +1068,7 @@ export async function loadChat(sessionId, phone, name = null) {
             const firstId = fallbackState.conversations.order[0]
             const firstSession = fallbackState.conversations.byId[firstId]
 
-            if (firstSession && Number(firstSession.id) !== sessionIdNum) {
+            if (firstSession && Number(firstSession.id) !== numericSessionId) {
                 isLoadingChat = false
                 return loadChat(
                     firstSession.id,
@@ -1150,6 +1154,8 @@ function handleKeyDown(event) {
 }
 
 export async function send() {
+    if (isSendingMessage) return
+
     syncPreviewFromStore()
     const input = document.getElementById("messageInput")
     if (!input) return
@@ -1161,6 +1167,7 @@ export async function send() {
 
     const textToSend = content
 
+    isSendingMessage = true
     input.value = ""
     input.focus()
     removeTyping()
@@ -1195,6 +1202,8 @@ export async function send() {
 
     } catch (error) {
         console.error("Error enviando mensaje:", error)
+    } finally {
+        isSendingMessage = false
     }
 }
 
@@ -1647,8 +1656,18 @@ function updatePreviewUI() {
 
     const newUrl = URL.createObjectURL(file)
 
-    if (isImage && container.tagName === "IMG") {
-        container.src = newUrl //  sin parpadeo
+    if (isImage) {
+        if (container.tagName === "IMG") {
+            container.src = newUrl
+        } else {
+            container.outerHTML = `
+                <img
+                    id="mainPreviewImage"
+                    src="${newUrl}"
+                    class="w-full max-h-[420px] object-contain rounded-xl"
+                />
+            `
+        }
     } 
     else if (isPDF) {
         container.outerHTML = `
@@ -1922,9 +1941,6 @@ window.removeCurrentFile = function () {
         removeAllFiles()
         return
     }
-
-    const nextIndex = Math.max(0, selectedPreviewIndex - 1)
-    setPreviewIndex(nextIndex)
 
     renderMultiPreview()
 }

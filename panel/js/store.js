@@ -208,6 +208,65 @@ function clampIndex(index, length) {
     return Math.max(0, Math.min(length - 1, numericIndex))
 }
 
+function findVerificationKeyByInconsistencia({ session_id, ui_id, id }) {
+    const explicitSessionKey = toSessionKey(session_id)
+
+    if (explicitSessionKey && state.verifications.bySessionId[explicitSessionKey]) {
+        return explicitSessionKey
+    }
+
+    if (state.verifications.selected && state.verifications.bySessionId[state.verifications.selected]) {
+        const selectedVerification = state.verifications.bySessionId[state.verifications.selected]
+        const selectedItems = Array.isArray(selectedVerification.inconsistencias)
+            ? selectedVerification.inconsistencias
+            : []
+
+        if (selectedItems.some(item => matchesInconsistencia(item, { ui_id, id }))) {
+            return state.verifications.selected
+        }
+    }
+
+    return Object.keys(state.verifications.bySessionId).find((sessionKey) => {
+        const verification = state.verifications.bySessionId[sessionKey]
+        const items = Array.isArray(verification?.inconsistencias)
+            ? verification.inconsistencias
+            : []
+
+        return items.some(item => matchesInconsistencia(item, { ui_id, id }))
+    }) || null
+}
+
+function matchesInconsistencia(item, { ui_id, id }) {
+    if (!item) return false
+
+    if (ui_id != null && String(item.ui_id || "") === String(ui_id)) {
+        return true
+    }
+
+    if (ui_id == null && id != null && String(item.id || "") === String(id)) {
+        return true
+    }
+
+    return false
+}
+
+function resolveVerificationStatus(verification, inconsistencias) {
+    if (verification.status === "human_required") {
+        return "human_required"
+    }
+
+    const isCompleted = Number(verification.progress_pct || 0) >= 100
+    if (isCompleted) {
+        return "completed"
+    }
+
+    const hasOpen = inconsistencias.some(
+        inc => String(inc.estado || "").toUpperCase() === "ABIERTA"
+    )
+
+    return hasOpen ? "inconsistent" : "in_progress"
+}
+
 export function dispatch(action) {
     if (!action?.type) return
 
@@ -359,8 +418,15 @@ export function dispatch(action) {
 
         case "chat/preview/remove_at": {
             const index = clampIndex(action.payload?.index, state.chat.preview.files.length)
+            const previousSelectedIndex = state.chat.preview.selectedIndex
             state.chat.preview.files = state.chat.preview.files.filter((_, itemIndex) => itemIndex !== index)
-            state.chat.preview.selectedIndex = clampIndex(state.chat.preview.selectedIndex, state.chat.preview.files.length)
+
+            const nextSelectedIndex =
+                index < previousSelectedIndex
+                    ? previousSelectedIndex - 1
+                    : previousSelectedIndex
+
+            state.chat.preview.selectedIndex = clampIndex(nextSelectedIndex, state.chat.preview.files.length)
             state.chat._previewVersion++
             break
         }
@@ -446,45 +512,50 @@ export function dispatch(action) {
         }
         
         case "verifications/update_inconsistencia": {
-            const { id, resolved_by_panel, resolved_by_siga } = action.payload || {}
+            const { id, ui_id, session_id, resolved_by_panel, resolved_by_siga } = action.payload || {}
 
-            if (!id) break
+            if (!id && !ui_id) return
 
-            const selected = state.verifications.selected
-            if (!selected) break
+            const verificationKey = findVerificationKeyByInconsistencia({ session_id, ui_id, id })
+            if (!verificationKey) return
 
-            const verification = state.verifications.bySessionId[selected]
-            if (!verification?.inconsistencias) break
+            const verification = state.verifications.bySessionId[verificationKey]
+            if (!verification?.inconsistencias) return
 
-            // 1. actualizar SOLO la inconsistencia correcta
+            let changed = false
             const updatedInconsistencias = verification.inconsistencias.map(inc => {
-                if (inc.ui_id !== id) return inc
+                if (!matchesInconsistencia(inc, { ui_id, id })) return inc
 
-                const isResolved = resolved_by_panel || resolved_by_siga
+                changed = true
+
+                const nextPanelValue =
+                    typeof resolved_by_panel === "boolean"
+                        ? resolved_by_panel
+                        : Boolean(inc.resolved_by_panel)
+
+                const nextSigaValue =
+                    typeof resolved_by_siga === "boolean"
+                        ? resolved_by_siga
+                        : Boolean(inc.resolved_by_siga)
+
+                const isResolved = nextPanelValue || nextSigaValue
 
                 return {
                     ...inc,
-                    resolved_by_panel,
-                    resolved_by_siga,
+                    resolved_by_panel: nextPanelValue,
+                    resolved_by_siga: nextSigaValue,
                     estado: isResolved ? "RESUELTA" : "ABIERTA",
                 }
             })
 
-            // 2. recalcular status (CLAVE DEL KPI)
-            const hasOpen = updatedInconsistencias.some(
-                inc => String(inc.estado || "").toUpperCase() === "ABIERTA"
-            )
+            if (!changed) return
 
-            const nextStatus = hasOpen ? "inconsistent" : "completed"
-
-            // 3. aplicar cambios completos
-            state.verifications.bySessionId[selected] = {
+            state.verifications.bySessionId[verificationKey] = {
                 ...verification,
                 inconsistencias: updatedInconsistencias,
-                status: nextStatus,
+                status: resolveVerificationStatus(verification, updatedInconsistencias),
             }
 
-            // 4. bump version SIEMPRE
             state.verifications._version++
 
             break

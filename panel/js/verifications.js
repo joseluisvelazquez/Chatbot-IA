@@ -1,4 +1,4 @@
-import { fetchVerifications, updateInconsistenciaPanelResolution } from "./api.js";
+import { fetchVerifications, getVerificationBySession, updateInconsistenciaPanelResolution } from "./api.js";
 import { navigateTo, setSelectedSession } from "./app.js";
 import { dispatch, subscribeStore } from "./store.js";
 
@@ -12,6 +12,7 @@ let lastDrawerSignature = "";
 let verificationRequestId = 0;
 
 const verificationRowCache = new Map();
+const pendingInconsistenciaUpdates = new Set();
 
 const SEVERITY_ORDER = {
     critica: 3,
@@ -510,41 +511,74 @@ function updateDrawer(item) {
                     const inconsistenciaId = Number(button.dataset.inconsistenciaId); 
                     const uiId = button.dataset.uiId; 
 
-                    if (!inconsistenciaId || !uiId) return;
+                    if (!Number.isFinite(inconsistenciaId) || !uiId) return;
+
+                    const pendingKey = `${item.session_id}:${uiId}`;
+                    if (pendingInconsistenciaUpdates.has(pendingKey)) return;
 
                     const nextValue = button.dataset.resolvedByPanel === "true";
+                    const currentEntry = (item.inconsistencias || []).find((entry) => (
+                        String(entry.ui_id || "") === String(uiId)
+                    ));
 
-                   
+                    pendingInconsistenciaUpdates.add(pendingKey);
+                    button.disabled = true;
+
                     dispatch({
                         type: "verifications/update_inconsistencia",
                         payload: {
-                            id: uiId, 
+                            id: inconsistenciaId,
+                            ui_id: uiId,
+                            session_id: item.session_id,
                             resolved_by_panel: nextValue,
-                            resolved_by_siga: false,
+                            resolved_by_siga: Boolean(currentEntry?.resolved_by_siga),
                         }
                     });
 
-                    button.disabled = true;
-
                     try {
-                        await updateInconsistenciaPanelResolution(
+                        const result = await updateInconsistenciaPanelResolution(
                             inconsistenciaId,
                             nextValue,
+                            uiId,
                         );
+
+                        dispatch({
+                            type: "verifications/update_inconsistencia",
+                            payload: {
+                                ...result,
+                                id: result?.id ?? inconsistenciaId,
+                                ui_id: result?.ui_id ?? uiId,
+                                session_id: result?.session_id ?? item.session_id,
+                            }
+                        });
+
+                        try {
+                            const latest = await getVerificationBySession(item.session_id);
+                            dispatch({
+                                type: "verifications/upsert",
+                                payload: latest,
+                            });
+                        } catch (refreshError) {
+                            console.warn("No se pudo refrescar la verificacion:", refreshError);
+                        }
                     } catch (error) {
                         console.error("Error actualizando inconsistencia:", error);
 
-                        // ROLLBACK
                         dispatch({
                             type: "verifications/update_inconsistencia",
                             payload: {
                                 id: inconsistenciaId,
-                                resolved_by_panel: !nextValue,
-                                resolved_by_siga: false,
+                                ui_id: uiId,
+                                session_id: item.session_id,
+                                resolved_by_panel: Boolean(currentEntry?.resolved_by_panel),
+                                resolved_by_siga: Boolean(currentEntry?.resolved_by_siga),
                             }
                         });
-
-                        button.disabled = false;
+                    } finally {
+                        pendingInconsistenciaUpdates.delete(pendingKey);
+                        if (button.isConnected) {
+                            button.disabled = false;
+                        }
                     }
                 };
             });
@@ -650,15 +684,17 @@ function renderVerificationRows(items, validKeys) {
 }
 
 function renderVerificationsFromState(state) {
-    let items = state.verifications.order
+    const allItems = state.verifications.order
         .map((id) => state.verifications.bySessionId[id])
         .filter(Boolean);
+
+    updateVerificationKpis(allItems);
+
+    let items = allItems;
 
     if (currentVerificationStatus) {
         items = items.filter((item) => item.status === currentVerificationStatus);
     }
-
-    updateVerificationKpis(items);
 
     if (!items.length) {
         renderVerificationRows([], new Set());
