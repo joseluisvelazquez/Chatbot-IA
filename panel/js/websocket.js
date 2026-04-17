@@ -93,6 +93,8 @@ export function initWebSocket() {
                         progress_pct: payload.progress_pct,
                         current_step: payload.current_step,
                         status: payload.status,
+                        folio: payload.folio,
+                        phone: payload.phone,
                         last_activity: payload.last_activity,
                         inconsistencias_count: payload.inconsistencias_count,
                         inconsistencias: payload.inconsistencias,
@@ -100,6 +102,8 @@ export function initWebSocket() {
                         highest_severity: payload.highest_severity,
                         no_cuenta: payload.no_cuenta,
                         siga_url: payload.siga_url,
+                        confirmed_count: payload.confirmed_count,
+                        total_steps: payload.total_steps,
                     }),
                 },
             });

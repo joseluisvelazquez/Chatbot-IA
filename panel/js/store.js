@@ -5,7 +5,9 @@ const state = {
         messages_in: 0,
         messages_out: 0,
         issues_open: 0,
+        funnel: [],
         loaded: false,
+        _funnelVersion: 0,
     },
     conversations: {
         byId: {},
@@ -250,9 +252,68 @@ function matchesInconsistencia(item, { ui_id, id }) {
     return false
 }
 
+function normalizeSeverity(value) {
+    const severity = String(value || "").trim().toLowerCase()
+    return ["leve", "moderada", "critica"].includes(severity) ? severity : null
+}
+
+function summarizeInconsistencias(items = []) {
+    const openItems = items.filter(
+        item => String(item.estado || "").toUpperCase() === "ABIERTA"
+    )
+    const severityCounts = {
+        leve: 0,
+        moderada: 0,
+        critica: 0,
+        total: openItems.length,
+    }
+    const severityOrder = {
+        leve: 1,
+        moderada: 2,
+        critica: 3,
+    }
+    let highestSeverity = null
+    let highestPriority = 0
+
+    openItems.forEach((item) => {
+        const severity = normalizeSeverity(item.severidad)
+        if (!severity) return
+
+        severityCounts[severity]++
+
+        if (severityOrder[severity] > highestPriority) {
+            highestSeverity = severity
+            highestPriority = severityOrder[severity]
+        }
+    })
+
+    return {
+        inconsistencias_count: openItems.length,
+        severity_counts: severityCounts,
+        highest_severity: highestSeverity,
+    }
+}
+
+function isVerificationStalled(verification) {
+    if (!verification?.last_activity) return false
+
+    const lastActivity = new Date(verification.last_activity)
+    if (Number.isNaN(lastActivity.getTime())) return false
+
+    return Date.now() - lastActivity.getTime() > 30 * 60 * 1000
+}
+
 function resolveVerificationStatus(verification, inconsistencias) {
     if (verification.status === "human_required") {
         return "human_required"
+    }
+
+    const hasOpen = inconsistencias.some(
+        inc => String(inc.estado || "").toUpperCase() === "ABIERTA"
+    )
+
+    if (hasOpen) {
+        return "inconsistent"
     }
 
     const isCompleted = Number(verification.progress_pct || 0) >= 100
@@ -260,11 +321,79 @@ function resolveVerificationStatus(verification, inconsistencias) {
         return "completed"
     }
 
-    const hasOpen = inconsistencias.some(
-        inc => String(inc.estado || "").toUpperCase() === "ABIERTA"
-    )
+    if (isVerificationStalled(verification)) {
+        return "stalled"
+    }
 
-    return hasOpen ? "inconsistent" : "in_progress"
+    return "in_progress"
+}
+
+function addMetric(current, delta) {
+    return Math.max(0, Number(current || 0) + Number(delta || 0))
+}
+
+function normalizeFunnel(items = []) {
+    const funnel = Array.isArray(items)
+        ? items.map(item => ({
+            step: String(item.step || ""),
+            total: Math.max(0, Number(item.total || 0)),
+            drop_off: Math.max(0, Number(item.drop_off || 0)),
+            conversion_pct: Number(item.conversion_pct || 0),
+        })).filter(item => item.step)
+        : []
+
+    return recalculateFunnel(funnel)
+}
+
+function recalculateFunnel(funnel) {
+    for (let i = 0; i < funnel.length; i++) {
+        const current = Number(funnel[i].total || 0)
+        const next = Number(funnel[i + 1]?.total || 0)
+
+        funnel[i].drop_off = Math.max(current - next, 0)
+        funnel[i].conversion_pct = current > 0
+            ? Math.round((next / current) * 10000) / 100
+            : 0
+    }
+
+    return funnel
+}
+
+function applyFunnelDeltas(payload = {}) {
+    const rawDeltas = Array.isArray(payload.funnel_steps_delta)
+        ? payload.funnel_steps_delta
+        : payload.funnel_step_delta
+            ? [payload.funnel_step_delta]
+            : []
+
+    if (!rawDeltas.length) return false
+
+    const byStep = new Map(state.dashboard.funnel.map(item => [item.step, item]))
+    let changed = false
+
+    rawDeltas.forEach((item) => {
+        const step = String(item?.step || "")
+        if (!step) return
+
+        const delta = Number(item.delta || 0)
+        if (!Number.isFinite(delta) || delta === 0) return
+
+        if (!byStep.has(step)) {
+            const created = { step, total: 0, drop_off: 0, conversion_pct: 0 }
+            byStep.set(step, created)
+            state.dashboard.funnel.push(created)
+        }
+
+        const entry = byStep.get(step)
+        entry.total = Math.max(0, Number(entry.total || 0) + delta)
+        changed = true
+    })
+
+    if (!changed) return false
+
+    recalculateFunnel(state.dashboard.funnel)
+    state.dashboard._funnelVersion++
+    return true
 }
 
 export function dispatch(action) {
@@ -280,14 +409,21 @@ export function dispatch(action) {
             break
         }
 
+        case "dashboard/funnel_loaded": {
+            state.dashboard.funnel = normalizeFunnel(action.payload)
+            state.dashboard._funnelVersion++
+            break
+        }
+
         case "dashboard/apply_delta": {
             const p = action.payload || {}
 
-            state.dashboard.messages_in += Number(p.messages_in_delta || 0)
-            state.dashboard.messages_out += Number(p.messages_out_delta || 0)
-            state.dashboard.issues_open += Number(p.issues_open_delta || 0)
-            state.dashboard.total_sessions += Number(p.total_sessions_delta || 0)
-            state.dashboard.active_sessions += Number(p.active_sessions_delta || 0)
+            state.dashboard.messages_in = addMetric(state.dashboard.messages_in, p.messages_in_delta)
+            state.dashboard.messages_out = addMetric(state.dashboard.messages_out, p.messages_out_delta)
+            state.dashboard.issues_open = addMetric(state.dashboard.issues_open, p.issues_open_delta)
+            state.dashboard.total_sessions = addMetric(state.dashboard.total_sessions, p.total_sessions_delta)
+            state.dashboard.active_sessions = addMetric(state.dashboard.active_sessions, p.active_sessions_delta)
+            applyFunnelDeltas(p)
             break
         }
 
@@ -411,14 +547,39 @@ export function dispatch(action) {
         }
 
         case "chat/preview/select": {
-            state.chat.preview.selectedIndex = clampIndex(action.payload?.index, state.chat.preview.files.length)
+            const length = state.chat.preview.files.length
+            const index = Number(action.payload?.index)
+
+            if (!length) {
+                state.chat.preview.selectedIndex = 0
+                state.chat._previewVersion++
+                break
+            }
+
+            if (!Number.isFinite(index) || index < 0 || index >= length) {
+                break
+            }
+
+            state.chat.preview.selectedIndex = Math.trunc(index)
             state.chat._previewVersion++
             break
         }
 
         case "chat/preview/remove_at": {
-            const index = clampIndex(action.payload?.index, state.chat.preview.files.length)
-            const previousSelectedIndex = state.chat.preview.selectedIndex
+            const length = state.chat.preview.files.length
+            const rawIndex = Number(action.payload?.index)
+
+            if (!length || !Number.isFinite(rawIndex)) {
+                break
+            }
+
+            const index = Math.trunc(rawIndex)
+
+            if (index < 0 || index >= length) {
+                break
+            }
+
+            const previousSelectedIndex = clampIndex(state.chat.preview.selectedIndex, length)
             state.chat.preview.files = state.chat.preview.files.filter((_, itemIndex) => itemIndex !== index)
 
             const nextSelectedIndex =
@@ -495,7 +656,25 @@ export function dispatch(action) {
             if (!session_id) break
 
             const current = state.verifications.bySessionId[session_id]
-            if (!current) break
+            if (!current) {
+                const canUpsert = [
+                    "folio",
+                    "phone",
+                    "status",
+                    "progress_pct",
+                    "current_step",
+                    "no_cuenta",
+                ].some(key => changes[key] != null)
+
+                if (!canUpsert) break
+
+                upsertVerification({
+                    session_id: Number(session_id),
+                    ...changes,
+                })
+                state.verifications._version++
+                break
+            }
 
             state.verifications.bySessionId[session_id] = {
                 ...current,
@@ -550,9 +729,14 @@ export function dispatch(action) {
 
             if (!changed) return
 
+            const summary = summarizeInconsistencias(updatedInconsistencias)
+
             state.verifications.bySessionId[verificationKey] = {
                 ...verification,
                 inconsistencias: updatedInconsistencias,
+                inconsistencias_count: summary.inconsistencias_count,
+                severity_counts: summary.severity_counts,
+                highest_severity: summary.highest_severity,
                 status: resolveVerificationStatus(verification, updatedInconsistencias),
             }
 

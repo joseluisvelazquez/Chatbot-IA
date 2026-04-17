@@ -70,6 +70,28 @@ function trackImageUrl(url) {
     imageList.push(url)
 }
 
+function normalizePreviewIndex(index, length) {
+    if (!length) return 0
+
+    const numericIndex = Number(index)
+    if (!Number.isFinite(numericIndex)) return 0
+
+    return Math.max(0, Math.min(length - 1, Math.trunc(numericIndex)))
+}
+
+function isValidPreviewIndex(index, length = selectedFiles.length) {
+    const numericIndex = Number(index)
+    return Number.isFinite(numericIndex) && numericIndex >= 0 && Math.trunc(numericIndex) < length
+}
+
+function hidePreviewContainer() {
+    const container = document.getElementById("filePreview")
+    if (!container) return
+
+    container.classList.add("hidden")
+    container.innerHTML = ""
+}
+
 function isMobileChatViewport() {
     return window.matchMedia("(max-width: 767px)").matches
 }
@@ -93,7 +115,7 @@ window.showMobileConversationList = showMobileConversationList
 function syncPreviewFromStore() {
     const preview = getState().chat.preview
     selectedFiles = Array.isArray(preview.files) ? preview.files : []
-    selectedPreviewIndex = Number(preview.selectedIndex || 0)
+    selectedPreviewIndex = normalizePreviewIndex(preview.selectedIndex, selectedFiles.length)
 }
 
 function setPreviewFiles(files, selectedIndex = 0) {
@@ -116,11 +138,16 @@ function setPreviewIndex(index) {
 }
 
 function removePreviewFile(index) {
+    syncPreviewFromStore()
+
+    if (!isValidPreviewIndex(index)) return false
+
     dispatch({
         type: "chat/preview/remove_at",
-        payload: { index }
+        payload: { index: Math.trunc(Number(index)) }
     })
     syncPreviewFromStore()
+    return true
 }
 
 function clearPreviewFiles() {
@@ -1534,9 +1561,18 @@ function setupSearchAndFilters() {
 function renderMultiPreview() {
     syncPreviewFromStore()
     const container = document.getElementById("filePreview")
-    if (!container || selectedFiles.length === 0) return
+    if (!container) return
+    if (selectedFiles.length === 0) {
+        hidePreviewContainer()
+        return
+    }
 
     const mainFile = selectedFiles[selectedPreviewIndex]
+    if (!mainFile) {
+        setPreviewIndex(0)
+        return
+    }
+
     const mainUrl = URL.createObjectURL(mainFile)
 
     const isImage = mainFile.type.startsWith("image")
@@ -1577,7 +1613,8 @@ function renderMultiPreview() {
                 }
 
                 <button
-                    onclick="removeCurrentFile()"
+                    type="button"
+                    onclick="removeCurrentFile(event)"
                     class="absolute top-2 right-2 bg-black/70 text-white rounded-full w-7 h-7 flex items-center justify-center hover:bg-red-600"
                 >
                     ✕
@@ -1629,7 +1666,8 @@ function renderMultiPreview() {
                 }
 
                 <button
-                    onclick="removeFileAtIndex(${i})"
+                    type="button"
+                    onclick="removeFileAtIndex(${i}, event)"
                     class="absolute top-1 right-1 bg-black/70 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
                 >
                     ✕
@@ -1649,7 +1687,10 @@ function updatePreviewUI() {
     if (!container) return
 
     const file = selectedFiles[selectedPreviewIndex]
-    if (!file) return
+    if (!file) {
+        renderMultiPreview()
+        return
+    }
 
     const isImage = file.type.startsWith("image")
     const isPDF = file.type === "application/pdf"
@@ -1703,19 +1744,20 @@ function updatePreviewUI() {
 
 
 window.selectPreview = function (index) {
-    if (index === selectedPreviewIndex) return
-    setPreviewIndex(index)
+    syncPreviewFromStore()
+
+    if (!isValidPreviewIndex(index)) return
+
+    const nextIndex = Math.trunc(Number(index))
+    if (nextIndex === selectedPreviewIndex) return
+
+    setPreviewIndex(nextIndex)
     updatePreviewUI()
 }
 
 window.removeAllFiles = function () {
     clearPreviewFiles()
-
-    const container = document.getElementById("filePreview")
-    if (container) {
-        container.classList.add("hidden")
-        container.innerHTML = ""
-    }
+    hidePreviewContainer()
 }
 
 function setupDragAndDrop() {
@@ -1760,11 +1802,14 @@ function setupDragAndDrop() {
     })
 }
 
-window.removeFileAtIndex = function (index) {
-    removePreviewFile(index)
+window.removeFileAtIndex = function (index, event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+
+    if (!removePreviewFile(index)) return
 
     if (selectedFiles.length === 0) {
-        removeAllFiles()
+        hidePreviewContainer()
         return
     }
 
@@ -1930,15 +1975,18 @@ style.innerHTML = `
 `
 document.head.appendChild(style)
 
-window.removeCurrentFile = function () {
+window.removeCurrentFile = function (event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+
     syncPreviewFromStore()
 
     if (selectedFiles.length === 0) return
 
-    removePreviewFile(selectedPreviewIndex)
+    if (!removePreviewFile(selectedPreviewIndex)) return
 
     if (selectedFiles.length === 0) {
-        removeAllFiles()
+        hidePreviewContainer()
         return
     }
 

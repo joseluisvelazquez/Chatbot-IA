@@ -186,11 +186,14 @@ function buildDrawerSignature(item) {
         severity_counts: getSeverityCounts(item),
         inconsistencias: (item.inconsistencias || []).map((entry) => ({
             id: entry.id, //  AGREGAR
+            ui_id: entry.ui_id || "",
             campo: entry.campo || "",
             mensaje: entry.mensaje || "",
             estado: entry.estado || "",
             resolved_by_panel: entry.resolved_by_panel, //  AGREGAR
             resolved_by_siga: entry.resolved_by_siga,   //  AGREGAR
+            requires_siga: entry.requires_siga,
+            business_resolved: entry.business_resolved,
             severidad: normalizeSeverity(entry.severidad) || "",
             estado_origen: entry.estado_origen || "",
             elementos_faltantes: Array.isArray(entry.elementos_faltantes)
@@ -552,14 +555,21 @@ function updateDrawer(item) {
                             }
                         });
 
-                        try {
-                            const latest = await getVerificationBySession(item.session_id);
+                        if (result?.verification) {
                             dispatch({
                                 type: "verifications/upsert",
-                                payload: latest,
+                                payload: result.verification,
                             });
-                        } catch (refreshError) {
-                            console.warn("No se pudo refrescar la verificacion:", refreshError);
+                        } else {
+                            try {
+                                const latest = await getVerificationBySession(item.session_id);
+                                dispatch({
+                                    type: "verifications/upsert",
+                                    payload: latest,
+                                });
+                            } catch (refreshError) {
+                                console.warn("No se pudo refrescar la verificacion:", refreshError);
+                            }
                         }
                     } catch (error) {
                         console.error("Error actualizando inconsistencia:", error);

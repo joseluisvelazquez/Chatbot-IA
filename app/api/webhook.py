@@ -5,10 +5,11 @@ import hashlib
 import hmac
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,8 @@ from app.adapters.whatsapp_client import send_whatsapp_message
 from app.config.settings import settings
 from app.core.flow.flow_engine import process_message
 from app.core.states.states import ChatState
-from app.db.models import Message
+from app.core.verification_steps import STEP_ORDER
+from app.db.models import ChatSessions, FlowEvent, Inconsistencias, Message
 from app.db.session import get_db
 from app.services.inconsistencias_service import (
     close_open_inconsistencia,
@@ -28,6 +30,7 @@ from app.services.message_service import get_message_by_message_id, save_message
 from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.session_service import get_or_create_session, update_session
 from app.services.verification_panel_service import build_verification_snapshot
+from app.services.verification_tracker import STEP_MAP
 from app.websockets.manager import manager
 
 router = APIRouter()
@@ -127,6 +130,49 @@ async def broadcast_new_message(chat, message: Message) -> None:
     })
 
 
+def count_open_issues(db: Session) -> int:
+    return (
+        db.query(func.count(Inconsistencias.id))
+        .filter(func.lower(Inconsistencias.estatus) == "abierta")
+        .scalar()
+        or 0
+    )
+
+
+def get_reached_funnel_steps(db: Session, session_id: int, date_from: datetime) -> set[str]:
+    rows = (
+        db.query(FlowEvent.to_state)
+        .filter(
+            FlowEvent.session_id == session_id,
+            FlowEvent.to_state.isnot(None),
+            FlowEvent.created_at >= date_from,
+        )
+        .all()
+    )
+
+    return {
+        step
+        for (to_state,) in rows
+        if (step := STEP_MAP.get(to_state))
+    }
+
+
+def build_funnel_step_deltas(
+    next_state: ChatState | str | None,
+    existing_steps: set[str],
+) -> list[dict]:
+    next_step = STEP_MAP.get(next_state)
+    if next_step not in STEP_ORDER:
+        return []
+
+    max_index = STEP_ORDER.index(next_step)
+    return [
+        {"step": step, "delta": 1}
+        for step in STEP_ORDER[:max_index + 1]
+        if step not in existing_steps
+    ]
+
+
 @router.get("/webhook")
 async def verify(request: Request):
     params = request.query_params
@@ -179,8 +225,27 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     saved_msg = None
     bot_msg = None
     snapshot = None
+    existing_funnel_steps = set()
+    funnel_step_deltas = []
+    total_sessions_delta = 0
+    active_sessions_delta = 0
+    issues_open_delta = 0
 
     try:
+        existing_session = (
+            db.query(ChatSessions.id, ChatSessions.last_message_at)
+            .filter(ChatSessions.phone == phone)
+            .first()
+        )
+        total_sessions_delta = 0 if existing_session else 1
+        was_active = bool(
+            existing_session
+            and existing_session.last_message_at
+            and existing_session.last_message_at >= utcnow_naive() - timedelta(days=1)
+        )
+        active_sessions_delta = 0 if was_active else 1
+        open_issues_before = count_open_issues(db)
+
         chat = get_or_create_session(db, phone)
 
         if get_message_by_message_id(db, message_id):
@@ -195,6 +260,11 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             return {"status": "unsupported_prompt_sent"}
 
         out_of_order = has_newer_incoming_message(db, chat.id, event_time)
+        existing_funnel_steps = get_reached_funnel_steps(
+            db,
+            chat.id,
+            utcnow_naive() - timedelta(days=7),
+        )
         media_msg = handle_incoming_media(event, chat) if is_media else None
 
         saved_msg = save_message(
@@ -236,6 +306,10 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         image_id = result.image_id
         next_state = result.next_state
         previous_state = result.previous_state
+        funnel_step_deltas = build_funnel_step_deltas(
+            next_state,
+            existing_funnel_steps,
+        )
 
         if reply:
             bot_msg = save_message(
@@ -293,6 +367,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
 
         upsert_inactivity_reminders(db, chat)
         db.commit()
+        issues_open_delta = count_open_issues(db) - open_issues_before
 
         db.refresh(chat)
         db.refresh(saved_msg)
@@ -320,6 +395,10 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         "payload": {
             "messages_in_delta": 1,
             "messages_out_delta": 1 if bot_msg else 0,
+            "total_sessions_delta": total_sessions_delta,
+            "active_sessions_delta": active_sessions_delta,
+            "issues_open_delta": issues_open_delta,
+            "funnel_steps_delta": funnel_step_deltas,
             "session_id": chat.id,
         },
     })

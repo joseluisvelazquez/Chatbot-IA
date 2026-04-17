@@ -4,7 +4,9 @@ import {
     getDashboardStateTimes
 } from "./api.js";
 import { dispatch, subscribeStore, getState } from "./store.js"
+
 let funnelChartInstance = null;
+let unsubscribeDashboardStore = null
 
 async function loadSummary() {
     try {
@@ -25,21 +27,39 @@ async function loadFunnel() {
         const response = await getDashboardFunnel();
         const data = response?.data ?? [];
 
-        const canvas = document.getElementById("funnelChart");
-        if (!canvas) return;
-
         if (!Array.isArray(data)) {
-            console.error("Funnel inválido:", data);
+            console.error("Funnel invalido:", data);
             return;
         }
 
-        const labels = data.map(item => item.step ?? "-");
-        const values = data.map(item => item.total ?? 0);
+        dispatch({
+            type: "dashboard/funnel_loaded",
+            payload: data,
+        });
+    } catch (e) {
+        console.error("Error funnel:", e);
+    }
+}
 
-        if (funnelChartInstance) {
-            funnelChartInstance.destroy();
-        }
+function renderFunnelFromState(appState) {
+    const canvas = document.getElementById("funnelChart");
+    if (!canvas) return;
 
+    const data = Array.isArray(appState.dashboard.funnel)
+        ? appState.dashboard.funnel
+        : [];
+
+    if (!data.length) return;
+
+    const labels = data.map(item => item.step ?? "-");
+    const values = data.map(item => item.total ?? 0);
+
+    if (funnelChartInstance && funnelChartInstance.canvas !== canvas) {
+        funnelChartInstance.destroy();
+        funnelChartInstance = null;
+    }
+
+    if (!funnelChartInstance) {
         funnelChartInstance = new Chart(canvas, {
             type: "bar",
             data: {
@@ -56,9 +76,12 @@ async function loadFunnel() {
                 maintainAspectRatio: false
             }
         });
-    } catch (e) {
-        console.error("Error funnel:", e);
+        return;
     }
+
+    funnelChartInstance.data.labels = labels;
+    funnelChartInstance.data.datasets[0].data = values;
+    funnelChartInstance.update();
 }
 
 async function loadStateTimes() {
@@ -72,7 +95,7 @@ async function loadStateTimes() {
         tbody.innerHTML = "";
 
         if (!Array.isArray(data)) {
-            console.error("StateTimes inválido:", data);
+            console.error("StateTimes invalido:", data);
             return;
         }
 
@@ -96,9 +119,6 @@ async function loadStateTimes() {
     }
 }
 
-
-let unsubscribeDashboardStore = null
-
 export function initDashboardPage() {
     loadSummary()
     loadFunnel()
@@ -112,20 +132,23 @@ export function initDashboardPage() {
 
     renderDashboardFromState(getState())
 }
+
 function renderDashboardFromState(appState) {
-    if (!appState.dashboard.loaded) return
     const d = appState.dashboard
 
-    const sessionsEl = document.getElementById("kpi-sessions")
-    const activeEl = document.getElementById("kpi-active")
-    const inEl = document.getElementById("kpi-in")
-    const outEl = document.getElementById("kpi-out")
-    const issuesEl = document.getElementById("kpi-issues")
+    if (d.loaded) {
+        const sessionsEl = document.getElementById("kpi-sessions")
+        const activeEl = document.getElementById("kpi-active")
+        const inEl = document.getElementById("kpi-in")
+        const outEl = document.getElementById("kpi-out")
+        const issuesEl = document.getElementById("kpi-issues")
 
-    if (sessionsEl) sessionsEl.textContent = d.total_sessions ?? 0
-    if (activeEl) activeEl.textContent = d.active_sessions ?? 0
-    if (inEl) inEl.textContent = d.messages_in ?? 0
-    if (outEl) outEl.textContent = d.messages_out ?? 0
-    if (issuesEl) issuesEl.textContent = d.issues_open ?? 0
+        if (sessionsEl) sessionsEl.textContent = d.total_sessions ?? 0
+        if (activeEl) activeEl.textContent = d.active_sessions ?? 0
+        if (inEl) inEl.textContent = d.messages_in ?? 0
+        if (outEl) outEl.textContent = d.messages_out ?? 0
+        if (issuesEl) issuesEl.textContent = d.issues_open ?? 0
+    }
+
+    renderFunnelFromState(appState)
 }
-

@@ -57,7 +57,12 @@ def _try_mark_step(db, session, step_key: str):
         return
 
     try:
-        VerificationService(db).mark_step_from_folio(str(folio), step_key, 1)
+        VerificationService(db).mark_step_from_folio(
+            str(folio),
+            step_key,
+            1,
+            phone=session.phone,
+        )
     except Exception:
         logger.exception("Error guardando progreso")
 
@@ -109,7 +114,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     def _check_verification_complete(folio: str) -> FlowResult | None:    
         no_cuenta = VerificationService(db).resolve_no_cuenta_from_folio(folio)
         verificacion = obtener_verificacion_por_no_cuenta(db,no_cuenta)
-        print(f"DEBUG: Folio detectado {folio_detectado} con no_cuenta {no_cuenta}")
+        print(f"DEBUG: Folio detectado {folio} con no_cuenta {no_cuenta}")
 
         if no_cuenta and verificacion and (session.phone not in settings.TEST_PHONE_ONLY):
 
@@ -125,20 +130,31 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------
     #  LOG FLOW EVENT (CLAVE)
     # --------------------------------------
-    def _log():
-        
+    def _log(to_state_override=None, from_state_override=None):
         if db:
             try:
+                log_from_state = from_state_override or current_state
+                if to_state_override is None:
+                    try:
+                        log_to_state = next_state
+                    except NameError:
+                        return
+                else:
+                    log_to_state = to_state_override
+
+                if not log_to_state:
+                    return
+
                 log_flow_event(
                     db=db,
                     session=session,
-                    from_state=current_state.value if current_state else None,
-                    to_state=next_state.value if next_state else None,
+                    from_state=log_from_state.value if isinstance(log_from_state, ChatState) else log_from_state,
+                    to_state=log_to_state.value if isinstance(log_to_state, ChatState) else log_to_state,
                     trigger_text=text if text else intent,
                     event_type="message" if text else "button",
                     detected_intent=detected_intent,
                     event_payload={
-                        "buttons": [b.get("id") for b in (FLOW.get(next_state, {}).get("buttons", []))],
+                        "buttons": [b.get("id") for b in (FLOW.get(log_to_state, {}).get("buttons", []))],
                     },
                 )
             except Exception:
@@ -348,12 +364,12 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             elif current_state == ChatState.CAMBIAR_FOLIO_DESCUENTO:
                 target_state = ChatState.CONFIRMAR_FOLIO_DESCUENTO
             
-            verification_result = _check_verification_complete(folio)
+            verification_result = _check_verification_complete(folio_detectado)
 
             if verification_result:
                 return verification_result
-            
-            _log()
+
+            _log(target_state)
 
             return FlowResult(
                 reply=messages.CONFIRMAR_FOLIO_DETECTADO.format(folio=folio_detectado),
@@ -395,10 +411,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         
 
-        _try_mark_step(db, session, "inicio")
-        _try_mark_step(db, session, "folio")
-
-        _log()
+        _log(ChatState.CONFIRMAR_FOLIO)
 
         return FlowResult(
             reply=messages.CONFIRMAR_FOLIO_DETECTADO.format(folio=folio),
@@ -562,9 +575,12 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     special = handle_special_cases(context)
 
     if special:
+        special_state = special.get("state")
+        _log(special_state)
+
         return FlowResult(
             reply=special.get("reply"),
-            next_state=special.get("state"),
+            next_state=special_state,
             buttons=special.get("buttons", []),
             previous_state=session.state,
             inconsistencia_patch=special.get("patch"),
@@ -576,7 +592,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------
 
     if action == "escalate":
-        _log()
+        _log(ChatState.ACLARACION)
         return FlowResult(
             reply=messages.ACLARACION,
             next_state=ChatState.ACLARACION,
@@ -585,7 +601,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         )
 
     if action == "escalate_call":
-        _log()
+        _log(ChatState.LLAMADA)
         return FlowResult(
             reply=messages.ACLARACION,
             next_state=ChatState.LLAMADA,

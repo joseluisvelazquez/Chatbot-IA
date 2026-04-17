@@ -6,10 +6,12 @@ from typing import Any, Dict, Iterable, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.states.states import ChatState
 from app.core.verification_steps import STEP_ORDER
 from app.core.verification.verification_schema import normalize_progress_payload
 from app.siga.siga_repository import obtener_venta_por_folio
 from app.services.verification_service import VerificationService
+from app.services.verification_tracker import STEP_MAP
 from app.db.models import ChatSessions, VerificacionCuenta, Inconsistencias
 from app.utils.inconsistencias_serializer import (
     serialize_inconsistencias,
@@ -17,6 +19,68 @@ from app.utils.inconsistencias_serializer import (
 )
 
 INACTIVITY_MINUTES = 30
+
+PANEL_STEP_MAP = {
+    **STEP_MAP,
+    ChatState.COMPONENTES_FALTANTES: "componentes",
+    ChatState.VERIFICAR_FOTO_COMPONENTE: "componentes",
+    ChatState.COMPONENTES_CONFIRMAR_FALTANTES: "componentes",
+}
+
+INTERRUPTION_STATES = {
+    ChatState.INCONSISTENCIA,
+    ChatState.FUERA_DE_FLUJO,
+    ChatState.DUDA,
+    ChatState.MENU_DUDA,
+    ChatState.MENU_AYUDA,
+    ChatState.ACLARACION,
+    ChatState.LLAMADA,
+    ChatState.RECORDATORIO,
+    ChatState.RECORDATORIO_1H,
+    ChatState.RECORDATORIO_2H,
+}
+
+
+def _coerce_chat_state(value: Any) -> Optional[ChatState]:
+    if isinstance(value, ChatState):
+        return value
+
+    if not value:
+        return None
+
+    try:
+        return ChatState(str(value))
+    except ValueError:
+        return None
+
+
+def _step_from_state(value: Any) -> Optional[str]:
+    state = _coerce_chat_state(value)
+    if not state:
+        return None
+
+    return PANEL_STEP_MAP.get(state)
+
+
+def resolve_panel_current_step(
+    session: ChatSessions,
+    fallback_step: Optional[str] = None,
+) -> str:
+    current_state = _coerce_chat_state(getattr(session, "state", None))
+
+    if current_state == ChatState.FINALIZADO:
+        return "finalizado"
+
+    current_step = _step_from_state(current_state)
+    if current_step:
+        return current_step
+
+    if current_state in INTERRUPTION_STATES:
+        previous_step = _step_from_state(getattr(session, "previous_state", None))
+        if previous_step:
+            return previous_step
+
+    return fallback_step or "inicio"
 
 
 def build_verification_snapshot(
@@ -71,11 +135,16 @@ def build_verification_snapshot(
         "siga_url": f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}",
         "status": status,
         "progress_pct": verification_data["progress_pct"],
-        "current_step": verification_data["current_step"],
+        "current_step": resolve_panel_current_step(
+            session,
+            verification_data["current_step"],
+        ),
         "inconsistencias": serialized_inconsistencias,
-        "inconsistencias_count": len(serialized_inconsistencias),
+        "inconsistencias_count": inconsistencia_summary["severity_counts"]["total"],
         "severity_counts": inconsistencia_summary["severity_counts"],
         "highest_severity": inconsistencia_summary["highest_severity"],
+        "confirmed_count": verification_data["progress_count"],
+        "total_steps": verification_data["total_steps"],
         "last_activity": session.last_message_at.isoformat()
         if session.last_message_at
         else "",
@@ -130,6 +199,9 @@ def classify_panel_status(
     if requires_human:
         return "human_required"
 
+    if has_open_inconsistencia:
+        return "inconsistent"
+
     # 🟢 completado
     if verification_data.get("is_completed",False):
         return "completed"
@@ -162,14 +234,22 @@ def resolve_no_cuenta(db: Session, folio: str) -> Optional[str]:
     return str(no_cuenta)
 
 
-def resolve_cuentas_from_folios(folios: Iterable[str]) -> Dict[str, Optional[str]]:
+def resolve_cuentas_from_folios(
+    folios: Iterable[str],
+    db: Optional[Session] = None,
+) -> Dict[str, Optional[str]]:
     result: Dict[str, Optional[str]] = {}
 
     for folio in folios:
+        folio_key = str(folio)
+        if db is None:
+            result[folio_key] = None
+            continue
+
         try:
-            result[str(folio)] = resolve_no_cuenta_cached(str(folio))
+            result[folio_key] = resolve_no_cuenta(db, folio_key)
         except Exception:
-            result[str(folio)] = None
+            result[folio_key] = None
 
     return result
 

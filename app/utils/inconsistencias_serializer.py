@@ -15,6 +15,7 @@ RESERVED_EXTRA_KEYS = {
     "contador",
     "inconsistencias",
     "componentes_temp",
+    "_panel_resolutions",
 }
 
 STATE_FIELD_LABELS = {
@@ -117,6 +118,17 @@ def _build_item(
         "business_resolved": business_resolved,
     }
 
+
+def _get_panel_resolution(
+    resolutions: object,
+    unique_id: str,
+    fallback: object,
+) -> bool:
+    if isinstance(resolutions, dict) and unique_id in resolutions:
+        return bool(resolutions.get(unique_id))
+
+    return bool(fallback)
+
 def serialize_inconsistencias(inconsistencias: Iterable[Inconsistencias]) -> list[dict]:
     result: list[dict] = []
     seen: set[str] = set()
@@ -127,6 +139,7 @@ def serialize_inconsistencias(inconsistencias: Iterable[Inconsistencias]) -> lis
 
         resolved_by_panel = getattr(inc, "resolved_by_panel", False)
         resolved_by_siga = getattr(inc, "resolved_by_siga", False)
+        panel_resolutions = extra.get("_panel_resolutions")
 
         base_id = getattr(inc, "id", None)
 
@@ -148,7 +161,11 @@ def serialize_inconsistencias(inconsistencias: Iterable[Inconsistencias]) -> lis
                     campo=entry.get("campo"),
                     mensaje=entry.get("mensaje_cliente") or entry.get("mensaje"),
                     db_estado=estatus,
-                    resolved_by_panel=resolved_by_panel,
+                    resolved_by_panel=_get_panel_resolution(
+                        panel_resolutions,
+                        unique_id,
+                        resolved_by_panel,
+                    ),
                     resolved_by_siga=resolved_by_siga,
                     severidad=entry.get("severidad"),
                     estado_origen=entry.get("estado_origen"),
@@ -187,7 +204,11 @@ def serialize_inconsistencias(inconsistencias: Iterable[Inconsistencias]) -> lis
                 campo=field_name,
                 mensaje=mensaje_cliente,
                 db_estado=estatus,
-                resolved_by_panel=resolved_by_panel,
+                resolved_by_panel=_get_panel_resolution(
+                    panel_resolutions,
+                    unique_id,
+                    resolved_by_panel,
+                ),
                 resolved_by_siga=resolved_by_siga,
                 severidad=field_data.get("severidad"),
                 estado_origen=field_data.get("estado_origen"),
@@ -205,29 +226,28 @@ def serialize_inconsistencias(inconsistencias: Iterable[Inconsistencias]) -> lis
 
 def summarize_inconsistencias(items: Iterable[dict]) -> dict:
     serialized = list(items)
+    open_items = [
+        item
+        for item in serialized
+        if _normalize_estado(item.get("estado")) == "ABIERTA"
+    ]
 
     severity_counts = {
         "leve": 0,
         "moderada": 0,
         "critica": 0,
-        "total": len(serialized),
+        "total": len(open_items),
     }
 
     highest_severity: Optional[str] = None
     highest_priority = 0
 
-    prioritized_items = [
-        item
-        for item in serialized
-        if _normalize_estado(item.get("estado")) == "ABIERTA"
-    ] or serialized
-
-    for item in serialized:
+    for item in open_items:
         severity = normalize_severity(item.get("severidad"))
         if severity:
             severity_counts[severity] += 1
 
-    for item in prioritized_items:
+    for item in open_items:
         severity = normalize_severity(item.get("severidad"))
         if not severity:
             continue

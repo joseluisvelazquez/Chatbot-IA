@@ -4,9 +4,11 @@ from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
 from app.db.models import Inconsistencias
 from sqlalchemy.orm.attributes import flag_modified
+from app.utils.inconsistencias_serializer import serialize_inconsistencias
 
 
 FOLIO_FALLBACK = "SIN_FOLIO"
+PANEL_RESOLUTIONS_KEY = "_panel_resolutions"
 
 
 def _deep_merge(base: dict, patch: dict) -> dict:
@@ -133,6 +135,7 @@ def mark_panel_resolution(
     db: Session,
     inconsistencia_id: int,
     resolved: bool,
+    ui_id: Optional[str] = None,
 ) -> Inconsistencias:
     inc = (
         db.query(Inconsistencias)
@@ -144,8 +147,31 @@ def mark_panel_resolution(
     if not inc:
         raise ValueError("inconsistencia no encontrada")
 
-    inc.resolved_by_panel = bool(resolved)
+    if ui_id:
+        current_extra = dict(inc.extra_json or {})
+        resolutions = current_extra.get(PANEL_RESOLUTIONS_KEY)
 
-    if bool(resolved):
-        inc.estatus = "CERRADA"
+        if not isinstance(resolutions, dict):
+            resolutions = {
+                str(item["ui_id"]): bool(item.get("resolved_by_panel"))
+                for item in serialize_inconsistencias([inc])
+                if item.get("ui_id")
+            }
+
+        resolutions[str(ui_id)] = bool(resolved)
+        current_extra[PANEL_RESOLUTIONS_KEY] = resolutions
+        inc.extra_json = current_extra
+        inc.resolved_by_panel = False
+        flag_modified(inc, "extra_json")
+
+        serialized = serialize_inconsistencias([inc])
+        has_open = any(
+            str(item.get("estado") or "").upper() == "ABIERTA"
+            for item in serialized
+        )
+        inc.estatus = "ABIERTA" if has_open else "CERRADA"
+        return inc
+
+    inc.resolved_by_panel = bool(resolved)
+    inc.estatus = "CERRADA" if bool(resolved) else "ABIERTA"
     return inc

@@ -21,6 +21,7 @@ from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Mes
 from app.security.auth_dependencies import get_current_panel_user
 from app.adapters.whatsapp_client import send_whatsapp_media
 from fastapi import Request
+from app.core.verification_steps import STEP_ORDER
 from app.services.verification_tracker import STEP_MAP
 from app.utils.inconsistencias_serializer import (
     serialize_inconsistencias,
@@ -32,26 +33,13 @@ from app.services.verification_panel_service import (
     compute_verification,
     group_inconsistencias_by_folio,
     has_open_inconsistencia,
+    resolve_panel_current_step,
 )
 from app.services.inconsistencias_service import mark_panel_resolution
 from app.db.models import BitacoraVentas
 
 # ORDEN REAL DEL FLOW 
-FUNNEL_STEPS = [
-    "folio",
-    "nombre",
-    "domicilio",
-    "fecha",
-    "producto",
-    "componentes",
-    "pagoInicial",
-    "pagos",
-    "bancos",
-    "plan3meses",
-    "planes",
-    "beneficios",
-    "finalizado",
-]
+FUNNEL_STEPS = STEP_ORDER
 router = APIRouter(
     prefix="/api/panel",
     tags=["panel"]
@@ -293,28 +281,48 @@ def dashboard_funnel(
     # --------------------------------------
     # NORMALIZAR A STEPS
     # --------------------------------------
-    session_steps = {}
+    step_index = {step: index for index, step in enumerate(FUNNEL_STEPS)}
+    session_max_index: dict[int, int] = {}
 
     for e in events:
         step = STEP_MAP.get(e.to_state)
 
-        if not step:
+        if step not in step_index:
             continue
 
-        if e.session_id not in session_steps:
-            session_steps[e.session_id] = {}
+        current_index = step_index[step]
+        previous_index = session_max_index.get(e.session_id, -1)
+        if current_index > previous_index:
+            session_max_index[e.session_id] = current_index
 
         # guardar primera vez que llegó al step
-        if step not in session_steps[e.session_id]:
-            session_steps[e.session_id][step] = e.created_at
+
+    sessions = (
+        restrict_to_assigned(db.query(ChatSessions), user, db)
+        .filter(
+            ChatSessions.last_message_at >= date_from,
+            ChatSessions.folio.isnot(None),
+        )
+        .all()
+    )
+
+    for session in sessions:
+        step = resolve_panel_current_step(session, None)
+        if step not in step_index:
+            continue
+
+        current_index = step_index[step]
+        previous_index = session_max_index.get(session.id, -1)
+        if current_index > previous_index:
+            session_max_index[session.id] = current_index
 
     # --------------------------------------
     # CONTAR USUARIOS POR STEP
     # --------------------------------------
     step_counts = {step: 0 for step in FUNNEL_STEPS}
 
-    for steps in session_steps.values():
-        for step in steps.keys():
+    for max_index in session_max_index.values():
+        for step in FUNNEL_STEPS[:max_index + 1]:
             step_counts[step] += 1
 
     # --------------------------------------
@@ -366,7 +374,7 @@ def dashboard_summary(
         .scalar()
 
     inconsistencias_abiertas = db.query(func.count(Inconsistencias.id))\
-        .filter(Inconsistencias.estatus == "abierta")\
+        .filter(func.lower(Inconsistencias.estatus) == "abierta")\
         .scalar()
 
     return {
@@ -528,17 +536,6 @@ def get_verifications(
     # =========================
     result = []
 
-    flow_states = {
-        "INCONSISTENCIA",
-        "ESCRIBIR_INCONSISTENCIA",
-        "FUERA_DE_FLUJO",
-        "ACLARACION",
-        "LLAMADA",
-        "RECORDATORIO_1H",
-        "RECORDATORIO_2H",
-    }
-    
-
     for session in sessions:
         folio = str(session.folio)
         no_cuenta = folio_to_no_cuenta.get(folio)
@@ -548,10 +545,10 @@ def get_verifications(
 
         verification_data = compute_verification(progress)
 
-        current_step = verification_data["current_step"]
-
-        if session.state in flow_states and session.previous_state:
-            current_step = session.previous_state.lower()
+        current_step = resolve_panel_current_step(
+            session,
+            verification_data["current_step"],
+        )
 
         inconsistencias_folio = inconsistencias_by_folio.get(folio, [])
 
@@ -577,7 +574,7 @@ def get_verifications(
             "progress_pct": verification_data["progress_pct"],
             "current_step": current_step,
             "inconsistencias": serialized_inconsistencias,
-            "inconsistencias_count": len(serialized_inconsistencias),
+            "inconsistencias_count": inconsistencia_summary["severity_counts"]["total"],
             "severity_counts": inconsistencia_summary["severity_counts"],
             "highest_severity": inconsistencia_summary["highest_severity"],
             "confirmed_count": verification_data["progress_count"],
@@ -684,20 +681,10 @@ def get_verification_by_session(
     # =========================
     # 🧠 STEP CORRECTO
     # =========================
-    current_step = verification_data["current_step"]
-
-    flow_states = {
-        "INCONSISTENCIA",
-        "ESCRIBIR_INCONSISTENCIA",
-        "FUERA_DE_FLUJO",
-        "ACLARACION",
-        "LLAMADA",
-        "RECORDATORIO_1H",
-        "RECORDATORIO_2H",
-    }
-
-    if session.state in flow_states and session.previous_state:
-        current_step = session.previous_state.lower()
+    current_step = resolve_panel_current_step(
+        session,
+        verification_data["current_step"],
+    )
 
     # =========================
     # 📦 RESPONSE FINAL
@@ -714,7 +701,7 @@ def get_verification_by_session(
         "current_step": current_step,
 
         "inconsistencias": serialized_inconsistencias,
-        "inconsistencias_count": len(serialized_inconsistencias),
+        "inconsistencias_count": inconsistencia_summary["severity_counts"]["total"],
         "severity_counts": inconsistencia_summary["severity_counts"],
         "highest_severity": inconsistencia_summary["highest_severity"],
 
@@ -745,39 +732,70 @@ async def update_inconsistencia_panel_resolution(
         raise HTTPException(400, "resolved_by_panel booleano requerido")
 
     ui_id = payload.get("ui_id")
+    panel_resolved = bool(payload["resolved_by_panel"])
+    existing_inc = (
+        db.query(Inconsistencias)
+        .filter(Inconsistencias.id == inconsistencia_id)
+        .first()
+    )
+    was_open = bool(
+        existing_inc
+        and str(existing_inc.estatus or "").upper() == "ABIERTA"
+    )
 
     try:
         inc = mark_panel_resolution(
             db=db,
             inconsistencia_id=inconsistencia_id,
-            resolved=payload["resolved_by_panel"],
+            resolved=panel_resolved,
+            ui_id=ui_id,
         )
     except ValueError:
         raise HTTPException(404, "Inconsistencia no encontrada")
 
     db.commit()
     db.refresh(inc)
+    is_open = str(inc.estatus or "").upper() == "ABIERTA"
+    issues_open_delta = int(is_open) - int(was_open)
+
+    verification_snapshot = None
 
     if inc.session_id:
         session = db.query(ChatSessions).filter(ChatSessions.id == inc.session_id).first()
         if session:
+            verification_snapshot = build_verification_snapshot(db, session)
+            if verification_snapshot:
+                await manager.send_to_all({
+                    "type": "verification_update",
+                    "payload": verification_snapshot,
+                })
+
             await manager.send_to_all({
                 "type": "inconsistencia_updated",
                 "payload": {
                     "id": inc.id,
                     "ui_id": ui_id,
                     "session_id": inc.session_id,
-                    "resolved_by_panel": bool(inc.resolved_by_panel),
+                    "resolved_by_panel": panel_resolved,
                     "resolved_by_siga": bool(inc.resolved_by_siga),
                 }
             })
+
+    if issues_open_delta:
+        await manager.send_to_all({
+            "type": "dashboard_update",
+            "payload": {
+                "issues_open_delta": issues_open_delta,
+            },
+        })
 
     return {
         "id": inc.id,
         "ui_id": ui_id,
         "session_id": inc.session_id,
-        "resolved_by_panel": bool(inc.resolved_by_panel),
+        "resolved_by_panel": panel_resolved,
         "resolved_by_siga": bool(inc.resolved_by_siga),
+        "verification": verification_snapshot,
     }
 # =========================================
 # Obtener conversaciones (PAGINADO + DTO)
@@ -951,6 +969,10 @@ async def send_agent_message(
         raise HTTPException(404, "Sesión no encontrada")
 
     phone = session.phone
+    was_active = bool(
+        session.last_message_at
+        and session.last_message_at >= datetime.utcnow() - timedelta(days=1)
+    )
 
     try:
         await send_whatsapp_message(phone, content)
@@ -1001,6 +1023,7 @@ async def send_agent_message(
             "payload": {
                 "messages_in_delta": 0,
                 "messages_out_delta": 1,
+                "active_sessions_delta": 0 if was_active else 1,
             },
         })
 
@@ -1047,6 +1070,10 @@ async def send_agent_file(
         raise HTTPException(404, "Sesión no encontrada")
 
     phone = session.phone
+    was_active = bool(
+        session.last_message_at
+        and session.last_message_at >= datetime.utcnow() - timedelta(days=1)
+    )
 
     # =========================
     # 💾 1. GUARDAR PRIMERO
@@ -1120,6 +1147,7 @@ async def send_agent_file(
         "payload": {
             "messages_in_delta": 0,
             "messages_out_delta": 1,
+            "active_sessions_delta": 0 if was_active else 1,
         },
     })
 
