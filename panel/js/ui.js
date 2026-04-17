@@ -167,45 +167,63 @@ export function renderHeader(layout = "default", activePage = "") {
 // SIDEBAR
 // =========================
 export function renderSidebar() {
-    const sidebar = document.getElementById("sidebar");
-    if (!sidebar) return;
+    const sidebar = document.getElementById("sidebar")
+    if (!sidebar) return
 
     sidebar.innerHTML = `
-        <div class="h-full flex flex-col p-4 gap-2 bg-white dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 transition-colors duration-300">
-            <div class="mb-2 flex items-center justify-between">
-                <span class="font-bold text-sky-500 transition-transform duration-200 hover:scale-105">MXCOMP</span>
+        <div
+            data-sidebar-inner
+            class="flex h-full flex-col overflow-hidden bg-white dark:bg-slate-800"
+        >
+            <div
+                data-sidebar-header
+                class="mb-2 flex min-h-[40px] items-center justify-between px-3 pt-4"
+            >
+                <span
+                    data-sidebar-brand
+                    class="truncate font-bold text-sky-500 transition-transform duration-200 hover:scale-105"
+                >
+                    MXCOMP
+                </span>
+
                 <button
                     id="toggleSidebar"
                     type="button"
-                    class="rounded-lg p-2 hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition-all duration-200"
-                    title="Contraer menu"
-                    aria-label="Contraer menu"
+                    class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg
+                    text-gray-700 hover:bg-gray-100 dark:text-slate-200 dark:hover:bg-slate-700
+                    active:scale-95 transition-all duration-200"
+                    title="Contraer menú"
+                    aria-label="Contraer menú"
                 >
-                    <i data-lucide="panel-left-close" class="w-5 h-5"></i>
+                    <i data-lucide="panel-left-close" class="h-5 w-5"></i>
                 </button>
             </div>
 
-            <nav class="flex flex-col gap-1">
+            <nav
+                data-sidebar-nav
+                class="flex flex-col gap-1 px-2 pb-4"
+            >
                 ${NAV_ITEMS.map(item => `
                     <button
                         type="button"
-                        class="nav-item flex items-center gap-3 rounded-lg px-3 py-2 text-left
-                        text-gray-700 dark:text-slate-200
-                        hover:bg-gray-100 dark:hover:bg-slate-700
-                        active:scale-[0.98]
-                        transition-all duration-200"
                         data-page="${item.page}"
+                        title="${item.label}"
+                        aria-label="${item.label}"
+                        class="nav-item flex min-h-[40px] w-full items-center rounded-xl
+                        text-left text-gray-700 dark:text-slate-200
+                        hover:bg-gray-100 dark:hover:bg-slate-700
+                        active:scale-[0.98] transition-all duration-200"
                     >
-                        <i data-lucide="${item.icon}" class="w-5 h-5"></i>
-                        <span>${item.label}</span>
+                        <i data-lucide="${item.icon}" class="h-5 w-5 shrink-0"></i>
+                        <span data-sidebar-label class="truncate">${item.label}</span>
                     </button>
                 `).join("")}
             </nav>
         </div>
-    `;
+    `
 
     if (window.lucide) {
-        lucide.createIcons();
+        window.lucide.createIcons()
     }
 }
 

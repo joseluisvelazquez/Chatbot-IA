@@ -376,25 +376,18 @@ async function animateContentIn(content) {
     content.classList.add("opacity-100");
 }
 function runInitialAnimations() {
-    const sidebar = document.getElementById("sidebar")
     const header = document.getElementById("header")
     const content = document.getElementById("content")
 
-    if (!sidebar || !header || !content) return
+    if (!header || !content) return
 
-    // estado inicial
-    sidebar.classList.add("-translate-x-full", "opacity-0")
     header.classList.add("-translate-y-full", "opacity-0")
     content.classList.add("opacity-0", "translate-y-4")
 
-    // forzar repaint
     requestAnimationFrame(() => {
-
-        sidebar.classList.add("transition-all", "duration-500", "ease-out")
         header.classList.add("transition-all", "duration-500", "ease-out")
         content.classList.add("transition-all", "duration-500", "ease-out")
 
-        sidebar.classList.remove("-translate-x-full", "opacity-0")
         header.classList.remove("-translate-y-full", "opacity-0")
         content.classList.remove("opacity-0", "translate-y-4")
     })
