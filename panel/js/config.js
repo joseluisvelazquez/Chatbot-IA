@@ -1,5 +1,6 @@
 const DEV_PANEL_PORTS = new Set(["5500"]);
-const DEFAULT_DEV_BACKEND_ORIGIN = "http://localhost:8000";
+const DEFAULT_DEV_BACKEND_ORIGIN =
+    `${window.location.protocol}//${window.location.hostname}:8000`;
 
 const panelAssetBaseUrl = new URL("../", import.meta.url);
 const panelBasePath = panelAssetBaseUrl.pathname.replace(/\/$/, "");

@@ -71,9 +71,9 @@ def dev_login(request: Request, response: Response, db: Session = Depends(get_db
     if not settings.DEBUG:
         raise HTTPException(403, "No permitido")
 
-    host = request.headers.get("host", "")
+    client_ip = request.client.host if request.client else ""
 
-    if not host.startswith(("localhost", "127.0.0.1")):
+    if client_ip not in ("127.0.0.1", "::1"):
         raise HTTPException(403, "Solo localhost")
     
 
@@ -116,6 +116,10 @@ def exchange_siga_token(
         user_agent = request.headers.get("user-agent")
 
         session_value = create_panel_session(db, user, ip, user_agent)
+
+
+        print("COOKIE SECURE:", _cookie_secure())
+        print("COOKIE SAMESITE:", _cookie_samesite())
 
         _set_panel_session_cookie(
             response=response,
@@ -164,3 +168,8 @@ def logout(
 
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
+
+print("AUTH COOKIE CONFIG")
+print("COOKIE SECURE:", _cookie_secure())
+print("COOKIE SAMESITE:", _cookie_samesite())
+print("COOKIE NAME:", _cookie_name())
