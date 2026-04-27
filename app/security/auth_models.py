@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-PanelRole = Literal["admin", "ventas", "cobranza", "sistemas", "viewer"]
+PanelRole = Literal[
+    "admin",
+    "jefe_operativo",
+    "gestor_cobranza",
+    "soporte_tecnico",
+    "lectura",
+]
 
 
 @dataclass(frozen=True)
@@ -15,3 +21,4 @@ class PanelUser:
     role: PanelRole
     exp: int
     jti: str | None = None
+    user_id: str | None = None

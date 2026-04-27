@@ -44,12 +44,37 @@ const state = {
         selected: null,
         _version: 0,
     },
+    auth: {
+        user: null,
+    },
 }
 
 const listeners = new Set()
 
 function cloneState() {
-    return structuredClone(state)
+    return {
+        ...state,
+        dashboard: {
+            ...state.dashboard,
+            funnel: [...state.dashboard.funnel],
+        },
+        conversations: {
+            ...state.conversations,
+            byId: { ...state.conversations.byId },
+            order: [...state.conversations.order],
+        },
+        messages: {
+            bySessionId: state.messages.bySessionId,
+            versionsBySessionId: { ...state.messages.versionsBySessionId },
+        },
+        chat: structuredClone(state.chat),
+        verifications: {
+            ...state.verifications,
+            bySessionId: state.verifications.bySessionId,
+            order: [...state.verifications.order],
+        },
+        auth: { ...state.auth },
+    }
 }
 
 export function getState() {
@@ -76,6 +101,21 @@ function toSessionId(value) {
     return Number.isFinite(id) && id > 0 ? id : null
 }
 
+function normalizeDateValue(value) {
+    if (!value) return null
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? null : date
+}
+
+function isIncomingConversationStale(current = {}, incoming = {}) {
+    const currentDate = normalizeDateValue(current.last_message_at)
+    const incomingDate = normalizeDateValue(incoming.last_message_at)
+
+    if (!currentDate || !incomingDate) return false
+
+    return incomingDate.getTime() < currentDate.getTime()
+}
+
 function normalizeConversation(session = {}) {
     const id = toSessionId(session.id ?? session.session_id)
     if (!id) return null
@@ -84,19 +124,46 @@ function normalizeConversation(session = {}) {
     const phone = session.phone ?? current.phone ?? null
     const name = session.name ?? current.name ?? null
 
-    return {
+    const merged = {
         ...current,
         ...session,
         id,
         phone,
         name,
-        display_name: name || phone || "Cliente sin nombre",
     }
+
+    if (isIncomingConversationStale(current, session)) {
+        merged.last_message = current.last_message
+        merged.last_message_at = current.last_message_at
+        merged.unread_count = current.unread_count ?? merged.unread_count
+    }
+
+    merged.display_name = merged.name || merged.phone || "Cliente sin nombre"
+
+    return merged
+}
+
+function shallowEqualObjects(a = {}, b = {}) {
+    const aKeys = Object.keys(a)
+    const bKeys = Object.keys(b)
+
+    if (aKeys.length !== bKeys.length) return false
+
+    for (const key of aKeys) {
+        if (a[key] !== b[key]) return false
+    }
+
+    return true
 }
 
 function upsertConversation(session) {
     const normalized = normalizeConversation(session)
     if (!normalized) return false
+
+    const current = state.conversations.byId[normalized.id]
+    if (current && shallowEqualObjects(current, normalized)) {
+        return false
+    }
 
     state.conversations.byId[normalized.id] = normalized
 
@@ -110,17 +177,26 @@ function upsertConversation(session) {
 
 function moveConversationToTop(sessionId) {
     const id = toSessionId(sessionId)
-    if (!id) return
+    if (!id) return false
+
+    const currentOrder = state.conversations.order
+    if (!currentOrder.includes(id)) return false
+    if (currentOrder[0] === id) return false
 
     state.conversations.order = [
         id,
-        ...state.conversations.order.filter(item => item !== id),
+        ...currentOrder.filter(item => item !== id),
     ]
+    return true
 }
 
 function getMessageKey(message) {
     if (!message) return null
-    return message.id ?? message.message_id ?? `${message.content || message.media_url || "message"}-${message.created_at || ""}`
+    return (
+        message.id ??
+        message.message_id ??
+        `${message.content || message.media_url || "message"}-${message.created_at || ""}`
+    )
 }
 
 function bumpMessagesVersion(sessionId) {
@@ -155,11 +231,17 @@ function upsertVerification(item) {
     if (!item?.session_id) return false
 
     const sessionKey = toSessionKey(item.session_id)
-
-    state.verifications.bySessionId[sessionKey] = {
-        ...(state.verifications.bySessionId[sessionKey] || {}),
+    const current = state.verifications.bySessionId[sessionKey] || {}
+    const next = {
+        ...current,
         ...item,
     }
+
+    if (JSON.stringify(current) === JSON.stringify(next)) {
+        return false
+    }
+
+    state.verifications.bySessionId[sessionKey] = next
 
     const exists = state.verifications.order.includes(sessionKey)
     if (!exists) {
@@ -171,34 +253,54 @@ function upsertVerification(item) {
 
 function setSelectedSession(payload) {
     if (payload == null) {
+        if (
+            state.chat.selectedSessionId == null &&
+            state.chat.selectedSession == null
+        ) {
+            return false
+        }
+
         state.chat.selectedSessionId = null
         state.chat.selectedSession = null
         state.chat._version++
-        return
+        return true
     }
 
-    const sessionId = toSessionId(payload.sessionId ?? payload.id ?? payload.session_id)
-    if (!sessionId) return
+    const sessionId = toSessionId(
+        payload.sessionId ?? payload.id ?? payload.session_id
+    )
+    if (!sessionId) return false
 
-    const session = normalizeConversation({
-        id: sessionId,
-        phone: payload.phone ?? null,
-        name: payload.name ?? null,
-    }) || {
-        id: sessionId,
-        phone: payload.phone ?? null,
-        name: payload.name ?? null,
-        display_name: payload.name || payload.phone || "Cliente sin nombre",
-    }
+    const session =
+        normalizeConversation({
+            id: sessionId,
+            phone: payload.phone ?? null,
+            name: payload.name ?? null,
+        }) || {
+            id: sessionId,
+            phone: payload.phone ?? null,
+            name: payload.name ?? null,
+            display_name: payload.name || payload.phone || "Cliente sin nombre",
+        }
 
-    state.chat.selectedSessionId = toSessionKey(sessionId)
-    state.chat.selectedSession = {
+    const nextSelectedSessionId = toSessionKey(sessionId)
+    const nextSelectedSession = {
         sessionId,
         phone: session.phone,
         name: session.name,
         display_name: session.display_name,
     }
+
+    const sameSelection =
+        state.chat.selectedSessionId === nextSelectedSessionId &&
+        JSON.stringify(state.chat.selectedSession) === JSON.stringify(nextSelectedSession)
+
+    if (sameSelection) return false
+
+    state.chat.selectedSessionId = nextSelectedSessionId
+    state.chat.selectedSession = nextSelectedSession
     state.chat._version++
+    return true
 }
 
 function clampIndex(index, length) {
@@ -207,35 +309,7 @@ function clampIndex(index, length) {
     const numericIndex = Number(index)
     if (!Number.isFinite(numericIndex)) return 0
 
-    return Math.max(0, Math.min(length - 1, numericIndex))
-}
-
-function findVerificationKeyByInconsistencia({ session_id, ui_id, id }) {
-    const explicitSessionKey = toSessionKey(session_id)
-
-    if (explicitSessionKey && state.verifications.bySessionId[explicitSessionKey]) {
-        return explicitSessionKey
-    }
-
-    if (state.verifications.selected && state.verifications.bySessionId[state.verifications.selected]) {
-        const selectedVerification = state.verifications.bySessionId[state.verifications.selected]
-        const selectedItems = Array.isArray(selectedVerification.inconsistencias)
-            ? selectedVerification.inconsistencias
-            : []
-
-        if (selectedItems.some(item => matchesInconsistencia(item, { ui_id, id }))) {
-            return state.verifications.selected
-        }
-    }
-
-    return Object.keys(state.verifications.bySessionId).find((sessionKey) => {
-        const verification = state.verifications.bySessionId[sessionKey]
-        const items = Array.isArray(verification?.inconsistencias)
-            ? verification.inconsistencias
-            : []
-
-        return items.some(item => matchesInconsistencia(item, { ui_id, id }))
-    }) || null
+    return Math.max(0, Math.min(length - 1, Math.trunc(numericIndex)))
 }
 
 function matchesInconsistencia(item, { ui_id, id }) {
@@ -252,6 +326,40 @@ function matchesInconsistencia(item, { ui_id, id }) {
     return false
 }
 
+function findVerificationKeyByInconsistencia({ session_id, ui_id, id }) {
+    const explicitSessionKey = toSessionKey(session_id)
+
+    if (explicitSessionKey && state.verifications.bySessionId[explicitSessionKey]) {
+        return explicitSessionKey
+    }
+
+    if (
+        state.verifications.selected &&
+        state.verifications.bySessionId[state.verifications.selected]
+    ) {
+        const selectedVerification =
+            state.verifications.bySessionId[state.verifications.selected]
+        const selectedItems = Array.isArray(selectedVerification.inconsistencias)
+            ? selectedVerification.inconsistencias
+            : []
+
+        if (selectedItems.some(item => matchesInconsistencia(item, { ui_id, id }))) {
+            return state.verifications.selected
+        }
+    }
+
+    return (
+        Object.keys(state.verifications.bySessionId).find((sessionKey) => {
+            const verification = state.verifications.bySessionId[sessionKey]
+            const items = Array.isArray(verification?.inconsistencias)
+                ? verification.inconsistencias
+                : []
+
+            return items.some(item => matchesInconsistencia(item, { ui_id, id }))
+        }) || null
+    )
+}
+
 function normalizeSeverity(value) {
     const severity = String(value || "").trim().toLowerCase()
     return ["leve", "moderada", "critica"].includes(severity) ? severity : null
@@ -261,17 +369,20 @@ function summarizeInconsistencias(items = []) {
     const openItems = items.filter(
         item => String(item.estado || "").toUpperCase() === "ABIERTA"
     )
+
     const severityCounts = {
         leve: 0,
         moderada: 0,
         critica: 0,
         total: openItems.length,
     }
+
     const severityOrder = {
         leve: 1,
         moderada: 2,
         critica: 3,
     }
+
     let highestSeverity = null
     let highestPriority = 0
 
@@ -334,12 +445,14 @@ function addMetric(current, delta) {
 
 function normalizeFunnel(items = []) {
     const funnel = Array.isArray(items)
-        ? items.map(item => ({
-            step: String(item.step || ""),
-            total: Math.max(0, Number(item.total || 0)),
-            drop_off: Math.max(0, Number(item.drop_off || 0)),
-            conversion_pct: Number(item.conversion_pct || 0),
-        })).filter(item => item.step)
+        ? items
+            .map(item => ({
+                step: String(item.step || ""),
+                total: Math.max(0, Number(item.total || 0)),
+                drop_off: Math.max(0, Number(item.drop_off || 0)),
+                conversion_pct: Number(item.conversion_pct || 0),
+            }))
+            .filter(item => item.step)
         : []
 
     return recalculateFunnel(funnel)
@@ -351,9 +464,10 @@ function recalculateFunnel(funnel) {
         const next = Number(funnel[i + 1]?.total || 0)
 
         funnel[i].drop_off = Math.max(current - next, 0)
-        funnel[i].conversion_pct = current > 0
-            ? Math.round((next / current) * 10000) / 100
-            : 0
+        funnel[i].conversion_pct =
+            current > 0
+                ? Math.round((next / current) * 10000) / 100
+                : 0
     }
 
     return funnel
@@ -369,7 +483,7 @@ function applyFunnelDeltas(payload = {}) {
     if (!rawDeltas.length) return false
 
     const byStep = new Map(state.dashboard.funnel.map(item => [item.step, item]))
-    let changed = false
+    let mutated = false
 
     rawDeltas.forEach((item) => {
         const step = String(item?.step || "")
@@ -386,10 +500,10 @@ function applyFunnelDeltas(payload = {}) {
 
         const entry = byStep.get(step)
         entry.total = Math.max(0, Number(entry.total || 0) + delta)
-        changed = true
+        mutated = true
     })
 
-    if (!changed) return false
+    if (!mutated) return false
 
     recalculateFunnel(state.dashboard.funnel)
     state.dashboard._funnelVersion++
@@ -399,6 +513,8 @@ function applyFunnelDeltas(payload = {}) {
 export function dispatch(action) {
     if (!action?.type) return
 
+    let changed = false
+
     switch (action.type) {
         case "dashboard/loaded": {
             state.dashboard = {
@@ -406,24 +522,53 @@ export function dispatch(action) {
                 ...action.payload,
                 loaded: true,
             }
+            changed = true
+            break
+        }
+
+        case "auth/set_user": {
+            const nextUser = action.payload || null
+            if (state.auth.user === nextUser) break
+
+            state.auth.user = nextUser
+            changed = true
             break
         }
 
         case "dashboard/funnel_loaded": {
             state.dashboard.funnel = normalizeFunnel(action.payload)
             state.dashboard._funnelVersion++
+            changed = true
             break
         }
 
         case "dashboard/apply_delta": {
             const p = action.payload || {}
 
+            const prev = {
+                messages_in: state.dashboard.messages_in,
+                messages_out: state.dashboard.messages_out,
+                issues_open: state.dashboard.issues_open,
+                total_sessions: state.dashboard.total_sessions,
+                active_sessions: state.dashboard.active_sessions,
+            }
+
             state.dashboard.messages_in = addMetric(state.dashboard.messages_in, p.messages_in_delta)
             state.dashboard.messages_out = addMetric(state.dashboard.messages_out, p.messages_out_delta)
             state.dashboard.issues_open = addMetric(state.dashboard.issues_open, p.issues_open_delta)
             state.dashboard.total_sessions = addMetric(state.dashboard.total_sessions, p.total_sessions_delta)
             state.dashboard.active_sessions = addMetric(state.dashboard.active_sessions, p.active_sessions_delta)
-            applyFunnelDeltas(p)
+
+            const funnelChanged = applyFunnelDeltas(p)
+
+            changed =
+                funnelChanged ||
+                prev.messages_in !== state.dashboard.messages_in ||
+                prev.messages_out !== state.dashboard.messages_out ||
+                prev.issues_open !== state.dashboard.issues_open ||
+                prev.total_sessions !== state.dashboard.total_sessions ||
+                prev.active_sessions !== state.dashboard.active_sessions
+
             break
         }
 
@@ -437,22 +582,36 @@ export function dispatch(action) {
                 upsertConversation(item)
             })
 
+            if (
+                state.chat.selectedSessionId &&
+                !state.conversations.byId[Number(state.chat.selectedSessionId)]
+            ) {
+                state.chat.selectedSessionId = null
+                state.chat.selectedSession = null
+                state.chat._version++
+            }
+
             state.conversations.loaded = true
             state.conversations._version++
+            changed = true
             break
         }
 
         case "conversations/upsert": {
             if (upsertConversation(action.payload)) {
                 state.conversations._version++
+                changed = true
             }
             break
         }
 
         case "conversations/move_top": {
-            if (action.payload?.session_id) {
+            if (
+                action.payload?.session_id &&
                 moveConversationToTop(action.payload.session_id)
+            ) {
                 state.conversations._version++
+                changed = true
             }
             break
         }
@@ -462,11 +621,35 @@ export function dispatch(action) {
             const id = toSessionId(session_id)
             if (!id || !state.conversations.byId[id]) break
 
+            if (state.conversations.byId[id].unread_count === unread_count) break
+
             state.conversations.byId[id] = {
                 ...state.conversations.byId[id],
                 unread_count,
             }
             state.conversations._version++
+            changed = true
+            break
+        }
+
+        case "conversations/remove": {
+            const id = toSessionId(action.payload?.session_id ?? action.payload?.id)
+            if (!id || !state.conversations.byId[id]) break
+
+            delete state.conversations.byId[id]
+            state.conversations.order = state.conversations.order.filter(item => item !== id)
+
+            delete state.messages.bySessionId[String(id)]
+            delete state.messages.versionsBySessionId[String(id)]
+
+            if (state.chat.selectedSessionId === String(id)) {
+                state.chat.selectedSessionId = null
+                state.chat.selectedSession = null
+                state.chat._version++
+            }
+
+            state.conversations._version++
+            changed = true
             break
         }
 
@@ -475,8 +658,10 @@ export function dispatch(action) {
             const key = toSessionKey(sessionId)
             if (!key) break
 
-            state.messages.bySessionId[key] = Array.isArray(items) ? items : []
+            const nextItems = Array.isArray(items) ? items : []
+            state.messages.bySessionId[key] = nextItems
             bumpMessagesVersion(key)
+            changed = true
             break
         }
 
@@ -485,19 +670,31 @@ export function dispatch(action) {
             const added = upsertMessage(sessionId, message)
 
             if (conversation) {
-                upsertConversation(conversation)
-                state.conversations._version++
+                const upserted = upsertConversation(conversation)
+                if (upserted) {
+                    state.conversations._version++
+                    changed = true
+                }
             }
 
             if (added && sessionId && state.conversations.byId[Number(sessionId)]) {
                 state.conversations.byId[Number(sessionId)] = {
                     ...state.conversations.byId[Number(sessionId)],
-                    last_message_at: message.created_at || state.conversations.byId[Number(sessionId)].last_message_at,
-                    last_message: message.content || state.conversations.byId[Number(sessionId)].last_message,
+                    last_message_at:
+                        message.created_at ||
+                        state.conversations.byId[Number(sessionId)].last_message_at,
+                    last_message:
+                        message.content ||
+                        state.conversations.byId[Number(sessionId)].last_message,
                 }
 
-                moveConversationToTop(sessionId)
-                state.conversations._version++
+                if (moveConversationToTop(sessionId)) {
+                    state.conversations._version++
+                } else {
+                    state.conversations._version++
+                }
+
+                changed = true
             }
 
             break
@@ -517,32 +714,50 @@ export function dispatch(action) {
 
             state.messages.bySessionId[key] = [...deduped, ...current]
             bumpMessagesVersion(key)
+            changed = true
             break
         }
 
         case "chat/select_session": {
-            setSelectedSession(action.payload)
+            changed = setSelectedSession(action.payload) || changed
             break
         }
 
         case "chat/set_loading": {
             const sessionId = action.payload?.sessionId
-            state.chat.loadingSessionId = sessionId == null ? null : toSessionKey(sessionId)
+            const nextValue = sessionId == null ? null : toSessionKey(sessionId)
+
+            if (state.chat.loadingSessionId === nextValue) break
+
+            state.chat.loadingSessionId = nextValue
             state.chat._version++
+            changed = true
             break
         }
 
         case "chat/next_load_request": {
             state.chat.loadRequestId++
             state.chat._version++
+            changed = true
             break
         }
 
         case "chat/preview/set_files": {
-            const files = Array.isArray(action.payload?.files) ? action.payload.files.filter(Boolean) : []
+            const files = Array.isArray(action.payload?.files)
+                ? action.payload.files.filter(Boolean)
+                : []
+            const nextIndex = clampIndex(action.payload?.selectedIndex || 0, files.length)
+
+            const sameFiles =
+                state.chat.preview.files.length === files.length &&
+                state.chat.preview.files.every((file, index) => file === files[index])
+
+            if (sameFiles && state.chat.preview.selectedIndex === nextIndex) break
+
             state.chat.preview.files = files
-            state.chat.preview.selectedIndex = clampIndex(action.payload?.selectedIndex || 0, files.length)
+            state.chat.preview.selectedIndex = nextIndex
             state.chat._previewVersion++
+            changed = true
             break
         }
 
@@ -551,8 +766,11 @@ export function dispatch(action) {
             const index = Number(action.payload?.index)
 
             if (!length) {
-                state.chat.preview.selectedIndex = 0
-                state.chat._previewVersion++
+                if (state.chat.preview.selectedIndex !== 0) {
+                    state.chat.preview.selectedIndex = 0
+                    state.chat._previewVersion++
+                    changed = true
+                }
                 break
             }
 
@@ -560,8 +778,12 @@ export function dispatch(action) {
                 break
             }
 
-            state.chat.preview.selectedIndex = Math.trunc(index)
+            const nextIndex = Math.trunc(index)
+            if (state.chat.preview.selectedIndex === nextIndex) break
+
+            state.chat.preview.selectedIndex = nextIndex
             state.chat._previewVersion++
+            changed = true
             break
         }
 
@@ -569,15 +791,10 @@ export function dispatch(action) {
             const length = state.chat.preview.files.length
             const rawIndex = Number(action.payload?.index)
 
-            if (!length || !Number.isFinite(rawIndex)) {
-                break
-            }
+            if (!length || !Number.isFinite(rawIndex)) break
 
             const index = Math.trunc(rawIndex)
-
-            if (index < 0 || index >= length) {
-                break
-            }
+            if (index < 0 || index >= length) break
 
             const previousSelectedIndex = clampIndex(state.chat.preview.selectedIndex, length)
             state.chat.preview.files = state.chat.preview.files.filter((_, itemIndex) => itemIndex !== index)
@@ -587,44 +804,87 @@ export function dispatch(action) {
                     ? previousSelectedIndex - 1
                     : previousSelectedIndex
 
-            state.chat.preview.selectedIndex = clampIndex(nextSelectedIndex, state.chat.preview.files.length)
+            state.chat.preview.selectedIndex = clampIndex(
+                nextSelectedIndex,
+                state.chat.preview.files.length
+            )
             state.chat._previewVersion++
+            changed = true
             break
         }
 
         case "chat/preview/clear": {
+            if (!state.chat.preview.files.length && state.chat.preview.selectedIndex === 0) break
+
             state.chat.preview.files = []
             state.chat.preview.selectedIndex = 0
             state.chat._previewVersion++
+            changed = true
             break
         }
 
         case "chat/viewer/set_images": {
-            const images = Array.isArray(action.payload?.images) ? action.payload.images.filter(Boolean) : []
+            const images = Array.isArray(action.payload?.images)
+                ? action.payload.images.filter(Boolean)
+                : []
+            const nextIndex = clampIndex(action.payload?.selectedIndex || 0, images.length)
+
+            const sameImages =
+                state.chat.viewer.images.length === images.length &&
+                state.chat.viewer.images.every((image, index) => image === images[index])
+
+            if (sameImages && state.chat.viewer.selectedIndex === nextIndex) break
+
             state.chat.viewer.images = images
-            state.chat.viewer.selectedIndex = clampIndex(action.payload?.selectedIndex || 0, images.length)
+            state.chat.viewer.selectedIndex = nextIndex
             state.chat._viewerVersion++
+            changed = true
             break
         }
 
         case "chat/viewer/open": {
-            const images = Array.isArray(action.payload?.images) ? action.payload.images.filter(Boolean) : state.chat.viewer.images
+            const images = Array.isArray(action.payload?.images)
+                ? action.payload.images.filter(Boolean)
+                : state.chat.viewer.images
+
+            const nextIndex = clampIndex(action.payload?.selectedIndex || 0, images.length)
+
+            const sameImages =
+                state.chat.viewer.images.length === images.length &&
+                state.chat.viewer.images.every((image, index) => image === images[index])
+
+            if (
+                sameImages &&
+                state.chat.viewer.selectedIndex === nextIndex &&
+                state.chat.viewer.open === true
+            ) {
+                break
+            }
+
             state.chat.viewer.images = images
-            state.chat.viewer.selectedIndex = clampIndex(action.payload?.selectedIndex || 0, images.length)
+            state.chat.viewer.selectedIndex = nextIndex
             state.chat.viewer.open = true
             state.chat._viewerVersion++
+            changed = true
             break
         }
 
         case "chat/viewer/show": {
-            state.chat.viewer.selectedIndex = clampIndex(action.payload?.index, state.chat.viewer.images.length)
+            const nextIndex = clampIndex(action.payload?.index, state.chat.viewer.images.length)
+            if (state.chat.viewer.selectedIndex === nextIndex) break
+
+            state.chat.viewer.selectedIndex = nextIndex
             state.chat._viewerVersion++
+            changed = true
             break
         }
 
         case "chat/viewer/close": {
+            if (state.chat.viewer.open === false) break
+
             state.chat.viewer.open = false
             state.chat._viewerVersion++
+            changed = true
             break
         }
 
@@ -640,12 +900,14 @@ export function dispatch(action) {
 
             state.verifications.loaded = true
             state.verifications._version++
+            changed = true
             break
         }
 
         case "verifications/upsert": {
             if (upsertVerification(action.payload)) {
                 state.verifications._version++
+                changed = true
             }
             break
         }
@@ -668,44 +930,61 @@ export function dispatch(action) {
 
                 if (!canUpsert) break
 
-                upsertVerification({
+                const upserted = upsertVerification({
                     session_id: Number(session_id),
                     ...changes,
                 })
-                state.verifications._version++
+
+                if (upserted) {
+                    state.verifications._version++
+                    changed = true
+                }
                 break
             }
 
-            state.verifications.bySessionId[session_id] = {
+            const next = {
                 ...current,
                 ...changes,
             }
 
+            if (JSON.stringify(current) === JSON.stringify(next)) break
+
+            state.verifications.bySessionId[session_id] = next
             state.verifications._version++
+            changed = true
             break
         }
 
         case "verifications/select": {
-            state.verifications.selected = toSessionKey(action.payload)
+            const nextSelected = toSessionKey(action.payload)
+            if (state.verifications.selected === nextSelected) break
+
+            state.verifications.selected = nextSelected
+            changed = true
             break
         }
-        
+
         case "verifications/update_inconsistencia": {
             const { id, ui_id, session_id, resolved_by_panel, resolved_by_siga } = action.payload || {}
 
-            if (!id && !ui_id) return
+            if (!id && !ui_id) break
 
-            const verificationKey = findVerificationKeyByInconsistencia({ session_id, ui_id, id })
-            if (!verificationKey) return
+            const verificationKey = findVerificationKeyByInconsistencia({
+                session_id,
+                ui_id,
+                id,
+            })
+            if (!verificationKey) break
 
             const verification = state.verifications.bySessionId[verificationKey]
-            if (!verification?.inconsistencias) return
+            if (!verification?.inconsistencias) break
 
-            let changed = false
+            let inconsistenciaChanged = false
+
             const updatedInconsistencias = verification.inconsistencias.map(inc => {
                 if (!matchesInconsistencia(inc, { ui_id, id })) return inc
 
-                changed = true
+                inconsistenciaChanged = true
 
                 const nextPanelValue =
                     typeof resolved_by_panel === "boolean"
@@ -727,7 +1006,7 @@ export function dispatch(action) {
                 }
             })
 
-            if (!changed) return
+            if (!inconsistenciaChanged) break
 
             const summary = summarizeInconsistencias(updatedInconsistencias)
 
@@ -741,7 +1020,7 @@ export function dispatch(action) {
             }
 
             state.verifications._version++
-
+            changed = true
             break
         }
 
@@ -749,5 +1028,7 @@ export function dispatch(action) {
             return
     }
 
-    emit()
+    if (changed) {
+        emit()
+    }
 }

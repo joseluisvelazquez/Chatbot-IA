@@ -24,6 +24,7 @@ services:
       MYSQL_DATABASE: mxcomp
       MYSQL_USER: mxcomp_user
       MYSQL_PASSWORD: mxcomp_pass
+    command: --sql-mode="STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"
     ports:
       - "3306:3306"
     volumes:

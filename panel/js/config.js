@@ -1,5 +1,6 @@
 const DEV_PANEL_PORTS = new Set(["5500"]);
 const DEFAULT_DEV_BACKEND_ORIGIN = "http://localhost:8000";
+const DEFAULT_DEV_BACKEND_PORT = "8000";
 
 const panelAssetBaseUrl = new URL("../", import.meta.url);
 const panelBasePath = panelAssetBaseUrl.pathname.replace(/\/$/, "");
@@ -10,6 +11,13 @@ function isStandalonePanelDev() {
 
 function getBackendOrigin() {
     if (isStandalonePanelDev()) {
+        if (
+            window.location.protocol !== "file:" &&
+            !["localhost", "127.0.0.1"].includes(window.location.hostname)
+        ) {
+            return `${window.location.protocol}//${window.location.hostname}:${DEFAULT_DEV_BACKEND_PORT}`;
+        }
+
         return DEFAULT_DEV_BACKEND_ORIGIN;
     }
 

@@ -5,9 +5,10 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.config.paths import MEDIA_DIR
-from app.security.auth_dependencies import get_current_panel_user
+from app.security.auth_dependencies import enforce_panel_origin, get_current_panel_user
+from app.security.rbac import ROLE_LECTURA, normalize_role
 
-router = APIRouter(prefix="/api/panel", tags=["media"])
+router = APIRouter(prefix="/api/panel", tags=["media"], dependencies=[Depends(enforce_panel_origin)])
 
 # MIME permitidos y extensión canónica
 ALLOWED_CONTENT_TYPES: dict[str, str] = {
@@ -23,8 +24,11 @@ CHUNK_SIZE = 1024 * 1024  # 1 MB
 @router.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    _user=Depends(get_current_panel_user),
+    user=Depends(get_current_panel_user),
 ):
+    if normalize_role(user.role) == ROLE_LECTURA:
+        raise HTTPException(status_code=403, detail="No autorizado")
+
     if not file:
         raise HTTPException(status_code=400, detail="Archivo no proporcionado")
 

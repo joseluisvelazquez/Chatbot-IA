@@ -16,18 +16,31 @@ from app.db.models import AuthToken, Colaboradores, Cuentas
 from app.security.auth_models import PanelUser
 import secrets
 from app.db.models import PanelSession
+from app.security.rbac import (
+    ROLE_ADMIN,
+    ROLE_GESTOR_COBRANZA,
+    ROLE_JEFE_OPERATIVO,
+    ROLE_LECTURA,
+    ROLE_SOPORTE_TECNICO,
+    normalize_role,
+)
+from app.services.panel_staff import normalize_username, panel_role_for_puesto
 
 ROLE_MAP: dict[str, str] = {
-    "GERENTE EJECUTIVO": "admin",
-    "GERENTE GENERAL": "admin",
-    "GERENTE DE VENTAS": "ventas",
-    "ASESOR COMERCIAL": "ventas",
-    "ASESOR COMERCIAL EXTERNO": "ventas",
-    "GESTOR DE COBRANZA": "cobranza",
-    "SUPERVISOR DE COBRANZA": "cobranza",
-    "JEFE DE SISTEMAS": "sistemas",
-    "DESARROLLOS DE WEB JR": "sistemas",
-    "PROGRAMADOR": "sistemas",
+    "GERENTE EJECUTIVO": ROLE_ADMIN,
+    "GERENTE GENERAL": ROLE_ADMIN,
+    "GERENTE DE VENTAS": ROLE_JEFE_OPERATIVO,
+    "JEFE OPERATIVO": ROLE_JEFE_OPERATIVO,
+    "JEFE DE COBRANZA": ROLE_JEFE_OPERATIVO,
+    "SUPERVISOR DE COBRANZA": ROLE_GESTOR_COBRANZA,
+    "ASESOR COMERCIAL": ROLE_LECTURA,
+    "ASESOR COMERCIAL EXTERNO": ROLE_LECTURA,
+    "GESTOR DE COBRANZA": ROLE_GESTOR_COBRANZA,
+    "JEFE DE SISTEMAS": ROLE_SOPORTE_TECNICO,
+    "SOPORTE TECNICO": ROLE_SOPORTE_TECNICO,
+    "SOPORTE TÉCNICO": ROLE_SOPORTE_TECNICO,
+    "DESARROLLOS DE WEB JR": ROLE_SOPORTE_TECNICO,
+    "PROGRAMADOR": ROLE_SOPORTE_TECNICO,
 }
 
 
@@ -39,16 +52,38 @@ class AuthError(HTTPException):
         )
 
 def get_nombre_resumido(db: Session, username: str) -> str | None:
+    normalized_username = normalize_username(username)
     colab = (
         db.query(Colaboradores)
-        .filter(Colaboradores.nombre_usuario == username)
+        .filter(Colaboradores.nombre_usuario == normalized_username)
+        .order_by(Colaboradores.estatus.desc(), Colaboradores.id.desc())
         .first()
     )
 
     if not colab:
         return None
 
-    return colab.nombre_resumido
+    preferred_name = str(colab.nombre_resumido or "").strip()
+    if preferred_name:
+        return preferred_name
+
+    return str(colab.nombre_completo or "").strip() or None
+
+
+def get_active_colaborador(db: Session, username: str) -> Colaboradores | None:
+    normalized_username = normalize_username(username)
+    if not normalized_username:
+        return None
+
+    return (
+        db.query(Colaboradores)
+        .filter(
+            Colaboradores.nombre_usuario == normalized_username,
+            Colaboradores.estatus == 1,
+        )
+        .order_by(Colaboradores.id.desc())
+        .first()
+    )
 
 def restrict_to_assigned(query, user, db):
     """
@@ -56,11 +91,13 @@ def restrict_to_assigned(query, user, db):
     """
 
     # Roles que ven todo
-    if user.role in ("admin", "sistemas"):
+    role = normalize_role(user.role)
+
+    if role in (ROLE_ADMIN, ROLE_JEFE_OPERATIVO, ROLE_LECTURA):
         return query
 
     # Gestor de cobranza → solo lo suyo
-    if user.role == "cobranza":
+    if role == ROLE_GESTOR_COBRANZA:
         nombre_resumido = get_nombre_resumido(db, user.username)
 
         if not nombre_resumido:
@@ -126,10 +163,6 @@ def _parse_signed_token(token: str) -> dict[str, Any]:
     ).hexdigest()
 
     if not hmac.compare_digest(signature, expected_signature):
-        print("❌ Firma inválida")
-        print("Payload:", payload_json)
-        print("Expected:", expected_signature)
-        print("Received:", signature)
         raise AuthError("Firma inválida")
 
     try:
@@ -160,13 +193,20 @@ def decode_panel_session(session_token: str, db: Session) -> PanelUser:
     if row.exp <= now:
         raise AuthError("Sesión expirada")
 
+    empresa_id = int(row.empresa_id or 0)
+    if empresa_id <= 0:
+        raise AuthError("Empresa inválida en sesión")
+
+    role = normalize_role(row.role)
+
     return PanelUser(
         username=row.username,
         puesto=row.puesto,
-        empresa_id=row.empresa_id,
-        role=row.role,
+        empresa_id=empresa_id,
+        role=role,
         exp=row.exp,
         jti=row.jti,
+        user_id=row.username,
     )
 
 def create_panel_session_value(user: PanelUser) -> str:
@@ -174,7 +214,7 @@ def create_panel_session_value(user: PanelUser) -> str:
         "user": user.username,
         "puesto": user.puesto,
         "empresa": user.empresa_id,
-        "role": user.role,
+        "role": normalize_role(user.role),
         "exp": user.exp,
         "jti": user.jti,
     }
@@ -212,7 +252,7 @@ def create_panel_session(db: Session, user: PanelUser, ip: str | None, user_agen
         username=user.username,
         puesto=user.puesto,
         empresa_id=user.empresa_id,
-        role=user.role,
+        role=normalize_role(user.role),
         jti=user.jti,
         exp=now + SESSION_DURATION,  
         ip=ip,
@@ -243,24 +283,11 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
     """
     payload = _parse_signed_token(token)
 
-    username = str(payload.get("user", "")).strip()
+    username = normalize_username(payload.get("user"))
     puesto = str(payload.get("puesto", "")).strip().upper()
     empresa_raw = payload.get("empresa")
     exp_raw = payload.get("exp")
     jti = str(payload.get("jti", "")).strip()
-    print("JTI:", jti)
-
-    token_row = (
-        db.query(AuthToken)
-        .filter(AuthToken.jti == jti)
-        .first()
-    )
-
-    print("TOKEN_ROW:", token_row)
-
-    if token_row:
-        print("USED_AT:", token_row.used_at)
-
     if not username:
         raise AuthError("Token sin usuario")
 
@@ -275,6 +302,9 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
     except (TypeError, ValueError) as exc:
         raise AuthError("Empresa inválida") from exc
 
+    if empresa_id <= 0:
+        raise AuthError("Empresa inválida")
+
     try:
         exp = int(exp_raw)
     except (TypeError, ValueError) as exc:
@@ -282,20 +312,23 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
 
     now = int(time.time())
 
-    print("DIFF:", exp - now)
     CLOCK_SKEW = 120  # 2 minutos
 
     if exp <= now - CLOCK_SKEW:
-        
-        print("NOW:", now)
-        print("EXP:", exp)
         raise AuthError("Token expirado")
 
-    
+    active_colaborador = get_active_colaborador(db, username)
+    if not active_colaborador:
+        raise AuthError("Usuario inactivo o inexistente en SIGA")
+
+    puesto_actual = str(active_colaborador.puesto or "").strip().upper()
+    if puesto_actual:
+        puesto = puesto_actual
 
     token_row = (
         db.query(AuthToken)
         .filter(AuthToken.jti == jti)
+        .with_for_update()
         .first()
     )
 
@@ -309,7 +342,7 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
     token_row.used_at = int(time.time())
     db.flush()
 
-    role = ROLE_MAP.get(puesto, "viewer")
+    role = normalize_role(ROLE_MAP.get(puesto, panel_role_for_puesto(puesto) or ROLE_LECTURA))
 
     return PanelUser(
         username=username,
@@ -318,4 +351,5 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
         role=role,
         exp=exp,
         jti=jti,
+        user_id=username,
     )

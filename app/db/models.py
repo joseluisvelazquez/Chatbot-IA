@@ -1,7 +1,8 @@
-from typing import Optional
+from typing import Any, Optional
 import datetime
 import decimal
 import enum
+import uuid
 from sqlalchemy import Boolean, Text
 from sqlalchemy.dialects.mysql import JSON as MYSQL_JSON
 from app.db.base import Base
@@ -286,6 +287,11 @@ class ChatSessions(Base):
         Index("idx_folio", "folio"),
         Index("idx_phone", "phone"),
         Index("uq_chat_phone", "phone", unique=True),
+        Index("idx_chat_operativo_owner", "owner_type", "assigned_role", "assigned_user_id"),
+        Index("idx_chat_status_test", "status_operativo", "test_mode"),
+        Index("idx_chat_locked_until", "locked_until"),
+        Index("idx_chat_support_return", "assigned_role", "previous_owner_user_id", "transfer_created_at"),
+        Index("idx_chat_assignment_status_user", "assigned_role", "status_operativo", "assigned_user_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -306,6 +312,33 @@ class ChatSessions(Base):
     ai_inconsistency_attempts = Column(Integer, default=0)
     invalid_folio_attempts = Column(Integer, default=0)
     unread_count = Column(Integer, nullable=False, default=0)
+    assigned_user_id: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    assigned_role: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+    owner_type: Mapped[Optional[str]] = mapped_column(VARCHAR(20), nullable=True)
+    status_operativo: Mapped[str] = mapped_column(
+        VARCHAR(30),
+        nullable=False,
+        server_default=text("'assistant_active'"),
+        default="assistant_active",
+    )
+    priority: Mapped[str] = mapped_column(
+        VARCHAR(20),
+        nullable=False,
+        server_default=text("'normal'"),
+        default="normal",
+    )
+    transfer_pending = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    locked_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    assigned_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    last_agent_message_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    last_customer_message_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    returned_from_role: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+    test_mode = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    transferred_by_user_id: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    previous_owner_user_id: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    previous_owner_role: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+    transfer_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    transfer_created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class Clientes(Base):
@@ -438,6 +471,10 @@ class ComprasComprobantesFiscales(Base):
 
 class Colaboradores(Base):
     __tablename__ = 'colaboradores'
+    __table_args__ = (
+        Index("idx_colaboradores_username", "nombre_usuario"),
+        Index("idx_colaboradores_operativo_lookup", "id_emp_col", "estatus", "puesto", "nombre_usuario"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     nombre_resumido: Mapped[str] = mapped_column(TEXT, nullable=False)
@@ -690,6 +727,119 @@ class PanelSession(Base):
         DateTime,
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class ChatTransferAudit(Base):
+    __tablename__ = "chat_transfer_audit"
+    __table_args__ = (
+        Index("idx_chat_transfer_session_created", "session_id", "created_at"),
+        Index("idx_chat_transfer_actor_created", "actor_username", "created_at"),
+        Index("idx_chat_transfer_to_owner", "to_assigned_user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(VARCHAR(40), nullable=False)
+    actor_username: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    actor_role: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+
+    from_owner_type: Mapped[Optional[str]] = mapped_column(VARCHAR(20), nullable=True)
+    from_assigned_user_id: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    from_assigned_role: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+    from_status: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+
+    to_owner_type: Mapped[Optional[str]] = mapped_column(VARCHAR(20), nullable=True)
+    to_assigned_user_id: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    to_assigned_role: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+    to_status: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class ChatTechnicalLog(Base):
+    __tablename__ = "chat_technical_logs"
+    __table_args__ = (
+        Index("idx_technical_session_created", "session_id", "created_at"),
+        Index("idx_technical_status", "status"),
+        Index("idx_technical_sla", "status", "sla_due_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    phone: Mapped[Optional[str]] = mapped_column(VARCHAR(20), nullable=True)
+    detected_by: Mapped[Optional[str]] = mapped_column(VARCHAR(40), nullable=True)
+    keyword: Mapped[Optional[str]] = mapped_column(VARCHAR(80), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        VARCHAR(30),
+        nullable=False,
+        server_default=text("'open'"),
+        default="open",
+    )
+    opened_by: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    closed_by: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    resolution: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    return_action: Mapped[Optional[str]] = mapped_column(VARCHAR(40), nullable=True)
+    sla_due_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class PanelDomainEvent(Base):
+    __tablename__ = "panel_domain_events"
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uq_panel_domain_events_event_id"),
+        Index("idx_panel_domain_event_type_created", "event_type", "created_at"),
+        Index("idx_panel_domain_event_aggregate", "aggregate_type", "aggregate_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, default=lambda: uuid.uuid4().hex)
+    event_type: Mapped[str] = mapped_column(VARCHAR(80), nullable=False)
+    aggregate_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False)
+    aggregate_id: Mapped[Optional[str]] = mapped_column(VARCHAR(80), nullable=True)
+    actor_username: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    actor_role: Mapped[Optional[str]] = mapped_column(VARCHAR(30), nullable=True)
+    payload: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class PanelFeatureFlag(Base):
+    __tablename__ = "panel_feature_flags"
+    __table_args__ = (
+        Index("idx_panel_feature_flags_enabled", "enabled"),
+    )
+
+    name: Mapped[str] = mapped_column(VARCHAR(80), primary_key=True)
+    enabled = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[Optional[str]] = mapped_column(VARCHAR(120), nullable=True)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
     )
 
 class PlanesPago(Base):

@@ -11,8 +11,21 @@ class Settings(BaseSettings):
     PANEL_SHARED_SECRET: str = Field(...)
 
     PANEL_SESSION_COOKIE_NAME: str = "panel_session"
-    PANEL_SESSION_SECURE_COOKIE: bool = False
+    PANEL_SESSION_SECURE_COOKIE: bool | None = None
     PANEL_SESSION_SAMESITE: str = "lax"
+    PANEL_ALLOWED_EMPRESA_ID: int = 1
+    PANEL_INACTIVE_MANAGER_FALLBACK: str = "jefe_operativo"
+    PANEL_ALLOWED_ORIGINS: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5500",
+            "http://127.0.0.1:5500",
+            "http://192.168.50.61:5500",
+            "http://192.168.50.165:5500",
+            "http://192.168.1.106:5500",
+            "http://192.168.1.71:5500",
+            "http://192.168.50.191:5500",
+        ]
+    )
 
     # ============================================================
     # WhatsApp Cloud API (obligatorias)
@@ -74,7 +87,6 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
-        print("ENV DEBUG:", self.DEBUG)
         return (
             f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"

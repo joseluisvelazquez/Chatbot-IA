@@ -29,6 +29,15 @@ from app.services.media_service import handle_incoming_media
 from app.services.message_service import get_message_by_message_id, save_message
 from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.session_service import get_or_create_session, update_session
+from app.services.chat_operations import (
+    initialize_operational_defaults,
+    mark_technical_signal,
+)
+from app.services.panel_notifications import (
+    conversation_operational_payload,
+    publish_new_customer_message,
+    publish_technical_signal,
+)
 from app.services.verification_panel_service import build_verification_snapshot
 from app.services.verification_tracker import STEP_MAP
 from app.websockets.manager import manager
@@ -108,6 +117,7 @@ def build_message_payload(message: Message) -> dict:
 
 
 def build_conversation_payload(chat, message: Message) -> dict:
+    initialize_operational_defaults(chat)
     return {
         "id": chat.id,
         "phone": chat.phone,
@@ -116,18 +126,26 @@ def build_conversation_payload(chat, message: Message) -> dict:
         "last_message_at": message.created_at.isoformat() if message.created_at else "",
         "unread_count": chat.unread_count or 0,
         "folio": str(chat.folio) if chat.folio else None,
+        **conversation_operational_payload(chat),
     }
 
 
 async def broadcast_new_message(chat, message: Message) -> None:
-    await manager.send_to_all({
-        "type": "new_message",
-        "session_id": chat.id,
-        "phone": chat.phone,
-        "conversation": build_conversation_payload(chat, message),
-        "message": build_message_payload(message),
-        "unread_count": chat.unread_count,
-    })
+    message_payload = build_message_payload(message)
+    await manager.send_to_chat_watchers_personalized(
+        chat,
+        lambda context: {
+            "type": "new_message",
+            "session_id": chat.id,
+            "phone": chat.phone,
+            "conversation": {
+                **build_conversation_payload(chat, message),
+                **conversation_operational_payload(chat, user=context),
+            },
+            "message": message_payload,
+            "unread_count": chat.unread_count,
+        },
+    )
 
 
 def count_open_issues(db: Session) -> int:
@@ -230,6 +248,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     total_sessions_delta = 0
     active_sessions_delta = 0
     issues_open_delta = 0
+    technical_keyword = None
 
     try:
         existing_session = (
@@ -247,6 +266,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         open_issues_before = count_open_issues(db)
 
         chat = get_or_create_session(db, phone)
+        initialize_operational_defaults(chat)
 
         if get_message_by_message_id(db, message_id):
             db.rollback()
@@ -280,6 +300,15 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             created_at=event_time,
         )
         chat.unread_count = (chat.unread_count or 0) + 1
+        chat.last_customer_message_at = event_time
+
+        technical_log = mark_technical_signal(
+            db,
+            chat=chat,
+            text=content,
+            detected_by="customer_message",
+        )
+        technical_keyword = technical_log.keyword if technical_log else None
 
         if out_of_order:
             db.commit()
@@ -294,6 +323,37 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 },
             )
             return {"status": "out_of_order_saved"}
+
+        if chat.owner_type != "assistant" or chat.status_operativo != "assistant_active":
+            update_session(
+                session=chat,
+                state=chat.state,
+                last_message=content,
+                previous_state=chat.previous_state,
+                message_id=message_id,
+                last_message_at=max(event_time, utcnow_naive()),
+            )
+            db.commit()
+            db.refresh(chat)
+            db.refresh(saved_msg)
+
+            await publish_new_customer_message(chat, build_message_payload(saved_msg))
+            dashboard_sender = manager.send_to_admins if chat.test_mode else manager.send_to_all
+            await dashboard_sender({
+                "type": "dashboard_update",
+                "payload": {
+                    "messages_in_delta": 1,
+                    "messages_out_delta": 0,
+                    "total_sessions_delta": total_sessions_delta,
+                    "active_sessions_delta": active_sessions_delta,
+                    "issues_open_delta": 0,
+                    "funnel_steps_delta": [],
+                    "session_id": chat.id,
+                },
+            })
+            if technical_keyword:
+                await publish_technical_signal(chat, technical_keyword)
+            return {"status": "human_handoff"}
 
         result = process_message(
             session=chat,
@@ -385,12 +445,13 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         logger.exception("webhook_processing_failed", extra={"message_id": message_id, "phone": phone})
         raise
 
-    await broadcast_new_message(chat, saved_msg)
+    await publish_new_customer_message(chat, build_message_payload(saved_msg))
 
     if bot_msg:
         await broadcast_new_message(chat, bot_msg)
 
-    await manager.send_to_all({
+    dashboard_sender = manager.send_to_admins if chat.test_mode else manager.send_to_all
+    await dashboard_sender({
         "type": "dashboard_update",
         "payload": {
             "messages_in_delta": 1,
@@ -408,6 +469,9 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             "type": "verification_update",
             "payload": snapshot,
         })
+
+    if technical_keyword:
+        await publish_technical_signal(chat, technical_keyword)
 
     if reply:
         asyncio.create_task(

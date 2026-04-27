@@ -74,6 +74,7 @@
 
         <!-- INPUT -->
         <div
+            id="chatComposer"
             class="relative shrink-0 p-2 md:p-3 flex flex-col gap-2
             bg-gray-50 dark:bg-slate-800
             border-t border-gray-200 dark:border-slate-700"
@@ -84,6 +85,7 @@
             <div class="flex gap-2 items-end">
                 <!-- FILE -->
                 <label
+                    id="attachFileBtn"
                     class="h-[42px] w-[42px] flex items-center justify-center
                     rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700
                     transition shrink-0 cursor-pointer"
@@ -114,7 +116,7 @@
                 ></textarea>
 
                 <!-- ENVIAR -->
-                <button onclick="send()"
+                <button id="sendMessageBtn" onclick="send()"
                     class="h-[42px] w-[42px] md:w-auto md:px-4 py-2 inline-flex items-center justify-center bg-green-500 hover:bg-green-600 text-white rounded-lg shrink-0"
                     title="Enviar"
                     aria-label="Enviar">
@@ -142,6 +144,51 @@
                         class="flex-1 grid grid-cols-8 gap-1 overflow-y-auto">
                     </div>
                 </div>
+            </div>
+
+            <div id="composerHint" class="text-xs text-gray-500 mt-1" aria-live="polite"></div>
+        </div>
+    </div>
+</div>
+
+<div
+    id="assignManagerModal"
+    class="hidden fixed inset-0 z-[60] bg-slate-950/60 p-4 md:p-6"
+    aria-hidden="true"
+>
+    <div class="mx-auto flex h-full max-w-2xl items-center justify-center">
+        <div class="w-full max-h-[85vh] overflow-hidden rounded-lg bg-white shadow-2xl dark:bg-slate-900">
+            <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <div class="min-w-0">
+                    <div class="text-sm font-semibold text-slate-900 dark:text-slate-100">Asignar gestor</div>
+                    <div id="assignManagerTitle" class="truncate text-xs text-slate-500 dark:text-slate-400"></div>
+                </div>
+                <button
+                    id="assignManagerClose"
+                    type="button"
+                    class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
+                    aria-label="Cerrar asignacion"
+                    title="Cerrar"
+                >
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <input
+                    id="assignManagerSearch"
+                    type="text"
+                    placeholder="Buscar por nombre, usuario o jefe"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                />
+            </div>
+            <div class="min-h-[280px] max-h-[60vh] overflow-y-auto px-4 py-3">
+                <div id="assignManagerLoading" class="hidden py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                    Cargando gestores...
+                </div>
+                <div id="assignManagerEmpty" class="hidden py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                    No hay gestores activos disponibles.
+                </div>
+                <div id="assignManagerList" class="flex flex-col gap-2"></div>
             </div>
         </div>
     </div>

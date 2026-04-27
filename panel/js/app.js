@@ -244,6 +244,23 @@ function renderUnauthorized(message = "Debes acceder desde SIGA para continuar."
         </div>
     `
 }
+
+async function readAuthFailure(response, fallbackMessage) {
+    try {
+        const contentType = response.headers.get("content-type") || ""
+
+        if (contentType.includes("application/json")) {
+            const payload = await response.json()
+            return payload?.detail || fallbackMessage
+        }
+
+        const text = await response.text()
+        return text?.trim() || fallbackMessage
+    } catch {
+        return fallbackMessage
+    }
+}
+
 export async function logout() {
     try {
         await fetch(getAuthUrl("logout"), {
@@ -263,7 +280,14 @@ export async function logout() {
 }
 async function initAuth() {
     const params = new URLSearchParams(window.location.search)
-    const token = params.get("token")
+    const hashParams = new URLSearchParams(String(window.location.hash || "").replace(/^#\/?/, ""))
+    const token =
+        params.get("token") ||
+        params.get("auth_token") ||
+        params.get("siga_token") ||
+        hashParams.get("token") ||
+        hashParams.get("auth_token") ||
+        hashParams.get("siga_token")
 
     try {
 
@@ -277,12 +301,22 @@ async function initAuth() {
             })
 
             if (!res.ok) {
-                renderUnauthorized("Token inválido o expirado")
+                const message = await readAuthFailure(res, "Token inválido o expirado")
+                window.history.replaceState({}, document.title, window.location.pathname)
+                renderUnauthorized(message)
                 return false
             }
 
+            const user = await res.json()
+            window.currentUser = user
+
             // limpiar URL
             window.history.replaceState({}, document.title, window.location.pathname)
+
+            startSessionHeartbeat()
+            startSessionTimeout()
+
+            return true
         }
 
         // 🔐 2. SIEMPRE intentar validar sesión (cookie)

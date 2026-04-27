@@ -27,6 +27,10 @@ def attach_folio_to_session(db, session, folio):
         state=session.state,
         last_message=session.last_message,
         last_message_at=session.last_message_at,
+        owner_type=getattr(session, "owner_type", None) or "assistant",
+        status_operativo=getattr(session, "status_operativo", None) or "assistant_active",
+        priority=getattr(session, "priority", None) or "normal",
+        test_mode=bool(getattr(session, "test_mode", False)),
     )
 
     db.add(new_session)
@@ -77,6 +81,9 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None) -> 
         phone=phone,
         folio=folio,
         state=ChatState.ESPERA.value,
+        owner_type="assistant",
+        status_operativo="assistant_active",
+        priority="normal",
     )
     db.add(session)
 

@@ -1,15 +1,37 @@
 import {
+    assignConversationManager,
     getConversations,
+    getAvailableManagers,
     getMessages,
+    closeTechnicalIncident,
     markConversationRead,
+    returnConversation,
     sendFileMessage,
     sendMessage,
-    uploadPanelFile,
-    apiRequest
+    takeConversation,
+    transferConversation,
+    uploadPanelFile
 } from "./api.js"
 import { resolveMediaUrl } from "./config.js"
 import { EMOJIS } from "./emojis.js"
-import { getWebSocket } from "./websocket.js"
+import {
+    canAssignManager,
+    canOperateSelected,
+    createAssignManagerModal,
+    createComposerController,
+    createConversationOperationHandlers,
+    createPaginationState,
+    createSidebarController,
+    ensureNewMessagesSeparator,
+    getLastRenderedDate,
+    insertDateSeparator,
+    isUserAtBottom,
+    normalizePreviewIndex,
+    isValidPreviewIndex,
+    removeNewMessagesSeparator,
+    renderHeader as renderHeaderView,
+} from "./chat/index.js"
+import { getWebSocket, subscribe as subscribeWebSocket } from "./websocket.js"
 import { dispatch } from "./store.js"
 import { subscribeStore, getState } from "./store.js"
 import { getSelectedSession, setSelectedSession } from "./app.js"
@@ -22,6 +44,7 @@ import { getSelectedSession, setSelectedSession } from "./app.js"
 let currentSessionId = null
 let lastTyping = 0
 let unsubscribeChatStore = null
+let unsubscribeChatRealtime = null
 let lastLoadTrigger = 0
 let lastLoadedSessionId = null
 let isLoadingChat = false
@@ -34,26 +57,83 @@ let chatLoadRequestId = 0
 let lastMessagesVersion = -1
 let lastMessagesSessionKey = null
 let lastPreviewVersion = -1
+let lastRealtimeResyncAt = 0
 
 const renderedMessageIdsBySession = new Map()
 
 // =========================
 // CONFIG
 // =========================
-const sidebarNodes = new Map()
 const LOAD_COOLDOWN = 500
 const MAX_RENDERED_MESSAGES = 300
 const PAGE_SIZE = 30
+const REALTIME_RESYNC_COOLDOWN_MS = 1500
 
-let paginationState = {
-    offset: 0,
-    loading: false,
-    hasMore: true
+let paginationState = createPaginationState()
+let mobileResizeBound = false
+
+function getCurrentUser() {
+    return window.currentUser || getState().auth?.user || null
 }
 
-let searchTerm = ""
-let filterMode = "all" // "all" | "unread"
-let mobileResizeBound = false
+function isAdmin() {
+    return getCurrentUser()?.role === "admin"
+}
+
+const sidebarController = createSidebarController({
+    getState,
+    loadChat,
+    getCurrentSessionId: () => currentSessionId,
+    getLastLoadedSessionId: () => lastLoadedSessionId,
+    isLoadingChat: () => isLoadingChat,
+    showMobileChat,
+    isAdmin,
+})
+
+const composerController = createComposerController({
+    emojis: EMOJIS,
+    onSend: () => send(),
+    onTyping: () => handleTyping(),
+})
+
+const assignManagerModal = createAssignManagerModal({
+    getAvailableManagers,
+    assignConversationManager,
+    canAssignManager,
+    getSelectedConversation: getSelectedConversationFromState,
+    getCurrentSessionId: () => currentSessionId,
+    onAssigned: (updated) => {
+        dispatch({ type: "conversations/upsert", payload: updated })
+        const session = getSelectedConversationFromState() || updated
+        renderSelectedConversation(session)
+        renderSidebarFromState(getState())
+    },
+    showToast,
+})
+
+const conversationOperations = createConversationOperationHandlers({
+    api: {
+        closeTechnicalIncident,
+        getConversations,
+        returnConversation,
+        takeConversation,
+        transferConversation,
+    },
+    dispatch,
+    getCurrentSessionId: () => currentSessionId,
+    getState,
+    setSelectedSession,
+    setCurrentSessionId: (value) => {
+        currentSessionId = value
+    },
+    setLastLoadedSessionId: (value) => {
+        lastLoadedSessionId = value
+    },
+    showMobileConversationList,
+    showToast,
+    renderSelectedConversation,
+    renderSidebar: (state) => renderSidebarFromState(state),
+})
 
 //Para imagenes 
 let selectedFiles = []
@@ -68,20 +148,6 @@ function trackImageUrl(url) {
 
     imageSet.add(url)
     imageList.push(url)
-}
-
-function normalizePreviewIndex(index, length) {
-    if (!length) return 0
-
-    const numericIndex = Number(index)
-    if (!Number.isFinite(numericIndex)) return 0
-
-    return Math.max(0, Math.min(length - 1, Math.trunc(numericIndex)))
-}
-
-function isValidPreviewIndex(index, length = selectedFiles.length) {
-    const numericIndex = Number(index)
-    return Number.isFinite(numericIndex) && numericIndex >= 0 && Math.trunc(numericIndex) < length
 }
 
 function hidePreviewContainer() {
@@ -140,7 +206,7 @@ function setPreviewIndex(index) {
 function removePreviewFile(index) {
     syncPreviewFromStore()
 
-    if (!isValidPreviewIndex(index)) return false
+    if (!isValidPreviewIndex(index, selectedFiles.length)) return false
 
     dispatch({
         type: "chat/preview/remove_at",
@@ -155,6 +221,180 @@ function clearPreviewFiles() {
     syncPreviewFromStore()
 }
 
+function getToastContainer() {
+    let container = document.getElementById("chatToastContainer")
+    if (container) return container
+
+    container = document.createElement("div")
+    container.id = "chatToastContainer"
+    container.className = "fixed right-4 top-4 z-[70] flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2"
+    document.body.appendChild(container)
+    return container
+}
+
+function showToast(message, tone = "info") {
+    const container = getToastContainer()
+    const toast = document.createElement("div")
+    const tones = {
+        success: "bg-emerald-600 text-white",
+        error: "bg-red-600 text-white",
+        info: "bg-slate-900 text-white",
+    }
+    toast.className = `rounded-lg px-3 py-2 text-sm shadow-lg ${tones[tone] || tones.info}`
+    toast.textContent = message
+    container.appendChild(toast)
+    window.setTimeout(() => {
+        toast.remove()
+        if (!container.childElementCount) {
+            container.remove()
+        }
+    }, 3000)
+}
+
+function renderConversationPlaceholder(message = "Selecciona una conversacion") {
+    const header = document.getElementById("chatHeader")
+    const list = document.getElementById("messages")
+
+    if (header) {
+        header.innerHTML = `<div class="text-sm text-gray-400">${escapeHtml(message)}</div>`
+    }
+
+    if (list) {
+        list.innerHTML = ""
+    }
+
+    removeTyping()
+    removeNewMessagesSeparator()
+    updateComposerState(null)
+}
+
+function clearActiveConversation(options = {}) {
+    const {
+        message = "Selecciona una conversacion",
+        toastMessage = "",
+        toastTone = "info",
+        forceList = false,
+        removeSessionId = null,
+    } = options
+
+    const previousSessionId = currentSessionId
+    const sessionIdToRemove = Number(removeSessionId || 0)
+
+    chatLoadRequestId += 1
+    currentSessionId = null
+    lastLoadedSessionId = null
+    isLoadingChat = false
+    forceRender = false
+    setSelectedSession(null)
+    dispatch({
+        type: "chat/set_loading",
+        payload: { sessionId: null }
+    })
+
+    if (sessionIdToRemove) {
+        dispatch({
+            type: "conversations/remove",
+            payload: { session_id: sessionIdToRemove }
+        })
+    }
+
+    if (previousSessionId != null) {
+        clearRenderedSession(previousSessionId)
+    }
+
+    if (forceList || isMobileChatViewport()) {
+        showMobileConversationList()
+    }
+
+    renderConversationPlaceholder(message)
+
+    if (toastMessage) {
+        showToast(toastMessage, toastTone)
+    }
+}
+
+async function syncConversationVisibilityFromBackend(options = {}) {
+    const { force = false } = options
+    const now = Date.now()
+    if (!force && now - lastRealtimeResyncAt < REALTIME_RESYNC_COOLDOWN_MS) return
+
+    lastRealtimeResyncAt = now
+
+    try {
+        const sessions = await getConversations()
+        dispatch({
+            type: "conversations/loaded",
+            payload: sessions
+        })
+
+        if (!currentSessionId) return
+
+        const refreshedState = getState()
+        const session = refreshedState.conversations.byId[Number(currentSessionId)] || null
+
+        if (!session) {
+            clearActiveConversation({
+                message: "La conversacion ya no esta disponible para tu usuario",
+                forceList: true,
+            })
+            return
+        }
+
+        renderSelectedConversation(session)
+        renderSidebarFromState(refreshedState)
+    } catch (error) {
+        console.error("No se pudo resincronizar conversaciones tras reconexion:", error)
+    }
+}
+
+function handleRealtimeConversationEvent(event) {
+    if (!event || typeof event !== "object") return
+
+    if (event.type === "socket_status") {
+        if (event.status === "connected") {
+            void syncConversationVisibilityFromBackend({ force: true })
+        }
+        return
+    }
+
+    if (event.type === "conversation_removed") {
+        const removedId = Number(event.payload?.session_id || 0)
+        if (!removedId || Number(currentSessionId) !== removedId) return
+
+        clearActiveConversation({
+            message: "La conversacion ya no esta disponible para tu usuario",
+            toastMessage: "La conversacion cambio de owner y ya no esta visible para tu usuario",
+            toastTone: "info",
+            forceList: true,
+        })
+        return
+    }
+
+    if (event.type !== "conversation_update" && event.type !== "chat_operation") {
+        return
+    }
+
+    const sessionId = Number(event.payload?.id || event.payload?.session_id || 0)
+    if (!sessionId || Number(currentSessionId) !== sessionId) return
+
+    const session = getState().conversations.byId[sessionId] || null
+    if (!session) {
+        clearActiveConversation({
+            message: "La conversacion ya no esta disponible para tu usuario",
+            forceList: true,
+        })
+        return
+    }
+
+    renderSelectedConversation(session)
+}
+
+function isChatLoadInvalid(requestId, sessionId) {
+    if (requestId !== chatLoadRequestId) return true
+    if (Number(currentSessionId) !== Number(sessionId)) return true
+    return !Boolean(getState().conversations.byId[Number(sessionId)])
+}
+
 // =========================
 // INIT
 // =========================
@@ -163,6 +403,8 @@ export async function initConversationsPage() {
     window.handleTyping = handleTyping
     window.handleKeyDown = handleKeyDown
     window.autoResize = autoResize
+    window.openAssignManagerModal = openAssignManagerModal
+    window.closeAssignManagerModal = closeAssignManagerModal
     
     // reset visual de la vista al volver a entrar al módulo
     lastLoadedSessionId = null
@@ -181,6 +423,7 @@ export async function initConversationsPage() {
     }
 
     if (unsubscribeChatStore) unsubscribeChatStore()
+    if (unsubscribeChatRealtime) unsubscribeChatRealtime()
 
     let lastConversationSignature = ""
 
@@ -209,6 +452,24 @@ export async function initConversationsPage() {
         if (state.conversations._version !== lastConversationSignature) {
             console.time("renderSidebar")
             renderSidebarFromState(state)
+            const selectedConversation = currentSessionId
+                ? state.conversations.byId[Number(currentSessionId)]
+                : null
+            if (selectedConversation) {
+                renderHeader(
+                    selectedConversation,
+                    selectedConversation.display_name || selectedConversation.name || selectedConversation.phone || "Cliente sin nombre",
+                    selectedConversation.phone || ""
+                )
+                updateComposerState(selectedConversation)
+            } else if (currentSessionId) {
+                clearActiveConversation({
+                    message: "La conversacion ya no esta disponible para tu usuario",
+                    toastMessage: "La conversacion cambio de owner y ya no esta visible para tu usuario",
+                    toastTone: "info",
+                    forceList: true,
+                })
+            }
             console.timeEnd("renderSidebar")
             lastConversationSignature = state.conversations._version
         }
@@ -219,7 +480,17 @@ export async function initConversationsPage() {
         }
     })
 
-    const sessions = await getConversations()
+    unsubscribeChatRealtime = subscribeWebSocket(handleRealtimeConversationEvent)
+
+    let sessions = []
+
+    try {
+        sessions = await getConversations()
+    } catch (error) {
+        console.error("No se pudieron cargar las conversaciones:", error)
+        showToast(error.message || "No se pudieron cargar las conversaciones", "error")
+        sessions = []
+    }
 
     dispatch({
         type: "conversations/loaded",
@@ -228,10 +499,7 @@ export async function initConversationsPage() {
     
     const savedSearch = localStorage.getItem("chatSearch")
     if (savedSearch) {
-        searchTerm = savedSearch
-
-        const input = document.getElementById("searchInput")
-        if (input) input.value = savedSearch
+        sidebarController.hydrateSearch(savedSearch)
     }
 
     console.time("renderSidebar initial")
@@ -307,6 +575,7 @@ export async function initConversationsPage() {
         setupBottomSeparatorCleaner()
         setupSearchAndFilters()
         setupDragAndDrop()
+        setupAssignManagerModal()
 
         const fileInput = document.getElementById("fileInput")
 
@@ -497,177 +766,11 @@ function formatButtonMessage(text) {
     `
 }
 
-function isUserAtBottom(container) {
-    const threshold = 60
-    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-}
-
-function getLastRenderedDate(list) {
-    const nodes = list.querySelectorAll("[data-message-date]")
-    if (!nodes.length) return null
-    return nodes[nodes.length - 1].dataset.messageDate
-}
-
-function insertDateSeparator(list, dateString) {
-    const separator = document.createElement("div")
-    separator.className = "flex justify-center my-2"
-    separator.dataset.separatorType = "date"
-
-    separator.innerHTML = `
-        <div class="text-xs px-3 py-1 rounded-full bg-gray-300 dark:bg-slate-700 text-gray-700 dark:text-gray-200">
-            ${formatDateSeparator(dateString)}
-        </div>
-    `
-
-    list.appendChild(separator)
-}
-
-function ensureNewMessagesSeparator(list) {
-    if (document.getElementById("newMessagesSeparator")) return
-
-    const separator = document.createElement("div")
-    separator.id = "newMessagesSeparator"
-    separator.className = "flex justify-center my-2"
-    separator.dataset.separatorType = "new"
-
-    separator.innerHTML = `
-        <div class="text-xs px-3 py-1 rounded-full bg-blue-500 text-white">
-            Nuevos mensajes
-        </div>
-    `
-
-    list.appendChild(separator)
-}
-
-function removeNewMessagesSeparator() {
-    const separator = document.getElementById("newMessagesSeparator")
-    if (separator) separator.remove()
-}
-
 // =========================
 // SIDEBAR
 // =========================
 function renderSidebarFromState(state) {
-    const list = document.getElementById("conversationList")
-    if (!list) return
-
-    let sessions = state.conversations.order
-        .map(id => state.conversations.byId[id])
-        .filter(Boolean)
-        .sort((a, b) => {
-            const dateA = new Date(a.last_message_at || 0).getTime()
-            const dateB = new Date(b.last_message_at || 0).getTime()
-            return dateB - dateA
-        })
-
-    // 🔍 FILTRO POR BÚSQUEDA
-    if (searchTerm) {
-        sessions = sessions.filter(s => {
-            const phone = s.phone?.toLowerCase() || ""
-            const name = s.name?.toLowerCase() || ""
-            const cuenta = String(s.no_cuenta || "").toLowerCase()
-            const folio = String(s.folio || "").toLowerCase()
-
-            return (
-                phone.includes(searchTerm) ||
-                name.includes(searchTerm) ||
-                cuenta.includes(searchTerm) ||
-                folio.includes(searchTerm)
-            )
-        })
-    }
-
-    // 🟢 FILTRO NO LEÍDOS
-    if (filterMode === "unread") {
-        sessions = sessions.filter(s => (s.unread_count || 0) > 0)
-    }
-
-    const fragment = document.createDocumentFragment()
-    const seen = new Set()
-
-    sessions.forEach((s) => {
-        seen.add(s.id)
-
-        let node = sidebarNodes.get(s.id)
-
-        if (!node) {
-            node = createSidebarNode(s)
-            sidebarNodes.set(s.id, node)
-        }
-
-        updateSidebarNode(node, s)
-        fragment.appendChild(node)
-    })
-
-    sidebarNodes.forEach((node, id) => {
-        if (!seen.has(id)) {
-            sidebarNodes.delete(id)
-        }
-    })
-
-    list.replaceChildren(fragment)
-}
-
-function createSidebarNode(s) {
-    const div = document.createElement("div")
-
-    div.className = `
-        px-4 py-3 cursor-pointer border-b flex justify-between items-center
-        border-gray-200 dark:border-slate-700
-        hover:bg-gray-100 dark:hover:bg-slate-700
-        transition
-    `
-
-    div.dataset.id = s.id
-
-    div.onclick = async () => {
-        if (currentSessionId === s.id && lastLoadedSessionId === s.id && !isLoadingChat) {
-            showMobileChat()
-            return
-        }
-
-        await loadChat(s.id, s.phone, s.name)
-    }
-
-    return div
-}
-
-function updateSidebarNode(node, s) {
-    const isActive = s.id === currentSessionId
-    const displayName = s.display_name || s.name || s.phone || "Cliente sin nombre"
-
-    node.className = `
-        px-4 py-3 cursor-pointer border-b flex justify-between items-center
-        border-gray-200 dark:border-slate-700
-        hover:bg-gray-100 dark:hover:bg-slate-700
-        transition
-        ${isActive ? "bg-blue-100 dark:bg-slate-700" : ""}
-    `
-
-    node.innerHTML = `
-        <div class="min-w-0">
-            <div class="font-semibold truncate">
-                ${escapeHtml(displayName)}
-            </div>
-
-            ${
-                s.no_cuenta
-                ? `<div class="text-xs text-gray-400">
-                        Cuenta: ${escapeHtml(s.no_cuenta)}
-                </div>`
-                : ""
-            }
-
-            <div class="text-xs text-gray-500">
-                ${escapeHtml(s.last_message_at ?? "")}
-            </div>
-        </div>
-
-        ${s.unread_count > 0
-            ? `<span class="bg-green-500 text-white text-xs px-2 py-1 rounded-full shrink-0">${s.unread_count}</span>`
-            : ""
-        }
-    `
+    sidebarController.render(state)
 }
 
 // =========================
@@ -710,7 +813,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
 
     const time = timeOverride || (msg.created_at ? formatTime(msg.created_at) : "")
     const label =
-        msg.direction === "out" ? "Bot 🤖" :
+        msg.direction === "out" ? "Assistant" :
         msg.direction === "agent" ? "Tú 🧑‍💻" :
         msg.direction === "in" ? "Cliente 👤" :
         ""
@@ -1053,70 +1156,31 @@ export async function loadChat(sessionId, phone, name = null) {
 
 
     try {
-        if (requestId !== chatLoadRequestId) return
+        if (isChatLoadInvalid(requestId, numericSessionId)) return
 
-        if (header) {
-            header.innerHTML = `
-                <div class="flex items-center gap-3 w-full min-w-0">
-                    <button
-                        type="button"
-                        onclick="showMobileConversationList()"
-                        class="md:hidden h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-lg
-                        hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition"
-                        title="Volver a conversaciones"
-                        aria-label="Volver a conversaciones"
-                    >
-                        <i data-lucide="arrow-left" class="w-5 h-5"></i>
-                    </button>
-                    <div class="flex min-w-0 flex-col">
-                        <span class="truncate font-semibold text-sm">
-                            ${escapeHtml(displayName)}
-                        </span>
-                        <span class="truncate text-xs text-gray-400">
-                            ${escapeHtml(safePhone ? `+${safePhone}` : "En conversacion")}
-                        </span>
-                    </div>
-                </div>
-            `
-            if (window.lucide) lucide.createIcons()
-        }
+        renderHeader(sessionInfo, displayName, safePhone)
+        updateComposerState(sessionInfo)
 
         try {
-            await apiRequest(`/panel/conversations/${numericSessionId}/read`, {
-                method: "POST"
-            })
+            await markConversationRead(numericSessionId)
         } catch (err) {
-            console.error("Sesión no existe, reseteando...", err)
+            const status = Number(err?.status || 0)
 
-            setSelectedSession(null)
-            localStorage.removeItem("lastSession")
-
-            const fallbackState = getState()
-            const firstId = fallbackState.conversations.order[0]
-            const firstSession = fallbackState.conversations.byId[firstId]
-
-            if (firstSession && Number(firstSession.id) !== numericSessionId) {
-                isLoadingChat = false
-                return loadChat(
-                    firstSession.id,
-                    firstSession.phone,
-                    firstSession.name || null
-                )
+            if (status === 403 || status === 404) {
+                clearActiveConversation({
+                    message: "La conversacion ya no esta disponible para tu usuario",
+                    toastMessage: err.message || "Ya no tienes acceso a esta conversacion",
+                    toastTone: "error",
+                    forceList: true,
+                    removeSessionId: numericSessionId,
+                })
+                return
             }
 
-            currentSessionId = null
-            lastLoadedSessionId = null
-
-            if (list) list.innerHTML = ""
-            if (header) {
-                header.innerHTML = `
-                    <div class="text-sm text-gray-400">Sin conversación seleccionada</div>
-                `
-            }
-
-            return
+            console.error("No se pudo marcar la conversacion como leida:", err)
+            showToast(err.message || "No se pudo actualizar la lectura de la conversacion", "error")
         }
-        await markConversationRead(numericSessionId)
+        if (isChatLoadInvalid(requestId, numericSessionId)) return
 
         paginationState = {
             offset: 0,
@@ -1135,8 +1199,28 @@ export async function loadChat(sessionId, phone, name = null) {
             renderMessagesIncremental(state)
         }
 
-        const messages = await getMessages(numericSessionId, PAGE_SIZE, 0)
-        if (requestId !== chatLoadRequestId) return
+        let messages = null
+        try {
+            messages = await getMessages(numericSessionId, PAGE_SIZE, 0)
+        } catch (error) {
+            const status = Number(error?.status || 0)
+
+            if (status === 403 || status === 404) {
+                clearActiveConversation({
+                    message: "La conversacion ya no esta disponible para tu usuario",
+                    toastMessage: error.message || "La conversacion ya no esta disponible para tu usuario",
+                    toastTone: "error",
+                    forceList: true,
+                    removeSessionId: numericSessionId,
+                })
+                return
+            }
+
+            console.error("No se pudieron cargar los mensajes del chat:", error)
+            showToast(error.message || "No se pudieron cargar los mensajes del chat", "error")
+            return
+        }
+        if (isChatLoadInvalid(requestId, numericSessionId)) return
 
         let messagesList = []
 
@@ -1174,16 +1258,13 @@ export async function loadChat(sessionId, phone, name = null) {
 // SEND
 // =========================
 function handleKeyDown(event) {
-    if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault()
-        send()
-    }
+    composerController.handleKeyDown(event)
 }
-
 export async function send() {
     if (isSendingMessage) return
 
     syncPreviewFromStore()
+
     const input = document.getElementById("messageInput")
     if (!input) return
 
@@ -1191,6 +1272,18 @@ export async function send() {
 
     if (!content && selectedFiles.length === 0) return
     if (!currentSessionId) return
+
+    const session = getSelectedConversationFromState()
+
+    if (!session) {
+        showToast("Conversación inválida", "error")
+        return
+    }
+
+    if (!canOperateSelected(session)) {
+        showToast("No puedes responder este chat con el owner actual", "error")
+        return
+    }
 
     const textToSend = content
 
@@ -1200,12 +1293,9 @@ export async function send() {
     removeTyping()
 
     try {
-        // 📦 SI HAY ARCHIVOS
         if (selectedFiles.length > 0) {
-
             for (let i = 0; i < selectedFiles.length; i++) {
                 const file = selectedFiles[i]
-
                 const data = await uploadPanelFile(file)
 
                 await sendFileMessage({
@@ -1218,17 +1308,15 @@ export async function send() {
             }
 
             removeAllFiles()
-        } 
-        // 💬 SOLO TEXTO
-        else {
+        } else {
             await sendMessage({
                 session_id: currentSessionId,
                 content: textToSend
             })
         }
-
     } catch (error) {
         console.error("Error enviando mensaje:", error)
+        showToast(error.message || "No se pudo enviar el mensaje", "error")
     } finally {
         isSendingMessage = false
     }
@@ -1372,190 +1460,19 @@ function hideTopLoader() {
 // EMOJIS
 // =========================
 function setupInputHandler() {
-    const input = document.getElementById("messageInput")
-
-    if (!input) {
-        console.warn("No existe #messageInput")
-        return
-    }
-
-    if (input._handleKeyDownRef) {
-        input.removeEventListener("keydown", input._handleKeyDownRef)
-    }
-
-    const handler = function (event) {
-        if (event.key !== "Enter") return
-        if (event.shiftKey) return
-
-        event.preventDefault()
-        send()
-    }
-
-    input._handleKeyDownRef = handler
-    input.addEventListener("keydown", handler)
+    composerController.setupInputHandler()
 }
 
 function setupEmojiPicker() {
-    const btn = document.getElementById("emojiBtn")
-    const container = document.getElementById("emojiPickerContainer")
-    const input = document.getElementById("messageInput")
-
-    if (!btn || !container || !input) return
-
-    if (!container.dataset.init) {
-        container.innerHTML = `
-            <input
-                id="emojiSearch"
-                placeholder="Buscar emoji..."
-                class="h-8 mb-3 px-2 rounded border border-gray-600 bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600 text-black dark:text-white text-sm outline-none focus:border-green-500"
-            />
-            <div
-                id="emojiGrid"
-                class="flex-1 grid grid-cols-8 gap-1 overflow-y-auto"
-            ></div>
-        `
-        container.dataset.init = "true"
-    }
-
-    const grid = container.querySelector("#emojiGrid")
-    const search = container.querySelector("#emojiSearch")
-
-    if (!grid || !search) return
-
-    container.classList.add("hidden")
-
-    function render(list) {
-        grid.innerHTML = ""
-
-        list.forEach((e) => {
-            const btnEmoji = document.createElement("button")
-            btnEmoji.type = "button"
-            btnEmoji.className = `
-                flex items-center justify-center text-xl cursor-pointer
-                rounded-lg
-                hover:bg-gray-200 dark:hover:bg-slate-700
-                transition
-            `
-            btnEmoji.textContent = e.emoji
-
-            btnEmoji.onclick = () => {
-                const start = input.selectionStart ?? input.value.length
-                const end = input.selectionEnd ?? input.value.length
-
-                input.value =
-                    input.value.slice(0, start) +
-                    e.emoji +
-                    input.value.slice(end)
-
-                const pos = start + e.emoji.length
-                input.focus()
-                input.selectionStart = input.selectionEnd = pos
-
-                autoResize(input)
-                container.classList.add("hidden")
-            }
-
-            grid.appendChild(btnEmoji)
-        })
-    }
-
-    render(EMOJIS.slice(0, 200))
-
-    search.oninput = () => {
-        const term = search.value.toLowerCase().trim()
-
-        const filtered = EMOJIS.filter((e) =>
-            e.annotation?.toLowerCase().includes(term) ||
-            e.tags?.some((t) => t.toLowerCase().includes(term))
-        ).slice(0, 200)
-
-        render(filtered)
-    }
-
-    btn.onclick = (e) => {
-        e.stopPropagation()
-        container.classList.toggle("hidden")
-
-        if (!container.classList.contains("hidden")) {
-            search.focus()
-        }
-    }
-
-    container.onclick = (e) => {
-        e.stopPropagation()
-    }
-
-    input.addEventListener("focus", () => {
-        container.classList.add("hidden")
-    })
-
-    if (!container.dataset.outsideCloseBound) {
-        document.addEventListener("click", () => {
-            container.classList.add("hidden")
-        })
-        container.dataset.outsideCloseBound = "true"
-    }
+    composerController.setupEmojiPicker()
 }
 
 function autoResize(el) {
-    if (!el) return
-
-    el.style.height = "auto"
-    const newHeight = Math.min(el.scrollHeight, 120)
-    el.style.height = `${newHeight}px`
-}
-function setActiveFilter(activeBtn, inactiveBtn) {
-    // ACTIVO
-    activeBtn.classList.remove(
-        "bg-gray-200", "text-gray-700",
-        "dark:bg-slate-700", "dark:text-gray-300"
-    )
-    activeBtn.classList.add(
-        "bg-green-600", "text-white",
-        "dark:bg-green-500"
-    )
-
-    // INACTIVO
-    inactiveBtn.classList.remove(
-        "bg-green-600", "text-white",
-        "dark:bg-green-500"
-    )
-    inactiveBtn.classList.add(
-        "bg-gray-200", "text-gray-700",
-        "dark:bg-slate-700", "dark:text-gray-300"
-    )
+    composerController.autoResize(el)
 }
 
 function setupSearchAndFilters() {
-    const input = document.getElementById("searchInput")
-    const btnAll = document.getElementById("filterAll")
-    const btnUnread = document.getElementById("filterUnread")
-
-    if (input) {
-        input.addEventListener("input", (e) => {
-            searchTerm = e.target.value.toLowerCase().trim()
-            localStorage.setItem("chatSearch", searchTerm)
-            renderSidebarFromState(getState())
-        })
-    }
-
-    if (btnAll) {
-        btnAll.onclick = () => {
-            filterMode = "all"
-            setActiveFilter(btnAll, btnUnread)
-            renderSidebarFromState(getState())
-        }
-    }
-
-    if (btnUnread) {
-        
-
-        btnUnread.onclick = () => {
-            filterMode = "unread"
-            setActiveFilter(btnUnread, btnAll)
-            renderSidebarFromState(getState())
-        }
-    }
+    sidebarController.setupFilters()
 }
 
 function renderMultiPreview() {
@@ -1607,7 +1524,7 @@ function renderMultiPreview() {
                             id="mainPreviewImage"
                             class="w-full max-w-[520px] h-[200px] flex flex-col items-center justify-center bg-gray-300 dark:bg-slate-700 rounded-xl text-sm"
                         >
-                            📄 ${mainFile.name}
+                            📄 ${escapeHtml(mainFile.name)}
                         </div>
                     `
                 }
@@ -1726,7 +1643,7 @@ function updatePreviewUI() {
                 id="mainPreviewImage"
                 class="w-full max-w-[520px] h-[200px] flex items-center justify-center bg-gray-300 dark:bg-slate-700 rounded-xl text-sm"
             >
-                📄 ${file.name}
+                📄 ${escapeHtml(file.name)}
             </div>
         `
     }
@@ -1746,7 +1663,7 @@ function updatePreviewUI() {
 window.selectPreview = function (index) {
     syncPreviewFromStore()
 
-    if (!isValidPreviewIndex(index)) return
+    if (!isValidPreviewIndex(index, selectedFiles.length)) return
 
     const nextIndex = Math.trunc(Number(index))
     if (nextIndex === selectedPreviewIndex) return
@@ -1759,6 +1676,116 @@ window.removeAllFiles = function () {
     clearPreviewFiles()
     hidePreviewContainer()
 }
+
+function getSelectedConversationFromState() {
+    if (!currentSessionId) return null
+    return getState().conversations.byId[Number(currentSessionId)] || null
+}
+
+function closeAssignManagerModal() {
+    assignManagerModal.close()
+}
+
+async function openAssignManagerModal() {
+    await assignManagerModal.open()
+}
+
+function setupAssignManagerModal() {
+    assignManagerModal.setup()
+}
+
+function renderSelectedConversation(session) {
+    if (!session) {
+        renderHeader(null, '', '')
+        updateComposerState(null)
+        return
+    }
+
+    renderHeader(
+        session,
+        session.display_name || session.name || session.phone || 'Cliente sin nombre',
+        session.phone || ''
+    )
+    updateComposerState(session)
+}
+
+function renderHeader(session, displayName, phone) {
+    renderHeaderView({
+        session,
+        displayName,
+        phone,
+        onBack: showMobileConversationList,
+        onTakeChat: takeCurrentChat,
+        onTransferToSupport: () => transferCurrentChat('soporte_tecnico'),
+        onReturnToAssistant: () => returnCurrentChat('assistant'),
+        onReturnToGestor: () => returnCurrentChat('gestor'),
+        onAssignManager: openAssignManagerModal,
+        onCloseSupport: closeSupportToOriginalGestor,
+    })
+}
+
+function updateComposerState(session) {
+    composerController.updateComposerState(session)
+}
+
+async function applyConversationOperation(operation) {
+    const sessionId = Number(currentSessionId || 0)
+    const previousStatus = sessionId
+        ? getState().conversations.byId[sessionId]?.status_operativo ?? null
+        : null
+
+    const result = await conversationOperations.applyConversationOperation(operation)
+    if (!sessionId) return result
+
+    const nextSession = getState().conversations.byId[sessionId] || null
+    const nextStatus = nextSession?.status_operativo ?? null
+
+    if (!nextSession || previousStatus !== nextStatus) {
+        forceRender = true
+    }
+
+    return result
+}
+
+function takeCurrentChat() {
+    return applyConversationOperation((sessionId) => takeConversation(sessionId))
+}
+
+function transferCurrentChat(destination) {
+    return applyConversationOperation((sessionId) => transferConversation(sessionId, destination))
+}
+
+function returnCurrentChat(destination) {
+    return applyConversationOperation((sessionId) => returnConversation(sessionId, destination))
+}
+
+function closeSupportToOriginalGestor() {
+    return applyConversationOperation((sessionId) => closeTechnicalIncident(sessionId, {
+        return_action: 'return_to_original_gestor',
+        fallback_destination: 'jefe_operativo',
+    }))
+}
+
+function closeSupportToAssistant() {
+    return applyConversationOperation((sessionId) => closeTechnicalIncident(sessionId, {
+        return_action: 'assistant_active',
+        fallback_destination: 'jefe_operativo',
+    }))
+}
+
+function closeSupportToQueue() {
+    return applyConversationOperation((sessionId) => closeTechnicalIncident(sessionId, {
+        return_action: 'cola_general',
+        fallback_destination: 'jefe_operativo',
+    }))
+}
+
+window.takeCurrentChat = takeCurrentChat
+window.transferCurrentChat = transferCurrentChat
+window.returnCurrentChat = returnCurrentChat
+window.closeSupportToOriginalGestor = closeSupportToOriginalGestor
+window.closeSupportToAssistant = closeSupportToAssistant
+window.closeSupportToQueue = closeSupportToQueue
 
 function setupDragAndDrop() {
     const container = document.getElementById("messagesContainer")

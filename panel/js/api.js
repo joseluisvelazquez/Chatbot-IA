@@ -1,156 +1,349 @@
-import { renderNetworkError, renderSessionExpired } from "./app.js";
-import { getApiUrl } from "./config.js";
+import { renderSessionExpired } from "./app.js"
+import { getApiUrl } from "./config.js"
+
+const DEFAULT_TIMEOUT = 15000
+const RETRYABLE_METHODS = new Set(["GET"])
+
+export class ApiRequestError extends Error {
+    constructor(message, options = {}) {
+        super(message)
+        this.name = "ApiRequestError"
+        this.status = options.status ?? null
+        this.payload = options.payload ?? null
+        this.isNetworkError = Boolean(options.isNetworkError)
+        this.isTimeout = Boolean(options.isTimeout)
+    }
+}
+
+function normalizeEndpoint(endpoint = "") {
+    const value = String(endpoint || "").trim()
+    return value.startsWith("/") ? value : `/${value}`
+}
 
 function buildRequestConfig(options = {}) {
     const config = {
         method: "GET",
         credentials: "include",
         ...options,
-    };
+    }
 
-    const headers = new Headers(options.headers || {});
-    const isFormData = config.body instanceof FormData;
+    config.method = String(config.method || "GET").toUpperCase()
+
+    const headers = new Headers(options.headers || {})
+    const isFormData = config.body instanceof FormData
 
     if (!headers.has("Accept")) {
-        headers.set("Accept", "application/json");
+        headers.set("Accept", "application/json")
     }
 
     if (!isFormData && config.body != null && !headers.has("Content-Type")) {
-        headers.set("Content-Type", "application/json");
+        headers.set("Content-Type", "application/json")
     }
 
     if (isFormData) {
-        headers.delete("Content-Type");
+        headers.delete("Content-Type")
     }
 
-    config.headers = headers;
-    return config;
+    config.headers = headers
+    return config
 }
 
 async function parseResponse(response) {
-    if (response.status === 204) {
-        return null;
-    }
+    if (response.status === 204) return null
 
-    const contentType = response.headers.get("content-type") || "";
+    const contentType = response.headers.get("content-type") || ""
+
     if (contentType.includes("application/json")) {
-        return response.json();
+        return response.json()
     }
 
-    return response.text();
+    return response.text()
+}
+
+function shouldRetry(method, status) {
+    if (!RETRYABLE_METHODS.has(method)) return false
+    return [408, 429, 502, 503, 504].includes(Number(status))
+}
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function fetchWithTimeout(url, config, timeoutMs) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+        return await fetch(url, {
+            ...config,
+            signal: controller.signal,
+        })
+    } finally {
+        clearTimeout(timer)
+    }
 }
 
 export async function apiRequest(endpoint, options = {}) {
-    const config = buildRequestConfig(options);
+    const config = buildRequestConfig(options)
+    const method = config.method
+    const url = getApiUrl(normalizeEndpoint(endpoint))
+    const timeoutMs = Number(options.timeout || DEFAULT_TIMEOUT)
 
-    try {
-        const response = await fetch(getApiUrl(endpoint), config);
+    let attempts = 0
+    const maxAttempts = RETRYABLE_METHODS.has(method) ? 2 : 1
 
-        if (!response.ok) {
-            let detail = `HTTP ${response.status}`;
+    while (attempts < maxAttempts) {
+        attempts++
 
-            try {
-                const errorData = await parseResponse(response);
+        try {
+            const response = await fetchWithTimeout(url, config, timeoutMs)
 
-                if (typeof errorData === "string" && errorData.trim()) {
-                    detail = errorData;
-                } else if (errorData?.detail) {
-                    detail = errorData.detail;
+            if (!response.ok) {
+                let detail = `HTTP ${response.status}`
+                let payload = null
+
+                try {
+                    const errorData = await parseResponse(response)
+                    payload = errorData
+
+                    if (typeof errorData === "string" && errorData.trim()) {
+                        detail = errorData
+                    } else if (errorData?.detail) {
+                        detail = errorData.detail
+                    }
+                } catch {}
+
+                if (response.status === 401) {
+                    renderSessionExpired()
+
+                    throw new ApiRequestError("Sesion expirada", {
+                        status: 401,
+                        payload,
+                    })
                 }
-            } catch (_) {}
 
-            if (response.status === 401) {
-                renderSessionExpired();
-                throw new Error("Sesion expirada");
+                if (response.status === 403) {
+                    throw new ApiRequestError(detail || "No autorizado", {
+                        status: 403,
+                        payload,
+                    })
+                }
+
+                if (response.status === 409) {
+                    throw new ApiRequestError(detail || "Conflicto de operación", {
+                        status: 409,
+                        payload,
+                    })
+                }
+
+                if (response.status === 422) {
+                    throw new ApiRequestError(detail || "Solicitud inválida", {
+                        status: 422,
+                        payload,
+                    })
+                }
+
+                if (response.status === 429) {
+                    throw new ApiRequestError(detail || "Demasiadas solicitudes", {
+                        status: 429,
+                        payload,
+                    })
+                }
+
+                if (response.status >= 500) {
+                    if (shouldRetry(method, response.status) && attempts < maxAttempts) {
+                        await delay(600)
+                        continue
+                    }
+
+                    throw new ApiRequestError(
+                        detail || "Error interno del servidor",
+                        {
+                            status: response.status,
+                            payload,
+                        }
+                    )
+                }
+
+                throw new ApiRequestError(detail, {
+                    status: response.status,
+                    payload,
+                })
             }
 
-            if (response.status === 403) {
-                throw new Error("No autorizado");
+            return await parseResponse(response)
+
+        } catch (error) {
+            if (error instanceof ApiRequestError) {
+                throw error
             }
 
-            throw new Error(detail);
-        }
+            if (error?.name === "AbortError") {
+                throw new ApiRequestError(
+                    "La solicitud tardó demasiado",
+                    {
+                        isTimeout: true,
+                    }
+                )
+            }
 
-        return await parseResponse(response);
-    } catch (error) {
-        if (error instanceof TypeError || error?.message?.includes("Failed to fetch")) {
-            renderNetworkError();
-        }
+            if (
+                error instanceof TypeError ||
+                String(error?.message || "").includes("Failed to fetch")
+            ) {
+                if (attempts < maxAttempts) {
+                    await delay(500)
+                    continue
+                }
 
-        throw error;
+                throw new ApiRequestError(
+                    "No se pudo conectar con el servidor",
+                    {
+                        isNetworkError: true,
+                    }
+                )
+            }
+
+            throw new ApiRequestError(
+                error?.message || "Error inesperado",
+                { payload: error }
+            )
+        }
     }
 }
 
-export async function fetchVerifications(status = "", limit = 500, offset = 0) {
-    const params = new URLSearchParams();
+/* ===========================
+   ENDPOINTS
+=========================== */
 
-    if (status) params.set("status", status);
-    params.set("limit", String(limit));
-    params.set("offset", String(offset));
-
-    return apiRequest(`/panel/verifications?${params.toString()}`);
+export const fetchVerifications = (status = "", limit = 500, offset = 0) => {
+    const params = new URLSearchParams()
+    if (status) params.set("status", status)
+    params.set("limit", String(limit))
+    params.set("offset", String(offset))
+    return apiRequest(`/panel/verifications?${params}`)
 }
 
-export async function getVerificationBySession(sessionId) {
-    return apiRequest(`/panel/verifications/${sessionId}`);
-}
+export const getVerificationBySession = (sessionId) =>
+    apiRequest(`/panel/verifications/${sessionId}`)
 
-export async function updateInconsistenciaPanelResolution(inconsistenciaId, resolvedByPanel, uiId = null) {
-    return apiRequest(`/panel/inconsistencias/${inconsistenciaId}/resolution`, {
+export const updateInconsistenciaPanelResolution = (
+    inconsistenciaId,
+    resolvedByPanel,
+    uiId = null
+) =>
+    apiRequest(`/panel/inconsistencias/${inconsistenciaId}/resolution`, {
         method: "PATCH",
         body: JSON.stringify({
             resolved_by_panel: Boolean(resolvedByPanel),
             ui_id: uiId,
         }),
-    });
-}
+    })
 
-export async function getConversations(limit = 500, offset = 0) {
-    return apiRequest(`/panel/conversations?limit=${limit}&offset=${offset}`);
-}
+export const getConversations = (limit = 100, offset = 0) =>
+    apiRequest(`/panel/conversations?limit=${limit}&offset=${offset}`)
 
-export async function getMessages(sessionId, limit = 30, offset = 0) {
-    return apiRequest(`/panel/messages/${sessionId}?limit=${limit}&offset=${offset}`);
-}
+export const getAvailableManagers = () =>
+    apiRequest("/panel/gestores-disponibles")
 
-export async function markConversationRead(sessionId) {
-    return apiRequest(`/panel/conversations/${sessionId}/read`, {
+export const assignConversationManager = (sessionId, username, reason = null) =>
+    apiRequest(`/panel/chats/${sessionId}/assign-manager`, {
         method: "POST",
-    });
-}
+        body: JSON.stringify({ username, reason }),
+    })
 
-export async function sendMessage(payload) {
-    return apiRequest("/panel/messages", {
+export const syncInactiveManagerAssignments = () =>
+    apiRequest("/panel/maintenance/reassign-inactive-managers", {
+        method: "POST",
+    })
+
+export const getMessages = (sessionId, limit = 30, offset = 0) =>
+    apiRequest(`/panel/messages/${sessionId}?limit=${limit}&offset=${offset}`)
+
+export const markConversationRead = (sessionId) =>
+    apiRequest(`/panel/conversations/${sessionId}/read`, {
+        method: "POST",
+    })
+
+export const sendMessage = (payload) =>
+    apiRequest("/panel/messages", {
         method: "POST",
         body: JSON.stringify(payload),
-    });
-}
+    })
 
-export async function sendFileMessage(payload) {
-    return apiRequest("/panel/messages/file", {
+export const sendFileMessage = (payload) =>
+    apiRequest("/panel/messages/file", {
         method: "POST",
         body: JSON.stringify(payload),
-    });
-}
+    })
 
-export async function uploadPanelFile(file) {
-    const formData = new FormData();
-    formData.append("file", file);
+export const takeConversation = (sessionId, targetRole = null) =>
+    apiRequest(`/panel/conversations/${sessionId}/take`, {
+        method: "POST",
+        body: JSON.stringify({ target_role: targetRole }),
+    })
+
+export const releaseConversation = (sessionId, reason = null) =>
+    apiRequest(`/panel/conversations/${sessionId}/release`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+    })
+
+export const transferConversation = (sessionId, destination, options = {}) =>
+    apiRequest(`/panel/conversations/${sessionId}/transfer`, {
+        method: "POST",
+        body: JSON.stringify({
+            destination,
+            destination_user_id: options.destination_user_id || null,
+            reason: options.reason || null,
+        }),
+    })
+
+export const returnConversation = (sessionId, destination, options = {}) =>
+    apiRequest(`/panel/conversations/${sessionId}/return/${destination}`, {
+        method: "POST",
+        body: JSON.stringify({
+            destination_user_id: options.destination_user_id || null,
+            reason: options.reason || null,
+        }),
+    })
+
+export const closeTechnicalIncident = (sessionId, options = {}) =>
+    apiRequest(`/panel/conversations/${sessionId}/technical/close`, {
+        method: "POST",
+        body: JSON.stringify({
+            resolution: options.resolution || null,
+            return_action:
+                options.return_action || "return_to_original_gestor",
+            fallback_destination:
+                options.fallback_destination || "jefe_operativo",
+        }),
+    })
+
+export const getFeatureFlags = () =>
+    apiRequest("/panel/feature-flags")
+
+export const updateFeatureFlag = (name, enabled, description = null) =>
+    apiRequest(`/panel/feature-flags/${encodeURIComponent(name)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled, description }),
+    })
+
+export const uploadPanelFile = (file) => {
+    const formData = new FormData()
+    formData.append("file", file)
 
     return apiRequest("/panel/upload", {
         method: "POST",
         body: formData,
-    });
+    })
 }
 
-export async function getDashboardSummary() {
-    return apiRequest("/panel/dashboard/summary");
-}
+export const getDashboardSummary = () =>
+    apiRequest("/panel/dashboard/summary")
 
-export async function getDashboardFunnel(days = 7) {
-    return apiRequest(`/panel/dashboard/funnel?days=${days}`);
-}
+export const getDashboardFunnel = (days = 7) =>
+    apiRequest(`/panel/dashboard/funnel?days=${days}`)
 
-export async function getDashboardStateTimes(days = 7) {
-    return apiRequest(`/panel/dashboard/state-times?days=${days}`);
-}
+export const getDashboardStateTimes = (days = 7) =>
+    apiRequest(`/panel/dashboard/state-times?days=${days}`)
