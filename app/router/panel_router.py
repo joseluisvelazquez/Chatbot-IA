@@ -36,6 +36,7 @@ from app.services.verification_panel_service import (
     resolve_panel_current_step,
 )
 from app.services.inconsistencias_service import mark_panel_resolution
+from app.services.siga_bridge_integration import enrich_verification_with_bridge
 from app.db.models import BitacoraVentas
 
 # ORDEN REAL DEL FLOW 
@@ -604,8 +605,9 @@ def get_verifications(
         "has_more": (offset + len(result)) < total,
     }
 @router.get("/verifications/{session_id}")
-def get_verification_by_session(
+async def get_verification_by_session(
     session_id: int,
+    refresh_siga: bool = False,
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),
 ):
@@ -689,7 +691,7 @@ def get_verification_by_session(
     # =========================
     # 📦 RESPONSE FINAL
     # =========================
-    return {
+    item = {
         "session_id": session.id,
         "folio": folio,
         "name": None,  # opcional: puedes resolverlo igual que conversations
@@ -715,6 +717,14 @@ def get_verification_by_session(
             else f"https://siga.mxcomp.com.mx/ventas/{folio}"
         ),
     }
+    if user.role in ("admin", "jefe_operativo"):
+        return await enrich_verification_with_bridge(
+            item,
+            company_id=user.empresa_id,
+            bypass_cache=refresh_siga,
+        )
+
+    return item
 
 
 @router.patch("/inconsistencias/{inconsistencia_id}/resolution")

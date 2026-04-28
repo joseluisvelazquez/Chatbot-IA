@@ -29,6 +29,7 @@ from app.services.media_service import handle_incoming_media
 from app.services.message_service import get_message_by_message_id, save_message
 from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.session_service import get_or_create_session, update_session
+from app.services.siga_bridge_integration import lookup_customer_for_incoming_phone
 from app.services.verification_panel_service import build_verification_snapshot
 from app.services.verification_tracker import STEP_MAP
 from app.websockets.manager import manager
@@ -375,6 +376,15 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             db.refresh(bot_msg)
 
         snapshot = build_verification_snapshot(db, chat)
+
+        if settings.SIGA_BRIDGE_ENABLED:
+            asyncio.create_task(
+                lookup_customer_for_incoming_phone(
+                    phone,
+                    company_id=1,
+                    session_id=chat.id,
+                )
+            )
 
     except IntegrityError:
         db.rollback()

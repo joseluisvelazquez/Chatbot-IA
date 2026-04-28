@@ -1,12 +1,17 @@
 import {
     getDashboardSummary,
     getDashboardFunnel,
-    getDashboardStateTimes
+    getDashboardStateTimes,
+    getSigaBridgeMetrics
 } from "./api.js";
 import { dispatch, subscribeStore, getState } from "./store.js"
 
 let funnelChartInstance = null;
 let unsubscribeDashboardStore = null
+
+function canViewSigaBridgeMetrics() {
+    return ["admin", "jefe_operativo"].includes(window.currentUser?.role);
+}
 
 async function loadSummary() {
     try {
@@ -119,10 +124,51 @@ async function loadStateTimes() {
     }
 }
 
+async function loadSigaBridgeMetrics() {
+    const panel = document.getElementById("sigaBridgeMetricsPanel")
+    if (!panel || !canViewSigaBridgeMetrics()) {
+        return
+    }
+
+    panel.classList.remove("hidden")
+
+    try {
+        const metrics = await getSigaBridgeMetrics()
+        renderSigaBridgeMetrics(metrics || {})
+    } catch (e) {
+        const errorEl = document.getElementById("sigaBridgeMetricsError")
+        if (errorEl) {
+            errorEl.textContent = "Metricas SIGA no disponibles"
+            errorEl.classList.remove("hidden")
+        }
+        console.warn("Error SIGA Bridge metrics:", e)
+    }
+}
+
+function renderMetricValue(id, value) {
+    const el = document.getElementById(id)
+    if (el) el.textContent = value
+}
+
+function renderSigaBridgeMetrics(metrics) {
+    const errors = metrics.errors || {}
+    const hitRatio = Number(metrics.cache_hit_ratio || 0)
+
+    renderMetricValue("sigaBridgeLatency", `${Number(metrics.avg_latency_ms || 0).toFixed(2)} ms`)
+    renderMetricValue("sigaBridgeCacheHit", `${Math.round(hitRatio * 100)}%`)
+    renderMetricValue("sigaBridgeTimeouts", metrics.timeouts ?? 0)
+    renderMetricValue("sigaBridgeRateLimits", metrics.rate_limit_hits ?? errors["429"] ?? 0)
+    renderMetricValue("sigaBridge400", errors["400"] ?? 0)
+    renderMetricValue("sigaBridge401", errors["401"] ?? 0)
+    renderMetricValue("sigaBridge429", errors["429"] ?? 0)
+    renderMetricValue("sigaBridge500", errors["500"] ?? 0)
+}
+
 export function initDashboardPage() {
     loadSummary()
     loadFunnel()
     loadStateTimes()
+    loadSigaBridgeMetrics()
 
     if (unsubscribeDashboardStore) unsubscribeDashboardStore()
 

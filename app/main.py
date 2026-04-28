@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.router.auth_router import router as auth_router
 from app.router.panel_router import router as panel_router
 from app.router.media_router import router as media_router
+from app.router.siga_bridge_router import router as siga_bridge_router
 
 
 
@@ -22,6 +23,7 @@ app.include_router(webhook_router)
 app.include_router(panel_router)
 app.include_router(media_router)
 app.include_router(auth_router)  
+app.include_router(siga_bridge_router)
 app.mount("/panel", StaticFiles(directory=str(PANEL_DIR), html=True), name="panel")
 app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 

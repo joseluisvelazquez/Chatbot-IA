@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-PanelRole = Literal["admin", "ventas", "cobranza", "sistemas", "viewer"]
+PanelRole = Literal["admin", "ventas", "cobranza", "sistemas", "jefe_operativo", "viewer"]
 
 
 @dataclass(frozen=True)

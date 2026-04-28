@@ -43,6 +43,51 @@
 
     </div>
 
+    <div id="sigaBridgeMetricsPanel" class="hidden bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-4 md:p-5">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h3 class="text-sm font-semibold">SIGA Bridge</h3>
+                <p class="text-xs text-gray-500 dark:text-slate-400">Observabilidad operativa</p>
+            </div>
+            <div id="sigaBridgeMetricsError" class="hidden text-xs text-amber-600 dark:text-amber-300"></div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+                <p class="text-xs text-gray-500 dark:text-slate-400">Latencia prom.</p>
+                <div id="sigaBridgeLatency" class="mt-1 text-lg font-semibold">0 ms</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+                <p class="text-xs text-gray-500 dark:text-slate-400">Cache hit</p>
+                <div id="sigaBridgeCacheHit" class="mt-1 text-lg font-semibold">0%</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+                <p class="text-xs text-gray-500 dark:text-slate-400">Timeouts</p>
+                <div id="sigaBridgeTimeouts" class="mt-1 text-lg font-semibold">0</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+                <p class="text-xs text-gray-500 dark:text-slate-400">Rate limit</p>
+                <div id="sigaBridgeRateLimits" class="mt-1 text-lg font-semibold">0</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+                <p class="text-xs text-gray-500 dark:text-slate-400">400</p>
+                <div id="sigaBridge400" class="mt-1 text-lg font-semibold">0</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+                <p class="text-xs text-gray-500 dark:text-slate-400">401</p>
+                <div id="sigaBridge401" class="mt-1 text-lg font-semibold">0</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+                <p class="text-xs text-gray-500 dark:text-slate-400">429</p>
+                <div id="sigaBridge429" class="mt-1 text-lg font-semibold">0</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+                <p class="text-xs text-gray-500 dark:text-slate-400">500</p>
+                <div id="sigaBridge500" class="mt-1 text-lg font-semibold">0</div>
+            </div>
+        </div>
+    </div>
+
     <!-- FUNNEL -->
     <div class="card">
         <h3 class="card-title">Funnel</h3>

@@ -91,8 +91,15 @@ export async function fetchVerifications(status = "", limit = 500, offset = 0) {
     return apiRequest(`/panel/verifications?${params.toString()}`);
 }
 
-export async function getVerificationBySession(sessionId) {
-    return apiRequest(`/panel/verifications/${sessionId}`);
+export async function getVerificationBySession(sessionId, options = {}) {
+    const params = new URLSearchParams();
+
+    if (options.refreshSiga) {
+        params.set("refresh_siga", "true");
+    }
+
+    const query = params.toString();
+    return apiRequest(`/panel/verifications/${sessionId}${query ? `?${query}` : ""}`);
 }
 
 export async function updateInconsistenciaPanelResolution(inconsistenciaId, resolvedByPanel, uiId = null) {
@@ -153,4 +160,8 @@ export async function getDashboardFunnel(days = 7) {
 
 export async function getDashboardStateTimes(days = 7) {
     return apiRequest(`/panel/dashboard/state-times?days=${days}`);
+}
+
+export async function getSigaBridgeMetrics() {
+    return apiRequest("/panel/siga-bridge/metrics");
 }

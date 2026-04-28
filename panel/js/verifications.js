@@ -1,6 +1,6 @@
 import { fetchVerifications, getVerificationBySession, updateInconsistenciaPanelResolution } from "./api.js";
 import { navigateTo, setSelectedSession } from "./app.js";
-import { dispatch, subscribeStore } from "./store.js";
+import { dispatch, getState, subscribeStore } from "./store.js";
 
 let currentVerificationStatus = "";
 let drawerCloseEventsBound = false;
@@ -13,6 +13,7 @@ let verificationRequestId = 0;
 
 const verificationRowCache = new Map();
 const pendingInconsistenciaUpdates = new Set();
+const pendingVerificationDetailRequests = new Map();
 
 const SEVERITY_ORDER = {
     critica: 3,
@@ -25,6 +26,14 @@ const SEVERITY_LABELS = {
     moderada: "Moderada",
     leve: "Leve",
 };
+
+function canUseSigaBridgeOps() {
+    return ["admin", "jefe_operativo"].includes(window.currentUser?.role);
+}
+
+function isVerificationDetailRequestActive(sessionId) {
+    return pendingVerificationDetailRequests.has(String(sessionId || ""));
+}
 
 function getDrawerElements() {
     return {
@@ -200,7 +209,179 @@ function buildDrawerSignature(item) {
                 ? entry.elementos_faltantes
                 : [],
         })),
+        siga_bridge: item.siga_bridge || null,
     });
+}
+
+function firstBridgeRecord(data, collectionKeys = []) {
+    if (Array.isArray(data)) {
+        return data.length && typeof data[0] === "object" ? data[0] : null;
+    }
+
+    if (!data || typeof data !== "object") {
+        return null;
+    }
+
+    for (const key of collectionKeys) {
+        const value = data[key];
+        if (Array.isArray(value) && value.length && typeof value[0] === "object") {
+            return value[0];
+        }
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+            return value;
+        }
+    }
+
+    return data;
+}
+
+function firstBridgeValue(record, keys = []) {
+    if (!record || typeof record !== "object") {
+        return null;
+    }
+
+    for (const key of keys) {
+        const value = record[key];
+        if (value !== undefined && value !== null && value !== "") {
+            return value;
+        }
+    }
+
+    return null;
+}
+
+function bridgePaymentsCount(data) {
+    if (Array.isArray(data)) {
+        return data.length;
+    }
+
+    if (!data || typeof data !== "object") {
+        return null;
+    }
+
+    for (const key of ["payments", "pagos", "items", "data"]) {
+        if (Array.isArray(data[key])) {
+            return data[key].length;
+        }
+    }
+
+    return null;
+}
+
+function sigaBridgeStatusLabel(status) {
+    const map = {
+        ok: "SIGA OK",
+        timeout: "SIGA timeout",
+        fallback_local: "SIGA fallback local",
+    };
+
+    return map[status] || "SIGA fallback local";
+}
+
+function sigaBridgeStatusClass(status) {
+    const map = {
+        ok: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+        timeout: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+        fallback_local: "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
+    };
+
+    return map[status] || map.fallback_local;
+}
+
+function renderSigaBridgeSummary(item = {}) {
+    const bridge = item.siga_bridge;
+    if (!canUseSigaBridgeOps() || !bridge?.enabled) {
+        return "";
+    }
+
+    const status = bridge.status || (bridge.available ? "ok" : "fallback_local");
+    const statusLabel = sigaBridgeStatusLabel(status);
+    const statusClass = sigaBridgeStatusClass(status);
+    const updatedAt = bridge.updated_at ? ui.formatDateTime(bridge.updated_at) : "-";
+    const sourceLabel = bridge.source === "siga_bridge" && bridge.available
+        ? "Datos desde SIGA"
+        : "Datos locales";
+    const isRefreshing = isVerificationDetailRequestActive(item.session_id);
+
+    if (!bridge.available) {
+        return `
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <div class="text-xs font-medium uppercase tracking-wide">SIGA</div>
+                        <div class="mt-1">${ui.escapeHtml(sourceLabel)}</div>
+                    </div>
+                    <span class="rounded-full px-2.5 py-1 text-xs font-medium ${statusClass}">
+                        ${ui.escapeHtml(statusLabel)}
+                    </span>
+                </div>
+                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <span class="text-xs">Actualizado: ${ui.escapeHtml(updatedAt)}</span>
+                    <button
+                        id="refreshSigaBridgeButton"
+                        type="button"
+                        class="inline-flex items-center justify-center rounded-lg bg-amber-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+                        ${isRefreshing ? "disabled" : ""}
+                    >
+                        ${isRefreshing ? "Actualizando..." : "Actualizar datos SIGA"}
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
+    const customer = firstBridgeRecord(bridge.customer, ["customers", "customer", "clientes", "cliente"]);
+    const account = firstBridgeRecord(bridge.account, ["accounts", "account", "cuentas", "cuenta"]);
+
+    const customerName = firstBridgeValue(customer, ["name", "nombre", "nombre_completo", "cliente"]) || item.name || "-";
+    const status = firstBridgeValue(account, ["estatus", "estado", "status"]) || "-";
+    const balance = firstBridgeValue(account, ["saldo", "balance", "saldo_actual"]) || "-";
+    const plan = firstBridgeValue(account, ["plan", "periodicidad", "frecuencia_pago"]) || "-";
+    const paymentsCount = bridgePaymentsCount(bridge.payments);
+
+    return `
+        <div class="rounded-xl border border-blue-100 bg-blue-50 p-4 dark:border-blue-950 dark:bg-blue-950/25">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h4 class="text-xs font-medium uppercase tracking-wide text-blue-700 dark:text-blue-300">SIGA</h4>
+                    <div class="mt-1 text-xs text-blue-700/70 dark:text-blue-300/70">
+                        ${ui.escapeHtml(sourceLabel)} | Actualizado: ${ui.escapeHtml(updatedAt)}
+                    </div>
+                </div>
+                <span class="rounded-full px-2.5 py-1 text-xs font-medium ${statusClass}">
+                    ${ui.escapeHtml(statusLabel)}
+                </span>
+            </div>
+            <div class="grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
+                <div>
+                    <p class="text-blue-700/70 dark:text-blue-300/70">Cliente</p>
+                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(customerName)}</p>
+                </div>
+                <div>
+                    <p class="text-blue-700/70 dark:text-blue-300/70">Estado</p>
+                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(status)}</p>
+                </div>
+                <div>
+                    <p class="text-blue-700/70 dark:text-blue-300/70">Saldo</p>
+                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(balance)}</p>
+                </div>
+                <div>
+                    <p class="text-blue-700/70 dark:text-blue-300/70">Plan / pagos</p>
+                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(plan)}${paymentsCount == null ? "" : ` / ${paymentsCount}`}</p>
+                </div>
+            </div>
+            <div class="mt-4 flex justify-end">
+                <button
+                    id="refreshSigaBridgeButton"
+                    type="button"
+                    class="inline-flex items-center justify-center rounded-lg bg-blue-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    ${isRefreshing ? "disabled" : ""}
+                >
+                    ${isRefreshing ? "Actualizando..." : "Actualizar datos SIGA"}
+                </button>
+            </div>
+        </div>
+    `;
 }
 
 function updateVerificationKpis(items) {
@@ -370,6 +551,8 @@ function renderDrawerBase(item) {
                 <div id="drawerCliente" class="grid grid-cols-1 gap-3 text-sm md:grid-cols-3"></div>
             </div>
 
+            <div id="drawerSigaBridge" class="mt-4 hidden"></div>
+
             <div class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
                 <h4 class="mb-2 text-xs text-gray-500 dark:text-slate-400">PROGRESO</h4>
                 <div id="drawerProgressBar"></div>
@@ -448,6 +631,18 @@ function updateDrawer(item) {
                 <p>${ui.escapeHtml(item.no_cuenta || "-")}</p>
             </div>
         `;
+    }
+
+    const sigaBridgeEl = document.getElementById("drawerSigaBridge");
+    if (sigaBridgeEl) {
+        const bridgeHtml = renderSigaBridgeSummary(item);
+        sigaBridgeEl.innerHTML = bridgeHtml;
+        sigaBridgeEl.classList.toggle("hidden", !bridgeHtml);
+
+        const refreshButton = document.getElementById("refreshSigaBridgeButton");
+        if (refreshButton) {
+            refreshButton.onclick = () => refreshVerificationDetail(item, { force: true });
+        }
     }
 
     const progressBar = document.getElementById("drawerProgressBar");
@@ -642,6 +837,50 @@ function openVerificationDetail(item) {
 
     overlay.classList.remove("opacity-0", "pointer-events-none");
     overlay.classList.add("opacity-100");
+
+    refreshVerificationDetail(item);
+}
+
+async function refreshVerificationDetail(item, options = {}) {
+    const sessionKey = String(item?.session_id || "");
+    if (!sessionKey) return;
+
+    const activeRequest = pendingVerificationDetailRequests.get(sessionKey);
+    if (activeRequest) {
+        return activeRequest;
+    }
+
+    const request = (async () => {
+        try {
+            const latest = await getVerificationBySession(item.session_id, {
+                refreshSiga: Boolean(options.force),
+            });
+            if (!latest?.session_id || String(latest.session_id) !== sessionKey) {
+                return;
+            }
+
+            dispatch({
+                type: "verifications/upsert",
+                payload: latest,
+            });
+        } catch (error) {
+            console.warn("No se pudo refrescar detalle de verificacion:", error);
+        } finally {
+            pendingVerificationDetailRequests.delete(sessionKey);
+            if (String(lastDrawerSessionId || "") === sessionKey) {
+                const next = getState().verifications.bySessionId[sessionKey] || item;
+                updateDrawer(next);
+            }
+        }
+    })();
+
+    pendingVerificationDetailRequests.set(sessionKey, request);
+    if (String(lastDrawerSessionId || "") === sessionKey) {
+        const current = getState().verifications.bySessionId[sessionKey] || item;
+        updateDrawer(current);
+    }
+
+    return request;
 }
 
 function updateVerificationRow(row, item) {
