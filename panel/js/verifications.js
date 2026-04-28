@@ -10,6 +10,7 @@ let lastRenderedVerificationFilter = null;
 let lastDrawerSessionId = null;
 let lastDrawerSignature = "";
 let verificationRequestId = 0;
+let isRenderingVerifications = false;
 
 const verificationRowCache = new Map();
 const pendingInconsistenciaUpdates = new Set();
@@ -33,6 +34,29 @@ function canUseSigaBridgeOps() {
 
 function isVerificationDetailRequestActive(sessionId) {
     return pendingVerificationDetailRequests.has(String(sessionId || ""));
+}
+
+function reportVerificationError(scope, error) {
+    console.error(`[verifications] ${scope}:`, error);
+}
+
+function cancelStaleVerificationDetailRequests(activeSessionKey = null) {
+    for (const [sessionKey, requestState] of pendingVerificationDetailRequests.entries()) {
+        if (activeSessionKey != null && sessionKey === activeSessionKey) {
+            continue;
+        }
+
+        requestState.cancelled = true;
+        pendingVerificationDetailRequests.delete(sessionKey);
+    }
+}
+
+function renderVerificationError(message = "Error renderizando verificaciones") {
+    try {
+        setVerificationState({ type: "error", message });
+    } catch (error) {
+        reportVerificationError("render_error_state_failed", error);
+    }
 }
 
 function getDrawerElements() {
@@ -268,35 +292,35 @@ function bridgePaymentsCount(data) {
     return null;
 }
 
-function sigaBridgeStatusLabel(status) {
+function sigaBridgeStatusLabel(bridgeStatus) {
     const map = {
         ok: "SIGA OK",
         timeout: "SIGA timeout",
         fallback_local: "SIGA fallback local",
     };
 
-    return map[status] || "SIGA fallback local";
+    return map[bridgeStatus] || "SIGA fallback local";
 }
 
-function sigaBridgeStatusClass(status) {
+function sigaBridgeStatusClass(bridgeStatus) {
     const map = {
         ok: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
         timeout: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
         fallback_local: "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
     };
 
-    return map[status] || map.fallback_local;
+    return map[bridgeStatus] || map.fallback_local;
 }
 
 function renderSigaBridgeSummary(item = {}) {
     const bridge = item.siga_bridge;
-    if (!canUseSigaBridgeOps() || !bridge?.enabled) {
+    if (!canUseSigaBridgeOps() || !bridge || typeof bridge !== "object" || !bridge.enabled) {
         return "";
     }
 
-    const status = bridge.status || (bridge.available ? "ok" : "fallback_local");
-    const statusLabel = sigaBridgeStatusLabel(status);
-    const statusClass = sigaBridgeStatusClass(status);
+    const bridgeHealthStatus = bridge.status || (bridge.available ? "ok" : "fallback_local");
+    const bridgeStatusLabel = sigaBridgeStatusLabel(bridgeHealthStatus);
+    const bridgeStatusClass = sigaBridgeStatusClass(bridgeHealthStatus);
     const updatedAt = bridge.updated_at ? ui.formatDateTime(bridge.updated_at) : "-";
     const sourceLabel = bridge.source === "siga_bridge" && bridge.available
         ? "Datos desde SIGA"
@@ -311,8 +335,8 @@ function renderSigaBridgeSummary(item = {}) {
                         <div class="text-xs font-medium uppercase tracking-wide">SIGA</div>
                         <div class="mt-1">${ui.escapeHtml(sourceLabel)}</div>
                     </div>
-                    <span class="rounded-full px-2.5 py-1 text-xs font-medium ${statusClass}">
-                        ${ui.escapeHtml(statusLabel)}
+                    <span class="rounded-full px-2.5 py-1 text-xs font-medium ${bridgeStatusClass}">
+                        ${ui.escapeHtml(bridgeStatusLabel)}
                     </span>
                 </div>
                 <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -334,7 +358,7 @@ function renderSigaBridgeSummary(item = {}) {
     const account = firstBridgeRecord(bridge.account, ["accounts", "account", "cuentas", "cuenta"]);
 
     const customerName = firstBridgeValue(customer, ["name", "nombre", "nombre_completo", "cliente"]) || item.name || "-";
-    const status = firstBridgeValue(account, ["estatus", "estado", "status"]) || "-";
+    const accountStatus = firstBridgeValue(account, ["estatus", "estado", "status"]) || "-";
     const balance = firstBridgeValue(account, ["saldo", "balance", "saldo_actual"]) || "-";
     const plan = firstBridgeValue(account, ["plan", "periodicidad", "frecuencia_pago"]) || "-";
     const paymentsCount = bridgePaymentsCount(bridge.payments);
@@ -348,8 +372,8 @@ function renderSigaBridgeSummary(item = {}) {
                         ${ui.escapeHtml(sourceLabel)} | Actualizado: ${ui.escapeHtml(updatedAt)}
                     </div>
                 </div>
-                <span class="rounded-full px-2.5 py-1 text-xs font-medium ${statusClass}">
-                    ${ui.escapeHtml(statusLabel)}
+                <span class="rounded-full px-2.5 py-1 text-xs font-medium ${bridgeStatusClass}">
+                    ${ui.escapeHtml(bridgeStatusLabel)}
                 </span>
             </div>
             <div class="grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
@@ -359,7 +383,7 @@ function renderSigaBridgeSummary(item = {}) {
                 </div>
                 <div>
                     <p class="text-blue-700/70 dark:text-blue-300/70">Estado</p>
-                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(status)}</p>
+                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(accountStatus)}</p>
                 </div>
                 <div>
                     <p class="text-blue-700/70 dark:text-blue-300/70">Saldo</p>
@@ -388,18 +412,28 @@ function updateVerificationKpis(items) {
     const total = document.getElementById("kpiTotal");
     if (!total) return;
 
-    document.getElementById("kpiTotal").textContent = items.length;
-    document.getElementById("kpiInProgress").textContent =
-        items.filter((item) => item.status === "in_progress").length;
-    document.getElementById("kpiInconsistent").textContent =
-        items.filter((item) => item.status === "inconsistent").length;
-    document.getElementById("kpiCompleted").textContent =
-        items.filter((item) => item.status === "completed").length;
+    const safeItems = Array.isArray(items) ? items : [];
+    const inProgress = document.getElementById("kpiInProgress");
+    const inconsistent = document.getElementById("kpiInconsistent");
+    const completed = document.getElementById("kpiCompleted");
+
+    total.textContent = safeItems.length;
+    if (inProgress) {
+        inProgress.textContent = safeItems.filter((item) => item?.status === "in_progress").length;
+    }
+    if (inconsistent) {
+        inconsistent.textContent = safeItems.filter((item) => item?.status === "inconsistent").length;
+    }
+    if (completed) {
+        completed.textContent = safeItems.filter((item) => item?.status === "completed").length;
+    }
 }
 
 function closeVerificationDrawer() {
     const { drawer, overlay } = getDrawerElements();
     if (!drawer || !overlay) return;
+
+    cancelStaleVerificationDetailRequests(null);
 
     dispatch({
         type: "verifications/select",
@@ -542,41 +576,51 @@ function renderDrawerBase(item) {
     const { body } = getDrawerElements();
     if (!body) return;
 
-    body.innerHTML = `
-        <div class="flex h-full flex-col text-gray-900 dark:text-white">
-            <div id="drawerHeader"></div>
+    try {
+        body.innerHTML = `
+            <div class="flex h-full flex-col text-gray-900 dark:text-white">
+                <div id="drawerHeader"></div>
 
-            <div class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-                <h4 class="mb-2 text-xs text-gray-500 dark:text-slate-400">CLIENTE</h4>
-                <div id="drawerCliente" class="grid grid-cols-1 gap-3 text-sm md:grid-cols-3"></div>
-            </div>
-
-            <div id="drawerSigaBridge" class="mt-4 hidden"></div>
-
-            <div class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-                <h4 class="mb-2 text-xs text-gray-500 dark:text-slate-400">PROGRESO</h4>
-                <div id="drawerProgressBar"></div>
-                <div id="drawerProgressMeta" class="mt-3 flex justify-between text-xs text-gray-500 dark:text-slate-400"></div>
-            </div>
-
-            <div class="mt-4 flex-1 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-                <div class="flex flex-col gap-3 border-b border-gray-200 pb-3 dark:border-slate-700">
-                    <div class="flex items-center justify-between gap-3">
-                        <h4 class="text-xs text-gray-500 dark:text-slate-400">INCONSISTENCIAS</h4>
-                        <div id="drawerSeveritySummary" class="flex flex-wrap justify-end gap-2"></div>
-                    </div>
+                <div class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+                    <h4 class="mb-2 text-xs text-gray-500 dark:text-slate-400">CLIENTE</h4>
+                    <div id="drawerCliente" class="grid grid-cols-1 gap-3 text-sm md:grid-cols-3"></div>
                 </div>
-                <div id="drawerInconsistencias" class="mt-4"></div>
+
+                <div id="drawerSigaBridge" class="mt-4 hidden"></div>
+
+                <div class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+                    <h4 class="mb-2 text-xs text-gray-500 dark:text-slate-400">PROGRESO</h4>
+                    <div id="drawerProgressBar"></div>
+                    <div id="drawerProgressMeta" class="mt-3 flex justify-between text-xs text-gray-500 dark:text-slate-400"></div>
+                </div>
+
+                <div class="mt-4 flex-1 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+                    <div class="flex flex-col gap-3 border-b border-gray-200 pb-3 dark:border-slate-700">
+                        <div class="flex items-center justify-between gap-3">
+                            <h4 class="text-xs text-gray-500 dark:text-slate-400">INCONSISTENCIAS</h4>
+                            <div id="drawerSeveritySummary" class="flex flex-wrap justify-end gap-2"></div>
+                        </div>
+                    </div>
+                    <div id="drawerInconsistencias" class="mt-4"></div>
+                </div>
+
+                <div id="drawerFooter" class="mt-4"></div>
             </div>
+        `;
 
-            <div id="drawerFooter" class="mt-4"></div>
-        </div>
-    `;
-
-    updateDrawer(item);
+        updateDrawer(item);
+    } catch (error) {
+        reportVerificationError("render_drawer_base_failed", error);
+        body.innerHTML = `
+            <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                No se pudo renderizar el detalle. El panel sigue disponible.
+            </div>
+        `;
+    }
 }
 
 function updateDrawer(item) {
+    try {
     const severityHeader = getSeverityCounts(item).total
         ? renderSeverityBadge(getHighestSeverity(item))
         : `<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">Sin inconsistencias</span>`;
@@ -641,7 +685,9 @@ function updateDrawer(item) {
 
         const refreshButton = document.getElementById("refreshSigaBridgeButton");
         if (refreshButton) {
-            refreshButton.onclick = () => refreshVerificationDetail(item, { force: true });
+            refreshButton.onclick = () => {
+                void refreshVerificationDetail(item, { force: true });
+            };
         }
     }
 
@@ -804,41 +850,58 @@ function updateDrawer(item) {
         const goToChatBtn = document.getElementById("goToChat");
         if (goToChatBtn) {
             goToChatBtn.onclick = async () => {
-                closeVerificationDrawer();
+                try {
+                    closeVerificationDrawer();
 
-                setSelectedSession({
-                    sessionId: item.session_id,
-                    phone: item.phone,
-                    name: item.name,
-                });
+                    setSelectedSession({
+                        sessionId: item.session_id,
+                        phone: item.phone,
+                        name: item.name,
+                    });
 
-                await navigateTo("conversations");
+                    await navigateTo("conversations");
+                } catch (error) {
+                    reportVerificationError("go_to_chat_failed", error);
+                }
             };
         }
+    }
+    } catch (error) {
+        reportVerificationError("update_drawer_failed", error);
     }
 }
 
 function openVerificationDetail(item) {
-    const { drawer, overlay } = getDrawerElements();
-    if (!drawer || !overlay) return;
+    try {
+        const { drawer, overlay } = getDrawerElements();
+        if (!drawer || !overlay) return;
 
-    lastDrawerSessionId = String(item.session_id);
-    lastDrawerSignature = buildDrawerSignature(item);
+        const sessionKey = String(item?.session_id || "");
+        if (!sessionKey) return;
 
-    dispatch({
-        type: "verifications/select",
-        payload: item.session_id,
-    });
+        cancelStaleVerificationDetailRequests(sessionKey);
 
-    renderDrawerBase(item);
+        lastDrawerSessionId = sessionKey;
+        lastDrawerSignature = buildDrawerSignature(item);
 
-    drawer.classList.remove("translate-x-full");
-    drawer.classList.add("translate-x-0");
+        dispatch({
+            type: "verifications/select",
+            payload: item.session_id,
+        });
 
-    overlay.classList.remove("opacity-0", "pointer-events-none");
-    overlay.classList.add("opacity-100");
+        renderDrawerBase(item);
 
-    refreshVerificationDetail(item);
+        drawer.classList.remove("translate-x-full");
+        drawer.classList.add("translate-x-0");
+
+        overlay.classList.remove("opacity-0", "pointer-events-none");
+        overlay.classList.add("opacity-100");
+
+        void refreshVerificationDetail(item);
+    } catch (error) {
+        reportVerificationError("open_detail_failed", error);
+        renderVerificationError("Error abriendo detalle");
+    }
 }
 
 async function refreshVerificationDetail(item, options = {}) {
@@ -847,14 +910,23 @@ async function refreshVerificationDetail(item, options = {}) {
 
     const activeRequest = pendingVerificationDetailRequests.get(sessionKey);
     if (activeRequest) {
-        return activeRequest;
+        return activeRequest.promise;
     }
 
-    const request = (async () => {
+    const requestState = {
+        cancelled: false,
+        promise: null,
+    };
+
+    requestState.promise = (async () => {
         try {
             const latest = await getVerificationBySession(item.session_id, {
                 refreshSiga: Boolean(options.force),
             });
+            if (requestState.cancelled || String(lastDrawerSessionId || "") !== sessionKey) {
+                return;
+            }
+
             if (!latest?.session_id || String(latest.session_id) !== sessionKey) {
                 return;
             }
@@ -866,21 +938,24 @@ async function refreshVerificationDetail(item, options = {}) {
         } catch (error) {
             console.warn("No se pudo refrescar detalle de verificacion:", error);
         } finally {
-            pendingVerificationDetailRequests.delete(sessionKey);
-            if (String(lastDrawerSessionId || "") === sessionKey) {
+            if (pendingVerificationDetailRequests.get(sessionKey) === requestState) {
+                pendingVerificationDetailRequests.delete(sessionKey);
+            }
+
+            if (!requestState.cancelled && String(lastDrawerSessionId || "") === sessionKey) {
                 const next = getState().verifications.bySessionId[sessionKey] || item;
                 updateDrawer(next);
             }
         }
     })();
 
-    pendingVerificationDetailRequests.set(sessionKey, request);
+    pendingVerificationDetailRequests.set(sessionKey, requestState);
     if (String(lastDrawerSessionId || "") === sessionKey) {
         const current = getState().verifications.bySessionId[sessionKey] || item;
         updateDrawer(current);
     }
 
-    return request;
+    return requestState.promise;
 }
 
 function updateVerificationRow(row, item) {
@@ -904,8 +979,11 @@ function renderVerificationRows(items, validKeys) {
     if (!tbody) return;
 
     const fragment = document.createDocumentFragment();
+    const safeItems = Array.isArray(items) ? items : [];
 
-    items.forEach((item) => {
+    safeItems.forEach((item) => {
+        if (!item?.session_id) return;
+
         const sessionKey = String(item.session_id);
         const signature = buildRowSignature(item);
         const cached = verificationRowCache.get(sessionKey) || {
@@ -933,52 +1011,68 @@ function renderVerificationRows(items, validKeys) {
 }
 
 function renderVerificationsFromState(state) {
-    const allItems = state.verifications.order
-        .map((id) => state.verifications.bySessionId[id])
-        .filter(Boolean);
-
-    updateVerificationKpis(allItems);
-
-    let items = allItems;
-
-    if (currentVerificationStatus) {
-        items = items.filter((item) => item.status === currentVerificationStatus);
-    }
-
-    if (!items.length) {
-        renderVerificationRows([], new Set());
-        setVerificationState({ type: "empty" });
+    if (isRenderingVerifications) {
         return;
     }
 
-    const validKeys = new Set(
-        state.verifications.order
-            .map(String)
-            .filter((sessionKey) => {
-                if (!currentVerificationStatus) {
-                    return true;
-                }
+    isRenderingVerifications = true;
 
-                return state.verifications.bySessionId[sessionKey]?.status === currentVerificationStatus;
-            })
-    );
+    try {
+        const verifications = state?.verifications || {};
+        const allItems = Array.isArray(verifications.order)
+            ? verifications.order
+                .map((id) => verifications.bySessionId?.[id])
+                .filter(Boolean)
+            : [];
 
-    renderVerificationRows(items, validKeys);
-    setVerificationState({ type: "success" });
+        updateVerificationKpis(allItems);
+
+        let items = allItems;
+
+        if (currentVerificationStatus) {
+            items = items.filter((item) => item?.status === currentVerificationStatus);
+        }
+
+        if (!items.length) {
+            renderVerificationRows([], new Set());
+            setVerificationState({ type: "empty" });
+            return;
+        }
+
+        const validKeys = new Set(
+            verifications.order
+                .map(String)
+                .filter((sessionKey) => {
+                    if (!currentVerificationStatus) {
+                        return true;
+                    }
+
+                    return verifications.bySessionId?.[sessionKey]?.status === currentVerificationStatus;
+                })
+        );
+
+        renderVerificationRows(items, validKeys);
+        setVerificationState({ type: "success" });
+    } catch (error) {
+        reportVerificationError("render_verifications_failed", error);
+        renderVerificationError();
+    } finally {
+        isRenderingVerifications = false;
+    }
 }
 
-async function loadVerifications(status = "") {
+async function loadVerifications(filterStatus = "") {
     const requestId = ++verificationRequestId;
-    currentVerificationStatus = status;
+    currentVerificationStatus = filterStatus;
     setVerificationState({ type: "loading" });
 
     try {
-        const response = await fetchVerifications(status);
+        const response = await fetchVerifications(filterStatus);
         if (requestId !== verificationRequestId) {
             return;
         }
 
-        const items = response?.data ?? [];
+        const items = Array.isArray(response?.data) ? response.data : [];
 
         dispatch({
             type: "verifications/loaded",
@@ -999,25 +1093,30 @@ async function loadVerifications(status = "") {
 function bindVerificationFilters() {
     document.querySelectorAll(".filter-btn").forEach((button) => {
         button.onclick = () => {
-            document.querySelectorAll(".filter-btn").forEach((item) => {
-                item.classList.remove("bg-blue-500", "text-white");
-                item.classList.add(
+            try {
+                document.querySelectorAll(".filter-btn").forEach((item) => {
+                    item.classList.remove("bg-blue-500", "text-white");
+                    item.classList.add(
+                        "bg-gray-100",
+                        "text-gray-700",
+                        "dark:bg-slate-700",
+                        "dark:text-slate-200",
+                    );
+                });
+
+                button.classList.remove(
                     "bg-gray-100",
                     "text-gray-700",
                     "dark:bg-slate-700",
                     "dark:text-slate-200",
                 );
-            });
+                button.classList.add("bg-blue-500", "text-white");
 
-            button.classList.remove(
-                "bg-gray-100",
-                "text-gray-700",
-                "dark:bg-slate-700",
-                "dark:text-slate-200",
-            );
-            button.classList.add("bg-blue-500", "text-white");
-
-            loadVerifications(button.dataset.status || "");
+                void loadVerifications(button.dataset.status || "");
+            } catch (error) {
+                reportVerificationError("filter_click_failed", error);
+                renderVerificationError("Error aplicando filtro");
+            }
         };
     });
 }
@@ -1040,56 +1139,70 @@ function bindDrawerCloseEvents() {
 }
 
 export function initVerificationsPage() {
-    bindVerificationFilters();
-    bindDrawerCloseEvents();
+    try {
+        bindVerificationFilters();
+        bindDrawerCloseEvents();
 
-    lastRenderedVerificationVersion = -1;
-    lastRenderedVerificationFilter = null;
-    lastDrawerSessionId = null;
-    lastDrawerSignature = "";
+        lastRenderedVerificationVersion = -1;
+        lastRenderedVerificationFilter = null;
+        lastDrawerSessionId = null;
+        lastDrawerSignature = "";
+        cancelStaleVerificationDetailRequests(null);
 
-    loadVerifications();
+        void loadVerifications();
 
-    if (unsubscribeVerificationStore) {
-        unsubscribeVerificationStore();
+        if (unsubscribeVerificationStore) {
+            unsubscribeVerificationStore();
+        }
+
+        unsubscribeVerificationStore = subscribeStore((state) => {
+            try {
+                const verificationVersion = Number(state?.verifications?._version || 0);
+
+                if (
+                    verificationVersion !== lastRenderedVerificationVersion
+                    || currentVerificationStatus !== lastRenderedVerificationFilter
+                ) {
+                    renderVerificationsFromState(state);
+                    lastRenderedVerificationVersion = verificationVersion;
+                    lastRenderedVerificationFilter = currentVerificationStatus;
+                }
+
+                const selected = state?.verifications?.selected;
+                if (!selected) {
+                    cancelStaleVerificationDetailRequests(null);
+                    lastDrawerSessionId = null;
+                    lastDrawerSignature = "";
+                    return;
+                }
+
+                const selectedKey = String(selected);
+                const updated = state.verifications.bySessionId?.[selectedKey];
+                if (!updated) return;
+
+                const signature = buildDrawerSignature(updated);
+
+                if (selectedKey !== lastDrawerSessionId) {
+                    cancelStaleVerificationDetailRequests(selectedKey);
+                    renderDrawerBase(updated);
+                    lastDrawerSessionId = selectedKey;
+                    lastDrawerSignature = signature;
+                    return;
+                }
+
+                if (signature !== lastDrawerSignature) {
+                    updateDrawer(updated);
+                    lastDrawerSignature = signature;
+                }
+            } catch (error) {
+                reportVerificationError("store_subscription_failed", error);
+                renderVerificationError();
+            }
+        });
+    } catch (error) {
+        reportVerificationError("init_failed", error);
+        renderVerificationError("Error iniciando verificaciones");
     }
-
-    unsubscribeVerificationStore = subscribeStore((state) => {
-        const verificationVersion = Number(state.verifications._version || 0);
-
-        if (
-            verificationVersion !== lastRenderedVerificationVersion
-            || currentVerificationStatus !== lastRenderedVerificationFilter
-        ) {
-            renderVerificationsFromState(state);
-            lastRenderedVerificationVersion = verificationVersion;
-            lastRenderedVerificationFilter = currentVerificationStatus;
-        }
-
-        const selected = state.verifications.selected;
-        if (!selected) {
-            lastDrawerSessionId = null;
-            lastDrawerSignature = "";
-            return;
-        }
-
-        const updated = state.verifications.bySessionId[String(selected)];
-        if (!updated) return;
-
-        const signature = buildDrawerSignature(updated);
-
-        if (String(selected) !== lastDrawerSessionId) {
-            renderDrawerBase(updated);
-            lastDrawerSessionId = String(selected);
-            lastDrawerSignature = signature;
-            return;
-        }
-
-        if (signature !== lastDrawerSignature) {
-            updateDrawer(updated);
-            lastDrawerSignature = signature;
-        }
-    });
 }
 
 window.goToSiga = function goToSiga(url) {
