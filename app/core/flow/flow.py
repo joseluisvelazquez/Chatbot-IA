@@ -48,11 +48,32 @@ FLOW = {
             {"id": "INICIO_LLAMADA", "label": "📞 Prefiero llamada"},
         ],
         "options": {
-            "INICIO_SI": ChatState.CONFIRMAR_NOMBRE,
+            "INICIO_SI": ChatState.CONFIRMAR_NOMBRE, # ChatState.RETO_SEGURIDAD,
             "INICIO_LUEGO": ChatState.RECORDATORIO,
             "INICIO_LLAMADA": ChatState.LLAMADA,
-            "affirmative": ChatState.CONFIRMAR_NOMBRE,
+            "affirmative": ChatState.CONFIRMAR_NOMBRE, # ChatState.RETO_SEGURIDAD,
         },
+    },
+
+    ChatState.INICIO2: {
+        "text": msg.INICIO2,
+        "buttons": [
+            {"id": "INICIO_SI", "label": "✅ Sí, adelante"},
+            {"id": "INICIO_LUEGO", "label": "⏰ Recordar más tarde"},
+            {"id": "INICIO_LLAMADA", "label": "📞 Prefiero llamada"},
+        ],
+        "options": {
+            "INICIO_SI": ChatState.CONFIRMAR_NOMBRE, # ChatState.RETO_SEGURIDAD,
+            "INICIO_LUEGO": ChatState.RECORDATORIO,
+            "INICIO_LLAMADA": ChatState.LLAMADA,
+            "affirmative": ChatState.CONFIRMAR_NOMBRE, # ChatState.RETO_SEGURIDAD,
+        },
+    },
+
+    ChatState.SELECCIONAR_FOLIO: {
+        "text": "(Renderizado dinámicamente)",
+        "buttons": [],
+        "options": {}, # Dinámicas
     },
 
     # --------------------------------------
@@ -72,20 +93,6 @@ FLOW = {
     ChatState.CAMBIAR_FOLIO_DESCUENTO: {
         "text": msg.PEDIR_FOLIO,
         "buttons": [],
-    },
-
-    ChatState.CONFIRMAR_FOLIO: {
-        "text": msg.CONFIRMAR_FOLIO_DETECTADO,
-        "buttons": [
-            {"id": "FOLIO_SI", "label": "✅ Sí"},
-            {"id": "FOLIO_NO", "label": "✏️ Cambiar"},
-        ],
-        "options": {
-            "FOLIO_SI": ChatState.CONFIRMAR_NOMBRE,
-            "FOLIO_NO": ChatState.CAMBIAR_FOLIO,
-            "affirmative": ChatState.CONFIRMAR_NOMBRE,
-            "negative": ChatState.CAMBIAR_FOLIO,
-        },
     },
 
     ChatState.CONFIRMAR_FOLIO_DEVOLUCION: {
@@ -393,6 +400,17 @@ FLOW = {
         "buttons": [],
         "options": {
             "REANUDACION": "__RESUME__",
+        },
+    },
+
+    ChatState.RECORDATORIO: {
+        "text": msg.RECORDATORIO_CONFIRMACION,
+        "buttons": [
+            {"id": "REANUDACION", "label": "▶️ Continuar"},
+        ],
+        "options": {
+            "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
         },
     },
 

@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     PANEL_SESSION_SAMESITE: str = "lax"
 
     # ============================================================
+    # Seguridad de API Externa
+    # ============================================================
+    EXTERNAL_TRIGGER_TOKEN: str
+
+    # ============================================================
     # WhatsApp Cloud API (obligatorias)
     # ============================================================
 

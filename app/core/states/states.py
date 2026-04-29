@@ -7,6 +7,10 @@ class ChatState(str, Enum):
     # -------------------------
     ESPERA = "ESPERA"
     INICIO = "INICIO"
+    INICIO2 = "INICIO2"
+    SELECCIONAR_FOLIO = "SELECCIONAR_FOLIO"
+    ESPERANDO_REGISTRO = "ESPERANDO_REGISTRO"
+    RETO_SEGURIDAD = "RETO_SEGURIDAD"
 
     RECORDATORIO_1H = "RECORDATORIO_1H"
     RECORDATORIO_2H = "RECORDATORIO_2H"
@@ -28,7 +32,6 @@ class ChatState(str, Enum):
     # -------------------------
     # Confirmaciones
     # -------------------------
-    CONFIRMAR_FOLIO = "CONFIRMAR_FOLIO"
     CONFIRMAR_NOMBRE = "CONFIRMAR_NOMBRE"
     CONFIRMAR_DOMICILIO = "CONFIRMAR_DOMICILIO"
     CONFIRMAR_FECHA = "CONFIRMAR_FECHA"

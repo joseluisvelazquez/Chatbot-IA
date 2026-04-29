@@ -14,6 +14,10 @@ from app.router.media_router import router as media_router
 
 
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from app.api.external import router as external_router
 
 
 
@@ -22,8 +26,11 @@ app.include_router(webhook_router)
 app.include_router(panel_router)
 app.include_router(media_router)
 app.include_router(auth_router)  
-app.mount("/panel", StaticFiles(directory=str(PANEL_DIR), html=True), name="panel")
-app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+app.include_router(external_router)
+
+app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
+
+app.mount("/media", StaticFiles(directory="/app/media"), name="media")
 
 scheduler = BackgroundScheduler(timezone="UTC")
 

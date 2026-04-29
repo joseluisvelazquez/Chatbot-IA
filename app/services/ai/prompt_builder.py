@@ -290,14 +290,12 @@ def build_inconsistency_prompt(user_text: str, context: ConversationContext) -> 
 
     elif campo == "fecha":
         detalle_campo = """
-    - critica: Cuando la fecha que proporciona el cliente tiene un desfase con la fecha mostrada de más de 3 días o dice que no firmó nada y desconoce la fecha. Se interpreta como un intento de aprovecharse cambiando la fecha para tener más tiempo para pagar.
-    - moderada: Cuando la fecha que indica el cliente tiene un desfase de 1 o 2 días con la fecha mostrada, se interpreta como que fue un malentendido entre el día que se firmó el contrato y el día que se registró en el sistema.
+    - critica: Cuando la fecha que proporciona el cliente es diferente a la fecha mostrada o dice que no firmó nada y desconoce la fecha.
     """
 
     elif campo == "producto":
         detalle_campo = """
-    - critica: Cuando el cliente niega haber comprado un producto. Se interpreta como un intento de evasión no aceptando lo que compró.
-    - moderada: Cuando el producto proporcionado por el cliente está dentro de los productos que se venden pero es diferente al mostrado. Se interpreta como un error al registrar la venta.
+    - critica: Cuando el cliente indica que compró uno distinto al mostrado o niega haber comprado el producto.
     """
 
     elif campo == "estado_producto":
@@ -327,4 +325,35 @@ Criterios:
 Responde SOLO con JSON, sin explicaciones:
 {{"severidad": "leve"|"moderada"|"critica"}}"""
 
+    return prompt.strip()
+
+def build_faq_identification_prompt(user_text: str) -> str:
+    """
+    Prompt especializado para identificar si una duda coincide con una FAQ existente.
+    """
+    faq_list = []
+    for i, item in enumerate(FAQ_DATA):
+        kws = ", ".join(item["keywords"])
+        faq_list.append(f"ID {i}: {kws}")
+
+    faqs_str = "\n".join(faq_list)
+
+    prompt = f"""
+Actúa como un clasificador de preguntas frecuentes (FAQ).
+Tu objetivo es determinar si el mensaje del usuario coincide semánticamente con alguna de las categorías de FAQ listadas abajo.
+
+LISTA DE FAQs:
+{faqs_str}
+
+MENSAJE DEL USUARIO:
+"{user_text}"
+
+INSTRUCCIONES:
+1. Analiza si el mensaje del usuario es una pregunta o duda que encaja en alguna de las categorías.
+2. Considera sinónimos y variaciones (ej. "oxxos" es igual a "oxxo", "cambio el costo" es igual a "cambia el precio").
+3. Si hay un match claro, responde ÚNICAMENTE con el número del ID (ej: 0).
+4. Si NO hay un match o el mensaje es ambiguo, responde ÚNICAMENTE: NONE.
+5. NO des explicaciones ni uses etiquetas.
+
+ID:"""
     return prompt.strip()

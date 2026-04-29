@@ -16,13 +16,13 @@ from app.config.settings import settings
 # -----------------------------
 
 COMPONENTES_MAP = {
-    "FALT_CPU": {"db": "CPU roja", "label": "🔴 CPU roja", "image_env": "IMAGE_ID_CPU"},
-    "FALT_MONITOR": {"db": "Monitor", "label": "🖥️ Monitor", "image_env": "IMAGE_ID_MONITOR"},
-    "FALT_TECLADO": {"db": "Teclado", "label": "⌨️ Teclado", "image_env": "IMAGE_ID_TECLADO"},
-    "FALT_MOUSE": {"db": "Mouse", "label": "🖱️ Mouse", "image_env": "IMAGE_ID_MOUSE"},
-    "FALT_BOCINAS": {"db": "Bocinas", "label": "🔊 Bocinas", "image_env": "IMAGE_ID_BOCINAS"},
-    "FALT_REGULADOR": {"db": "Regulador", "label": "🔌 Regulador", "image_env": "IMAGE_ID_REGULADOR"},
-    "FALT_WIFI": {"db": "Antena WiFi", "label": "📶 Antena WiFi", "image_env": "IMAGE_ID_WIFI"},
+    "FALT_CPU": {"db": "CPU roja", "label": "🔴 CPU roja", "image_env": "IMAGE_ID_CPU", "aliases": ["cpu de color rojo", "cpu rojo", "color rojo", "cpu"]},
+    "FALT_MONITOR": {"db": "Monitor", "label": "🖥️ Monitor", "image_env": "IMAGE_ID_MONITOR", "aliases": ["monitor o pantalla", "pantalla"]},
+    "FALT_TECLADO": {"db": "Teclado", "label": "⌨️ Teclado", "image_env": "IMAGE_ID_TECLADO", "aliases": []},
+    "FALT_MOUSE": {"db": "Mouse", "label": "🖱️ Mouse", "image_env": "IMAGE_ID_MOUSE", "aliases": ["raton", "ratón", "mause"]},
+    "FALT_BOCINAS": {"db": "Bocinas", "label": "🔊 Bocinas", "image_env": "IMAGE_ID_BOCINAS", "aliases": ["par de bocinas", "par", "bocina"]},
+    "FALT_REGULADOR": {"db": "Regulador", "label": "🔌 Regulador", "image_env": "IMAGE_ID_REGULADOR", "aliases": ["regulador de voltaje", "voltaje"]},
+    "FALT_WIFI": {"db": "Antena WiFi", "label": "📶 Antena WiFi", "image_env": "IMAGE_ID_WIFI", "aliases": ["antena", "adaptador wifi", "antena wifi usb"]},
 }
 
 INCONSISTENCIAS_MAP = {
@@ -47,6 +47,17 @@ def handle_cambiar_folio(context):
     venta = obtener_venta_por_folio(context.db, nuevo_folio) if nuevo_folio else None
 
     if not nuevo_folio or not venta:
+        # Flujo Reactivo: El folio es válido pero aún no existe en DB (Solo para verificación normal)
+        if context.state == ChatState.CAMBIAR_FOLIO and nuevo_folio and not venta:
+            context.session.invalid_folio_attempts = 0
+            context.session.folio = nuevo_folio
+            return {
+                "reply": msg.SALA_ESPERA.format(folio=nuevo_folio),
+                "state": ChatState.ESPERANDO_REGISTRO,
+                "buttons": [{"id": "CAMBIAR_FOLIO", "label": "✏️ Cambiar folio"}]
+            }
+            
+        # Flujo de Error: No tiene formato de folio válido, o es devolución/descuento y no existe
         attempts = getattr(context.session, "invalid_folio_attempts", 0) + 1
         context.session.invalid_folio_attempts = attempts
         
@@ -67,11 +78,20 @@ def handle_cambiar_folio(context):
     context.session.invalid_folio_attempts = 0
     context.session.folio = nuevo_folio
 
-    target_state = ChatState.CONFIRMAR_FOLIO
+    target_state = ChatState.INICIO2
     if context.state == ChatState.CAMBIAR_FOLIO_DEVOLUCION:
         target_state = ChatState.CONFIRMAR_FOLIO_DEVOLUCION
     elif context.state == ChatState.CAMBIAR_FOLIO_DESCUENTO:
         target_state = ChatState.CONFIRMAR_FOLIO_DESCUENTO
+
+    if target_state == ChatState.INICIO2:
+        from app.core.states.state_renderer import render_state
+        reply_state, buttons, _ = render_state(target_state, context.session, context.db)
+        return {
+            "reply": reply_state,
+            "state": target_state,
+            "buttons": buttons
+        }
 
     return {
         "reply": msg.CONFIRMAR_FOLIO_DETECTADO.format(folio=nuevo_folio),
@@ -99,13 +119,39 @@ def handle_menu(context):
     # -------------------------
     if context.intent == "MENU_VERIFICACION":
 
-        # si no tiene folio → pedirlo
+        # si la sesión actual ya terminó (FINALIZADO), limpiamos el folio
+        if context.session.folio and context.state == ChatState.FINALIZADO:
+            context.session.folio = None
+
         if not context.session.folio:
-            return {
-                "reply": msg.PEDIR_FOLIO_INICIO,
-                "state": ChatState.CAMBIAR_FOLIO,
-                "buttons": []
-            }
+            from app.siga.siga_repository import obtener_folios_pendientes_por_telefono
+            
+            pendientes = obtener_folios_pendientes_por_telefono(context.db, context.session.phone)
+            
+            if len(pendientes) == 0:
+                return {
+                    "reply": "Actualmente no tienes ninguna verificación pendiente. 😊\n\n¿Hay algo más en lo que te pueda ayudar?",
+                    "state": ChatState.FINALIZADO if context.state == ChatState.FINALIZADO else ChatState.MENU_AYUDA,
+                    "buttons": FLOW.get(ChatState.FINALIZADO if context.state == ChatState.FINALIZADO else ChatState.MENU_AYUDA, {}).get("buttons", [])
+                }
+            elif len(pendientes) == 1:
+                context.session.folio = pendientes[0]
+                target_state = ChatState.INICIO2
+                from app.core.states.state_renderer import render_state
+                reply_state, buttons, _ = render_state(target_state, context.session, context.db)
+                return {
+                    "reply": reply_state,
+                    "state": target_state,
+                    "buttons": buttons
+                }
+            elif len(pendientes) > 1:
+                # Mostrar botones para seleccionar folio (si son > 3, whatsapp client lo convierte en lista)
+                botones = [{"id": f"SELECCIONAR_FOLIO_{f}", "label": f"Folio {f}"} for f in pendientes[:10]]
+                return {
+                    "reply": msg.MULTIPLES_FOLIOS_PENDIENTES.format(cantidad=len(pendientes)),
+                    "state": ChatState.SELECCIONAR_FOLIO,
+                    "buttons": botones
+                }
 
         # si ya tiene estado → continuar (al anterior)
         try:
@@ -120,9 +166,11 @@ def handle_menu(context):
                 ChatState.CAMBIAR_FOLIO,
                 ChatState.CAMBIAR_FOLIO_DEVOLUCION,
                 ChatState.CAMBIAR_FOLIO_DESCUENTO,
-                ChatState.CONFIRMAR_FOLIO,
                 ChatState.CONFIRMAR_FOLIO_DEVOLUCION,
-                ChatState.CONFIRMAR_FOLIO_DESCUENTO
+                ChatState.CONFIRMAR_FOLIO_DESCUENTO,
+                ChatState.ACLARACION,
+                ChatState.FINALIZADO,
+                ChatState.LLAMADA,
             }
             if resume_state in ignore_states:
                 resume_state = ChatState.INICIO
@@ -150,6 +198,49 @@ def handle_menu(context):
 
 def handle_inconsistencia(context):
    return None
+
+# -----------------------------
+# 2.5 SELECCIONAR FOLIO MULTIPLE
+# -----------------------------
+def handle_seleccionar_folio(context):
+    if context.state == ChatState.SELECCIONAR_FOLIO:
+        folio = None
+        
+        # 1. Si el usuario seleccionó una opción de la lista o botón
+        if context.intent and context.intent.startswith("SELECCIONAR_FOLIO_"):
+            folio = context.intent.replace("SELECCIONAR_FOLIO_", "")
+            
+        # 2. Si el usuario escribió el folio manualmente
+        elif context.text:
+            from app.utils.folio_parser import extraer_folio
+            folio = extraer_folio(context.text)
+
+        if folio:
+            # Validar que el folio pertenezca a sus pendientes
+            from app.siga.siga_repository import obtener_folios_pendientes_por_telefono
+            pendientes = obtener_folios_pendientes_por_telefono(context.db, context.session.phone)
+            
+            # Convertimos ambos a string por seguridad
+            if str(folio) in [str(f) for f in pendientes]:
+                context.session.folio = folio
+                
+                target_state = ChatState.INICIO2
+                from app.core.states.state_renderer import render_state
+                reply_state, buttons, _ = render_state(target_state, context.session, context.db)
+                return {
+                    "reply": reply_state,
+                    "state": target_state,
+                    "buttons": buttons
+                }
+            else:
+                # Si escribió un folio que no está en sus pendientes
+                botones = [{"id": f"SELECCIONAR_FOLIO_{f}", "label": f"Folio {f}"} for f in pendientes[:10]]
+                return {
+                    "reply": f"⚠️ El folio *{folio}* no se encuentra en tu lista de compras pendientes.\n\nPor favor selecciona o escribe uno de los folios mostrados:",
+                    "state": ChatState.SELECCIONAR_FOLIO,
+                    "buttons": botones
+                }
+    return None
 
 
 # -----------------------------
@@ -367,17 +458,19 @@ def handle_devolucion(context):
                 ChatState.CAMBIAR_FOLIO,
                 ChatState.CAMBIAR_FOLIO_DEVOLUCION,
                 ChatState.CAMBIAR_FOLIO_DESCUENTO,
-                ChatState.CONFIRMAR_FOLIO,
+                ChatState.CAMBIAR_FOLIO_DESCUENTO,
                 ChatState.CONFIRMAR_FOLIO_DEVOLUCION,
-                ChatState.CONFIRMAR_FOLIO_DESCUENTO
+                ChatState.CONFIRMAR_FOLIO_DESCUENTO,
+                ChatState.FINALIZADO
             }
                 
             if prev_state in ignore_prev_states:
                 # Estaba en el menú, fuera de flujo, o pidiendo folio
+                from app.core.states.state_types import get_menu_ayuda_buttons
                 return {
                     "reply": msg.AYUDA_ALGO_MAS,
                     "state": ChatState.MENU_AYUDA,
-                    "buttons": FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
+                    "buttons": get_menu_ayuda_buttons(context.previous_state)
                 }
             else:
                 # Estaba en medio de la verificación
@@ -490,6 +583,7 @@ def handle_special_cases(context):
         handle_menu,
         handle_cambiar_folio,
         handle_inconsistencia,
+        handle_seleccionar_folio,
         handle_devolucion,  
         handle_componentes,
         handle_verificar_foto,

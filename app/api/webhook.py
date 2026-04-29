@@ -329,24 +329,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 patch=result.inconsistencia_patch,
             )
 
-        if next_state in [
-            ChatState.INCONSISTENCIA,
-            ChatState.ACLARACION,
-            ChatState.LLAMADA,
-        ]:
-            open_or_patch_inconsistencia(
-                db=db,
-                phone=phone,
-                folio=chat.folio,
-                session_id=chat.id,
-                patch={
-                    "evento": {
-                        "ultimo_estado": chat.state,
-                        "causa_estado": next_state.value,
-                        "ultimo_mensaje": text,
-                    }
-                },
-            )
 
         if next_state == ChatState.FINALIZADO:
             close_open_inconsistencia(

@@ -94,6 +94,7 @@ def is_devolucion_query(text: str) -> bool:
         "devolver",
         "devolucion",
         "quiero devolver",
+        "quiero regresar la computadora"
         "cancelar compra",
         "regresar equipo",
         "ya no lo quiero",
@@ -160,9 +161,117 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             except Exception:
                 pass
 
+    from app.core.states.state_types import is_persistent_state, get_menu_ayuda_buttons, is_terminal_state
+
     current_state = ChatState(session.state)
     previous_state = session.previous_state
 
+    # Calcular el nuevo state_previous para preservar el punto de retorno
+    if is_persistent_state(current_state):
+        new_previous_state = current_state.value
+    else:
+        new_previous_state = previous_state
+
+    # ==========================================
+    # ESTADOS DE ESPERA Y ESCALAMIENTO (IGNORAR MENSAJES)
+    # ==========================================
+    escalation_states = {
+        ChatState.ESPERANDO_REGISTRO,
+        ChatState.LLAMADA,
+        ChatState.ACLARACION,
+        ChatState.DEVOLUCION_FINALIZADA
+    }
+    if current_state in escalation_states:
+        if current_state == ChatState.ESPERANDO_REGISTRO and intent == "CAMBIAR_FOLIO":
+            return FlowResult(
+                reply=messages.PEDIR_FOLIO,
+                next_state=ChatState.CAMBIAR_FOLIO,
+                buttons=[],
+                previous_state=new_previous_state
+            )
+            
+        # El sistema está esperando a que el webhook externo cambie el estado
+        # o que un asesor humano atienda la conversación.
+        # Ignoramos cualquier mensaje del usuario para no romper el flujo ni interrumpir.
+        return FlowResult(
+            reply=None,
+            next_state=current_state,
+            buttons=[],
+            previous_state=new_previous_state
+        )
+
+    # ==========================================
+    # VALIDACIÓN DEL RETO DE SEGURIDAD
+    # ==========================================
+#     if current_state == ChatState.RETO_SEGURIDAD:
+#         venta = obtener_venta_por_folio(db, session.folio)
+# 
+#         # Si por alguna razón la venta desapareció de la BD
+#         if not venta or not venta.nombre_completo:
+#             return FlowResult(
+#                 reply="Hubo un problema recuperando los datos del folio. Un asesor te contactará a la brevedad.",
+#                 next_state=ChatState.ACLARACION,
+#                 buttons=[],
+#                 previous_state=new_previous_state
+#             )
+# 
+#         import unicodedata
+#         
+#         # Función interna para limpiar acentos y mayúsculas
+#         def clean_text(txt):
+#             if not txt: return ""
+#             txt = txt.lower().strip()
+#             return unicodedata.normalize('NFKD', txt).encode('ASCII', 'ignore').decode('utf-8')
+# 
+#         # Extraemos el primer nombre real del sistema (ej. "Juan Pablo" -> "Juan")
+#         nombre_completo_real = venta.nombre_completo.strip()
+#         primer_nombre_real = nombre_completo_real.split(" ")[0]
+#         primer_nombre_limpio = clean_text(primer_nombre_real)
+# 
+#         texto_usuario_limpio = clean_text(text)
+# 
+#         # Validación: El primer nombre real debe estar contenido en la respuesta del usuario.
+#         # Esto permite que "Carlos" haga match con "Soy Carlos" o "cárlos"
+#         if primer_nombre_limpio in texto_usuario_limpio:
+#             # ÉXITO: Levantamos el muro, reiniciamos contador y pasamos a confirmar
+#             session.invalid_folio_attempts = 0
+#             _log()
+#             
+#             reply_state, botones, _ = render_state(ChatState.CONFIRMAR_NOMBRE, session, db)
+#             reply = f"{messages.RETO_SEGURIDAD_EXITO}\n\n{reply_state}"
+#             
+#             return FlowResult(
+#                 reply=reply,
+#                 next_state=ChatState.CONFIRMAR_NOMBRE,
+#                 buttons=botones,
+#                 previous_state=new_previous_state
+#             )
+#         else:
+#             # FALLO: Sumamos un error al contador
+#             session.invalid_folio_attempts = (session.invalid_folio_attempts or 0) + 1
+#             intentos_restantes = 3 - session.invalid_folio_attempts
+# 
+#             if intentos_restantes > 0:
+#                 # Le damos otra oportunidad
+#                 reply = messages.RETO_SEGURIDAD_FALLO.format(intentos_restantes=intentos_restantes)
+#                 return FlowResult(
+#                     reply=reply,
+#                     next_state=ChatState.RETO_SEGURIDAD,
+#                     buttons=[],
+#                     previous_state=new_previous_state
+#                 )
+#             else:
+#                 # BLOQUEO DEFINITIVO
+#                 reply = messages.RETO_SEGURIDAD_BLOQUEO
+#                 
+#                 # Derivamos a llamada para proteger la información
+#                 return FlowResult(
+#                     reply=reply,
+#                     next_state=ChatState.LLAMADA, 
+#                     buttons=[],
+#                     previous_state=new_previous_state
+#                 )
+# 
     # --------------------------------------
     # 1. Detectar intención (con fallback IA)
     # --------------------------------------
@@ -170,6 +279,30 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     folio = None
 
     if intent and intent.isupper():
+        # VALIDAR QUE EL BOTÓN PERTENECE AL ESTADO ACTUAL
+        valid_button_ids = [b.get("id") for b in FLOW.get(current_state, {}).get("buttons", [])]
+        
+        if current_state == ChatState.COMPONENTES_FALTANTES:
+            from app.core.states.state_handlers import COMPONENTES_MAP
+            for k in COMPONENTES_MAP.keys():
+                valid_button_ids.append(k)
+        
+        if current_state in [ChatState.MENU_AYUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO, ChatState.FINALIZADO]:
+            menu_btns = get_menu_ayuda_buttons(new_previous_state)
+            valid_button_ids.extend([b.get("id") for b in menu_btns])
+            
+        if current_state == ChatState.SELECCIONAR_FOLIO and intent.startswith("SELECCIONAR_FOLIO_"):
+            valid_button_ids.append(intent)
+            
+        if intent not in valid_button_ids:
+            logger.info(f"Botón obsoleto ignorado: {intent} (estado actual: {current_state})")
+            return FlowResult(
+                reply=None,
+                next_state=current_state,
+                buttons=[],
+                previous_state=new_previous_state
+            )
+
         detected_intent = intent
         action = "advance"
     else:
@@ -182,13 +315,21 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         import unicodedata
 
         def clean_for_match(txt):
+            txt = txt.lower()
             normalized = unicodedata.normalize('NFKD', txt).encode('ASCII', 'ignore').decode('utf-8')
             return re.sub(r'[^a-z0-9\s]', '', normalized).strip()
 
         text_norm = clean_for_match(text_clean)
         
         button_matched = False
-        state_buttons = FLOW.get(current_state, {}).get("buttons", [])
+        state_buttons = list(FLOW.get(current_state, {}).get("buttons", []))
+        
+        if current_state == ChatState.COMPONENTES_FALTANTES:
+            from app.core.states.state_handlers import COMPONENTES_MAP
+            for k, v in COMPONENTES_MAP.items():
+                state_buttons.append({"id": k, "label": v["label"]})
+                for alias in v.get("aliases", []):
+                    state_buttons.append({"id": k, "label": alias})
         
         duda_keywords_exact = {
             "tengo una duda", "tengo duda", "tengo dudas", "una duda", 
@@ -232,7 +373,12 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 detected_intent = "MENU_DUDA"
                 action = "advance"
                 folio = None
-            elif current_state == ChatState.MENU_AYUDA and "verificacion" in text_clean:
+            elif current_state in (ChatState.MENU_AYUDA, ChatState.FINALIZADO) and text_norm in {
+                "verificacion", "ir a verificacion", "verificar", "quiero verificar",
+                "continuar verificacion", "iniciar verificacion", "empezar verificacion"
+            }:
+                # Solo disparar MENU_VERIFICACION si el mensaje es exactamente una de las frases conocidas
+                # para evitar que frases como "no quiero la verificacion" o preguntas lo activen.
                 detected_intent = "MENU_VERIFICACION"
                 action = "advance"
                 folio = None
@@ -293,7 +439,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         # decidir uso de IA según estado
         if state_type == "confirmation":
-            use_ai = False  # casi nunca usar IA aquí
+            use_ai = len(text.split()) >= 2  # Permitir IA si parece una corrección o detalle
 
         elif state_type == "information":
             use_ai = True   # aquí sí es útil
@@ -352,13 +498,24 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     folio_detectado = extraer_folio(text)
 
-    if folio_detectado and not session.folio:
+    # Solo aplicar detección automática de folio en estados donde el usuario
+    # está esperando ingresar un folio o es el inicio del flujo.
+    STATES_ALLOW_AUTO_FOLIO = {
+        ChatState.ESPERA,
+        ChatState.INICIO,
+        ChatState.CAMBIAR_FOLIO,
+        ChatState.CAMBIAR_FOLIO_DEVOLUCION,
+        ChatState.CAMBIAR_FOLIO_DESCUENTO,
+        ChatState.MENU_AYUDA,
+        ChatState.FUERA_DE_FLUJO,
+        ChatState.FINALIZADO,
+    }
+
+    if folio_detectado and not session.folio and current_state in STATES_ALLOW_AUTO_FOLIO:
         venta = obtener_venta_por_folio(db, folio_detectado)
 
         if venta:
-            session.folio = folio_detectado
-
-            target_state = ChatState.CONFIRMAR_FOLIO
+            target_state = ChatState.INICIO2
             if current_state == ChatState.CAMBIAR_FOLIO_DEVOLUCION:
                 target_state = ChatState.CONFIRMAR_FOLIO_DEVOLUCION
             elif current_state == ChatState.CAMBIAR_FOLIO_DESCUENTO:
@@ -368,13 +525,18 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
             if verification_result:
                 return verification_result
+            
+            session.folio = folio_detectado
 
-            _log(target_state)
+            _log()
 
+            reply_state, buttons, image_id = render_state(target_state, session, db)
+            
             return FlowResult(
-                reply=messages.CONFIRMAR_FOLIO_DETECTADO.format(folio=folio_detectado),
+                reply=reply_state,
                 next_state=target_state,
-                buttons=FLOW.get(target_state, {}).get("buttons", [])
+                buttons=buttons,
+                image_id=image_id
             )
 
     # --------------------------------------
@@ -385,7 +547,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         return FlowResult(
             reply=messages.MENU_AYUDA,
             next_state=ChatState.MENU_AYUDA,
-            buttons=FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
+            buttons=get_menu_ayuda_buttons(new_previous_state)
         )
 
     # --------------------------------------
@@ -393,30 +555,47 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------
 
     if detected_intent == "start_verification":
-        venta = obtener_venta_por_folio(db, folio)
+        folio_a_buscar = folio_detectado if folio_detectado else folio
+        venta = obtener_venta_por_folio(db, folio_a_buscar)
 
         if not venta:
+            # ==========================================
+            # FASE 1: SALA DE ESPERA (El folio no existe AÚN)
+            # Guardamos el folio en sesión y ponemos en pausa.
+            # ==========================================
+            session.folio = folio_a_buscar
+            _log()
+            
+            mensaje_saludo = messages.SALA_ESPERA.format(folio=folio_a_buscar)
+            
             return FlowResult(
-                "❌ No encontramos tu folio. Verifica e intenta nuevamente.",
-                current_state,
-                FLOW.get(current_state, {}).get("buttons", [])
+                reply=mensaje_saludo,
+                next_state=ChatState.ESPERANDO_REGISTRO,
+                buttons=[{"id": "CAMBIAR_FOLIO", "label": "✏️ Cambiar folio"}],
+                previous_state=new_previous_state
             )
         
-        verification_result = _check_verification_complete(folio)
+        # ==========================================
+        # Si la venta SÍ existe, continuamos normal...
+        # ==========================================
+        verification_result = _check_verification_complete(folio_a_buscar)
 
         if verification_result:
             return verification_result
 
-        session.folio = folio
+        session.folio = folio_a_buscar
 
+        _try_mark_step(db, session, "inicio")
+        _try_mark_step(db, session, "folio")
+
+        _log()
+
+        reply_state, buttons, _ = render_state(ChatState.INICIO2, session, db)
         
-
-        _log(ChatState.CONFIRMAR_FOLIO)
-
         return FlowResult(
-            reply=messages.CONFIRMAR_FOLIO_DETECTADO.format(folio=folio),
-            next_state=ChatState.CONFIRMAR_FOLIO,
-            buttons=FLOW.get(ChatState.CONFIRMAR_FOLIO, {}).get("buttons", [])
+            reply=reply_state,
+            next_state=ChatState.INICIO2,
+            buttons=buttons
         )
 
     # --------------------------------------
@@ -443,6 +622,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     is_direct_inconsistency = (
         get_state_type(current_state) == "confirmation" and
+        current_state != ChatState.CONFIRMAR_COMPONENTES and
         detected_intent == "negative" and
         len(text.split()) > 2
     )
@@ -524,7 +704,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 reply=messages.ESCALAMIENTO_CRITICO,
                 next_state=ChatState.ACLARACION,
                 buttons=[],
-                previous_state=session.state
+                previous_state=new_previous_state
             )
 
         # 🟡 demasiadas inconsistencias → parar flujo y cerrar registro
@@ -535,7 +715,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 reply=messages.ESCALAMIENTO_MULTIPLES,
                 next_state=ChatState.ACLARACION,
                 buttons=[],
-                previous_state=session.state
+                previous_state=new_previous_state
             )
 
         # 🟢 continuar flujo
@@ -563,7 +743,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply=reply,
             next_state=next_state,
             buttons=buttons,
-            previous_state=session.state,
+            previous_state=new_previous_state,
             image_id=image_id,
         )
 
@@ -582,7 +762,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply=special.get("reply"),
             next_state=special_state,
             buttons=special.get("buttons", []),
-            previous_state=session.state,
+            previous_state=new_previous_state,
             inconsistencia_patch=special.get("patch"),
             image_id=special.get("image_id"),
         )
@@ -597,7 +777,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply=messages.ACLARACION,
             next_state=ChatState.ACLARACION,
             buttons=FLOW[ChatState.ACLARACION].get("buttons", []),
-            previous_state=session.state
+            previous_state=new_previous_state
         )
 
     if action == "escalate_call":
@@ -606,7 +786,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply=messages.ACLARACION,
             next_state=ChatState.LLAMADA,
             buttons=FLOW[ChatState.LLAMADA].get("buttons", []),
-            previous_state=session.state
+            previous_state=new_previous_state
         )
     
     # --------------------------------------
@@ -620,7 +800,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 reply=messages.PEDIR_FOLIO_DESCUENTO,
                 next_state=ChatState.CAMBIAR_FOLIO_DESCUENTO,
                 buttons=[],
-                previous_state=session.state
+                previous_state=new_previous_state
             )
 
         venta = obtener_venta_por_folio(db, session.folio)
@@ -635,13 +815,13 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
             if is_finished:
                 current_state = ChatState.FINALIZADO
-                reply = desglose
+                reply = f"{desglose}\n\n{messages.EN_QUE_MAS_AYUDAR}"
                 image_id = None
                 buttons = FLOW.get(ChatState.FINALIZADO, {}).get("buttons", [])
             else:
                 current_state = ChatState.MENU_AYUDA
                 reply = f"{desglose}\n\n{messages.EN_QUE_MAS_AYUDAR}"
-                buttons = FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
+                buttons = get_menu_ayuda_buttons(new_previous_state)
                 image_id = None
 
             # Preservar el state original como previous_state para poder regresar a la verificación
@@ -669,7 +849,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 reply=messages.PEDIR_FOLIO_DEVOLUCION,
                 next_state=ChatState.CAMBIAR_FOLIO_DEVOLUCION,
                 buttons=[],
-                previous_state=session.state
+                previous_state=new_previous_state
             )
         
 
@@ -678,7 +858,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             reply=MessageBuilder.build_devolucion_confirmacion(),
             next_state=ChatState.DEVOLUCION_CONFIRMAR,
             buttons=FLOW.get(ChatState.DEVOLUCION_CONFIRMAR, {}).get("buttons", []),
-            previous_state=session.state
+            previous_state=new_previous_state
         )
     
     # --------------------------------------
@@ -716,7 +896,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         if is_finished:
             current_state = ChatState.FINALIZADO
-            reply = faq_response
+            reply = f"{faq_response}\n\n{messages.EN_QUE_MAS_AYUDAR}"
             image_id = faq_image_id
             buttons = FLOW.get(ChatState.FINALIZADO, {}).get("buttons", [])
         elif not skip_verification_append and reply_state:
@@ -725,7 +905,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         else:
             current_state = ChatState.MENU_AYUDA
             reply = f"{faq_response}\n\n{messages.EN_QUE_MAS_AYUDAR}"
-            buttons = FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
+            buttons = get_menu_ayuda_buttons(new_previous_state)
             image_id = faq_image_id
 
         # Si veníamos de DUDA/MENU_DUDA, preservar el previous_state de la sesión
@@ -760,7 +940,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         if is_finished:
             current_state = ChatState.FINALIZADO
-            reply = "👋🏻 ¡Hola!"
+            reply = f"👋🏻 ¡Hola!\n\n{messages.EN_QUE_MAS_AYUDAR}"
             image_id = None
             buttons = FLOW.get(ChatState.FINALIZADO, {}).get("buttons", [])
         elif current_state not in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO] and reply_state:
@@ -768,7 +948,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         else:
             current_state = ChatState.MENU_AYUDA
             reply = f"👋🏻 ¡Hola! \n\n{messages.MENU_AYUDA}"
-            buttons = FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
+            buttons = get_menu_ayuda_buttons(new_previous_state)
             image_id = None
 
         # Si veníamos de DUDA/MENU_DUDA u otro estado fuera de flujo, preservar el previous_state de la sesión
@@ -795,12 +975,17 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # IA: INTENCIÓN NO DETECTADA (ai_out, ai_ambiguous)
     # --------------------------------------
     if action in ("ai_out", "ai_ambiguous") and not (intent and intent.isupper()):
-        # "Si de plano no entiende, mostrar el menú de ayuda"
+        # Si ya terminó (checkpoint terminal), usar un texto más directo
+        if new_previous_state and is_terminal_state(ChatState(new_previous_state)):
+            msg_reply = f"{messages.NO_ENTENDIDO}\n\n{messages.EN_QUE_MAS_AYUDAR}"
+        else:
+            msg_reply = f"{messages.NO_ENTENDIDO}\n\n{messages.MENU_AYUDA}"
+
         return FlowResult(
-            reply=f"{messages.NO_ENTENDIDO}\n\n{messages.MENU_AYUDA}",
+            reply=msg_reply,
             next_state=ChatState.MENU_AYUDA,
-            buttons=FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", []),
-            previous_state=session.state
+            buttons=get_menu_ayuda_buttons(new_previous_state),
+            previous_state=new_previous_state
         )
 
     # --------------------------------------
@@ -819,7 +1004,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 reply=messages.ACLARACION,
                 next_state=ChatState.ACLARACION,
                 buttons=FLOW.get(ChatState.ACLARACION, {}).get("buttons", []),
-                previous_state=session.state
+                previous_state=new_previous_state
             )
 
         # Generar respuesta IA para responder la duda
@@ -838,7 +1023,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 reply=ai_reply,
                 next_state=ChatState.ACLARACION,
                 buttons=[],
-                previous_state=session.state
+                previous_state=new_previous_state
             )
 
         current_state = ChatState(session.state)
@@ -865,7 +1050,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         if is_finished:
             current_state = ChatState.FINALIZADO
-            reply = ai_reply
+            reply = f"{ai_reply}\n\n{messages.EN_QUE_MAS_AYUDAR}"
             image_id = None
             buttons = FLOW.get(ChatState.FINALIZADO, {}).get("buttons", [])
         elif not skip_verification_append and reply_state:
@@ -873,7 +1058,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         else:
             current_state = ChatState.MENU_AYUDA
             reply = f"{ai_reply}\n\n{messages.EN_QUE_MAS_AYUDAR}"
-            buttons = FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", [])
+            buttons = get_menu_ayuda_buttons(new_previous_state)
             image_id = None
 
         # Si veníamos de DUDA/MENU_DUDA u otro estado fuera de flujo, preservar el previous_state de la sesión.
@@ -916,8 +1101,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             return FlowResult(
                 reply=f"{desglose}\n\n{messages.EN_QUE_MAS_AYUDAR}",
                 next_state=ChatState.MENU_AYUDA,
-                buttons=FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", []),
-                previous_state=session.state
+                buttons=get_menu_ayuda_buttons(new_previous_state),
+                previous_state=new_previous_state
             )
         else:
             next_state = ChatState.INICIO

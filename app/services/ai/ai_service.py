@@ -4,9 +4,41 @@ import json
 from google import genai
 from app.services.ai.prompt_builder import build_inconsistency_prompt
 from app.config.settings import settings
-from app.services.ai.prompt_builder import build_prompt
+from app.services.ai.prompt_builder import build_faq_identification_prompt, build_prompt
 from app.core.context.conversation_context import ConversationContext
 from app.services.ai.agent_messages import AGENT_MESSAGES
+
+def identify_faq_id(user_text: str) -> int | None:
+    """
+    Usa IA para identificar el ID de la FAQ más relevante para el texto del usuario.
+    Retorna el índice del item en FAQ_DATA o None si no hay match.
+    """
+    prompt = build_faq_identification_prompt(user_text)
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-lite", # Usamos flash lite para rapidez
+                contents=prompt,
+            )
+
+            res_text = response.text.strip().upper() if response and response.text else "NONE"
+
+            if "NONE" in res_text:
+                return None
+            
+            # Extraer solo los dígitos
+            match = re.search(r"(\d+)", res_text)
+            if match:
+                return int(match.group(1))
+
+        except Exception as e:
+            print("❌ ERROR GEMINI (FAQ identity):", str(e))
+            if attempt == MAX_RETRIES - 1:
+                return None
+            time.sleep(RETRY_DELAY_SECONDS)
+
+    return None
 
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
 

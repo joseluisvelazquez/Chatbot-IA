@@ -285,7 +285,6 @@ class ChatSessions(Base):
     __table_args__ = (
         Index("idx_folio", "folio"),
         Index("idx_phone", "phone"),
-        Index("uq_chat_phone", "phone", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

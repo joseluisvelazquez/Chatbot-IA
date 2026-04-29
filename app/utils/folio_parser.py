@@ -22,7 +22,7 @@ def extraer_folio(texto: str) -> str | None:
     if not texto:
         return None
 
-    match = re.search(r"\b\d{4,7}\b", texto)
+    match = re.search(r"\b\d{4,12}\b", texto)
 
     if match:
         return match.group()

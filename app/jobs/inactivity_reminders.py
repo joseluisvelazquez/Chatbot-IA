@@ -35,6 +35,8 @@ async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
     text = node["text"]
     buttons = node["buttons"]
 
+    session.state = state.value
+
     await send_whatsapp_message(session.phone, text, buttons)
 
 

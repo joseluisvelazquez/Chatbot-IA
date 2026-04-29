@@ -11,8 +11,8 @@ FAQ_DATA = [
             "primer pago dia",
             "puedo pagar antes"
         ],
-        "response": "Así es, siempre y cuando no supere el dia limite indicado en su verificación, puede realizarlo antes sin problema.",
-        "response_dinamica": "Así es, siempre y cuando no sea después del *{fecha_limite}* puede realizarlo antes sin problema."
+        "response": "Si puedes hacerlo, siempre y cuando no supere el dia limite indicado en su verificación, puede realizarlo antes sin problema.",
+        "response_dinamica": "Si puedes hacerlo, siempre y cuando no sea después del *{fecha_limite}* puede realizarlo antes sin problema."
     },
     {
         "keywords": [
@@ -21,8 +21,8 @@ FAQ_DATA = [
             "puedo pagar en 15 dias",
             "puedo pagar despues"
         ],
-        "response": "No, su primer pago se debe realizar a mas tardar en la fecha indicada en su verificación y en ese mismo pago debe cubrir lo correspondiente a 2 semanas o a 4 según lo decida.",
-        "response_dinamica": "No, su primer pago se debe realizar a mas tardar el *{fecha_limite}* y en ese mismo pago debe cubrir lo correspondiente a 2 semanas: *${importe_quincenal}* o a 4 semanas: *${importe_mensual}* según lo decida."
+        "response": "Su primer pago se debe realizar a mas tardar en la fecha indicada en su verificación y en ese mismo pago debe cubrir lo correspondiente a 2 semanas o a 4 según lo decida.",
+        "response_dinamica": "Su primer pago se debe realizar a mas tardar el *{fecha_limite}* y en ese mismo pago debe cubrir lo correspondiente a 2 semanas: *${importe_quincenal}* o a 4 semanas: *${importe_mensual}* según lo decida."
     },
 
     # -------------------------
@@ -84,10 +84,11 @@ FAQ_DATA = [
             "pagos cuando quiera",
             "pagos cuando pudiera",
             "realizar cuando pudiera",
-            "pagar cuando pueda"
+            "pagar cuando pueda",
+            "pagar cuando quiera"
         ],
-        "response": "No, los pagos son de manera semanal, aunque puede optar por realizarlos quincenales o mensuales según las opciones que se le proporcionan en la verificación.",
-        "response_dinamica": "No, los pagos son de manera semanal de *${pago_minimo}*, aunque puede optar por realizarlos quincenales por la cantidad de *${importe_quincenal}* o mensuales por *${importe_mensual}*."
+        "response": "Los pagos son de manera semanal, aunque puede optar por realizarlos quincenales o mensuales según las opciones que se le proporcionan en la verificación.",
+        "response_dinamica": "Los pagos son de manera semanal de *${pago_minimo}*, aunque puede optar por realizarlos quincenales por la cantidad de *${importe_quincenal}* o mensuales por *${importe_mensual}*."
     },
 
     {
@@ -101,8 +102,8 @@ FAQ_DATA = [
             "diferencia entre pagos",
             "por que es mas caro"
         ],
-        "response": "Asi es, el pago mínimo semanal sugerido es de $215, aunque también existe la opción de aprovechar el plan de 3 meses y no pagar ningún remanente, para mas información favor de realizar la verificación.",
-        "response_dinamica": "Asi es, el pago mínimo semanal sugerido es de *${pago_minimo}*, aunque también existe la opción de aprovechar el plan de 3 meses y no pagar ningún remanente al llegar la fecha de sus 3 meses, es decir con 13 pagos de *${importe_semanal_3m}* liquida su cuenta realizando el primero el *{fecha_limite}*."
+        "response": "El pago mínimo semanal sugerido es de $215, aunque también existe la opción de aprovechar el plan de 3 meses y no pagar ningún remanente, para mas información favor de realizar la verificación.",
+        "response_dinamica": "El pago mínimo semanal sugerido es de *${pago_minimo}*, aunque también existe la opción de aprovechar el plan de 3 meses y no pagar ningún remanente al llegar la fecha de sus 3 meses, es decir con 13 pagos de *${importe_semanal_3m}* liquida su cuenta realizando el primero el *{fecha_limite}*."
     },
 
     {

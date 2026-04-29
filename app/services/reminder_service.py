@@ -11,11 +11,11 @@ def utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def cancel_pending_inactivity_reminders(db: Session, session_id: int) -> None:
+def cancel_pending_inactivity_reminders(db: Session, phone: str) -> None:
     now = utcnow_naive()
     (
         db.query(Reminder)
-        .filter(Reminder.session_id == session_id)
+        .filter(Reminder.phone == phone)
         .filter(Reminder.type.in_([TYPE_1H, TYPE_2H]))
         .filter(Reminder.sent_at.is_(None))
         .filter(Reminder.cancelled_at.is_(None))
@@ -36,7 +36,7 @@ def create_inactivity_reminders(db: Session, session: ChatSessions) -> None:
             session_id=session.id,
             phone=session.phone,
             type=TYPE_1H,
-            scheduled_at=base + timedelta(minutes=60),  # para pruebas, 5 min
+            scheduled_at=base + timedelta(minutes=60),  # minutes = 60
             created_last_message_id=session.last_message_id,
         )
     )
@@ -45,12 +45,20 @@ def create_inactivity_reminders(db: Session, session: ChatSessions) -> None:
             session_id=session.id,
             phone=session.phone,
             type=TYPE_2H,
-            scheduled_at=base + timedelta(hours=2),
+            scheduled_at=base + timedelta(minutes=120),  # minutes = 120
             created_last_message_id=session.last_message_id,
         )
     )
 
 
+from app.core.states.state_types import is_terminal_state
+from app.core.states.states import ChatState
+
 def upsert_inactivity_reminders(db: Session, session: ChatSessions) -> None:
-    cancel_pending_inactivity_reminders(db, session.id)
-    create_inactivity_reminders(db, session)
+    cancel_pending_inactivity_reminders(db, session.phone)
+    try:
+        current_state = ChatState(session.state)
+        if not is_terminal_state(current_state) and current_state != ChatState.ESPERANDO_REGISTRO:
+            create_inactivity_reminders(db, session)
+    except ValueError:
+        pass  # In case state is not a valid ChatState
