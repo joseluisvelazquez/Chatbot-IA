@@ -15,16 +15,8 @@ Es por eso que además de su característico hardware de alto desempeño, ésta 
 
 ## Contrato: Términos y Condiciones
 
-* Aprobación de crédito: MXCOMP se reserva el derecho de aprobar el pedido. Evaluará la viabilidad de pago del cliente mediante análisis de información cuantitativa y cualitativa.
-* Investigación crediticia: El cliente autoriza expresamente a MXCOMP a realizar investigaciones sobre su comportamiento crediticio en sociedades de información crediticia.
-* Pagos y Moras:
-  * Los pagos son periódicos y consecutivos.
-  * La falta de pago puntual genera intereses moratorios sobre el saldo insoluto de hasta un 6% semanal.
-  * MXCOMP podrá condonar intereses si el crédito se liquida dentro del plazo límite estipulado.
 * Depósito de productos: Mientras no se haya pagado el total, el cliente asume la calidad de depositario de los productos, debiendo conservarlos en perfecto estado.
 * Liquidación anticipada: El cliente puede liquidar su saldo vigente en cualquier momento para obtener descuentos, según el tiempo transcurrido desde la recepción del producto.
-* Revocación: Conforme al Art. 56 de la Ley Federal de Protección al Consumidor, el cliente puede revocar su consentimiento dentro de los términos legales, cubriendo costos de flete.
-* Cancelación: MXCOMP puede aceptar la cancelación si el cliente ha cubierto al menos el 50% del valor del plan de pago vigente, cobrando un concepto de alquiler del bien (Art. 70 de la Ley Federal de Protección al Consumidor).
 * Software: MXCOMP no distribuye ni fomenta software sin licencia y se deslinda de responsabilidades por la instalación de programas ilegales por parte del cliente.
 
 ## Póliza de Garantía: Términos y Condiciones

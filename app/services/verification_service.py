@@ -72,7 +72,9 @@ def log_flow_event(
 
 def is_verification_complete(payload: Dict[str, Any]) -> bool:
     data = normalize_progress_payload(payload)
-    return data["finalizado"] == 1
+    print(f"DEBUG: Verificación normalizada para check completo: {data}")
+
+    return data.get("beneficios", 0) == 1 or data.get("finalizado", 0) == 1
 
 
 class VerificationService:

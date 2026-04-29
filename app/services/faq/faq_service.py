@@ -16,43 +16,57 @@ def find_faq_answer(text: str, venta=None) -> tuple[str | None, str | None]:
     best_image = None
     max_words_matched = 0
 
-    for item in FAQ_DATA:
+    # 1. Búsqueda por palabras clave (Match exacto/rápido)
+    for i, item in enumerate(FAQ_DATA):
         for keyword in item["keywords"]:
             norm_keyword = _normalize(keyword)
             words = norm_keyword.split()
-            # Verifica si TODAS las palabras de la keyword están en el texto del usuario
             if all(word in norm_text for word in words):
-                # Priorizar el keyword que contenga más palabras (match más específico)
                 match_score = len(words)
                 if match_score > max_words_matched:
                     max_words_matched = match_score
-                    best_image = item.get("image_env")
-                    
-                    if venta and "response_dinamica" in item:
-                        from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
-                        from app.siga.siga_repository import construir_no_cuenta
-                        
-                        try:
-                            calculos = calcular_info_pagos(venta) or {}
-                            calculos_3m = calcular_info_plan_3_meses(venta) or {}
-                            numero_cuenta = construir_no_cuenta(venta)
-                            
-                            best_match = item["response_dinamica"].format(
-                                fecha_limite=calculos.get("fecha_limite", "la fecha indicada"),
-                                importe_quincenal=calculos.get("importe_quincenal", "0"),
-                                importe_mensual=calculos.get("importe_mensual", "0"),
-                                numero_cuenta=numero_cuenta or "",
-                                pago_minimo=calculos.get("pago_minimo", "215.00"),
-                                importe_semanal_3m=calculos_3m.get("importe_semanal_3m", "0")
-                            )
-                        except Exception as e:
-                            # Fallback si falla el format
-                            best_match = item["response"]
-                    else:
-                        best_match = item["response"]
+                    best_match, best_image = _build_faq_response(item, venta)
+
+    # 2. Búsqueda Semántica con IA (Fallback si el keyword match es débil o nulo)
+    if not best_match or max_words_matched < 1:
+        from app.services.ai.ai_service import identify_faq_id
+        
+        faq_index = identify_faq_id(text)
+        if faq_index is not None and 0 <= faq_index < len(FAQ_DATA):
+            item = FAQ_DATA[faq_index]
+            best_match, best_image = _build_faq_response(item, venta)
 
     if best_image:
         from app.config.settings import settings
         best_image = getattr(settings, best_image, None)
 
     return best_match, best_image
+
+def _build_faq_response(item: dict, venta=None) -> tuple[str, str | None]:
+    """Helper para construir la respuesta (dinámica o estática) de un item de FAQ."""
+    response = None
+    image = item.get("image_env")
+    
+    if venta and "response_dinamica" in item:
+        from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
+        from app.siga.siga_repository import construir_no_cuenta
+        
+        try:
+            calculos = calcular_info_pagos(venta) or {}
+            calculos_3m = calcular_info_plan_3_meses(venta) or {}
+            numero_cuenta = construir_no_cuenta(venta)
+            
+            response = item["response_dinamica"].format(
+                fecha_limite=calculos.get("fecha_limite", "la fecha indicada"),
+                importe_quincenal=calculos.get("importe_quincenal", "0"),
+                importe_mensual=calculos.get("importe_mensual", "0"),
+                numero_cuenta=numero_cuenta or "",
+                pago_minimo=calculos.get("pago_minimo", "215.00"),
+                importe_semanal_3m=calculos_3m.get("importe_semanal_3m", "0")
+            )
+        except Exception:
+            response = item["response"]
+    else:
+        response = item["response"]
+        
+    return response, image

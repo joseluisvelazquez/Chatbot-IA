@@ -15,6 +15,32 @@ def obtener_venta_por_folio(db: Session, folio: str) -> Optional[BitacoraVentas]
         )
         .first()
     )
+
+# ===============================
+# OBTENER FOLIOS PENDIENTES POR TELÉFONO
+# ===============================
+def obtener_folios_pendientes_por_telefono(db: Session, phone: str) -> list[str]:
+    from app.db.models import BitacoraVentas, ChatSessions
+    # 1. Obtener todas las ventas del cliente por tel_1
+    ventas = db.query(BitacoraVentas).filter(BitacoraVentas.tel_1 == phone).all()
+    
+    # 2. Obtener la sesión actual del teléfono para revisar si hay algo finalizado
+    chat = db.query(ChatSessions).filter(ChatSessions.phone == phone).first()
+    
+    folios_pendientes = []
+    for v in ventas:
+        if not v.folio:
+            continue
+            
+        # Si la venta coincide con el folio actual de la sesión y el estado es FINALIZADO, ya se verificó
+        if chat and chat.folio == v.folio and chat.state == "FINALIZADO":
+            continue
+            
+        folios_pendientes.append(v.folio)
+        
+    return list(set(folios_pendientes))
+
+
 def obtener_verificacion_por_no_cuenta(db: Session, no_cuenta: str) -> Optional[VerificacionCuenta]:
     return (
         db.query(VerificacionCuenta)
@@ -43,8 +69,6 @@ def obtener_domicilio_por_movimiento(
 # ===============================
 def construir_nombre(venta: BitacoraVentas) -> str:
     return capitalizar_texto(venta.nombre_completo) or "No disponible"
-def construir_pago_inicial(venta: BitacoraVentas) -> str:
-    return venta.importe or "No disponible"
 
 
 # ===============================
@@ -65,18 +89,12 @@ def construir_fecha(venta: BitacoraVentas) -> str:
 # ===============================
 # CONSTRUIR PAGO INICIAL
 # ===============================
-def construir_pago_inicial(venta: BitacoraVentas) -> str:
-    return venta.importe or "No disponible"
+def construir_pago_inicial(venta: BitacoraVentas) -> float | int:
+    # Retorna el pago (o 0) para que pueda ser formateado en el mensaje
+    return venta.pago or 0
 
 # ===============================
 # CONSTRUIR NÚMERO DE CUENTA
 # ===============================
 def construir_no_cuenta(venta: BitacoraVentas) -> str:
     return venta.no_cuenta or "No disponible"
-
-def construir_pago_inicial(venta: BitacoraVentas) -> int:
-    return venta.importe or 0
-
-
-
-

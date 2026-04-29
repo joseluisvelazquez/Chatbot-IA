@@ -41,70 +41,106 @@ def utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def get_or_create_session(db: Session, phone: str, folio: str | None = None) -> ChatSessions:
+def get_or_create_session(db: Session, phone: str, folio: str | None = None, text: str = "", intent: str = "") -> ChatSessions:
     """
-    Obtiene la sesión intentando lock de fila.
-    Si no existe, la crea de forma segura contra concurrencia.
-
-    Nota: with_for_update(nowait=True) puede lanzar OperationalError si la fila está bloqueada.
-    En ese caso, hacemos fallback a lectura sin nowait (bloqueante) o sin lock.
+    Obtiene la sesión más reciente intentando lock de fila.
+    Si la última sesión está en un estado terminal, SOLO crea una nueva sesión 
+    si el usuario tiene la intención explícita de iniciar una nueva verificación.
     """
-
     if not phone:
         raise ValueError("phone is required")
 
-    # 1) Intentar obtener con lock NOWAIT (rápido; puede fallar por lock contention)
+    terminal_states = [
+        ChatState.FINALIZADO.value, 
+        ChatState.DEVOLUCION_FINALIZADA.value,
+        ChatState.FUERA_DE_FLUJO.value,
+        ChatState.LLAMADA.value,
+        ChatState.ACLARACION.value
+    ]
+
+    # 1) Intentar obtener la sesión más reciente
     try:
         session = (
             db.query(ChatSessions)
             .filter(ChatSessions.phone == phone)
+            .order_by(ChatSessions.last_message_at.desc(), ChatSessions.id.desc())
             .with_for_update(nowait=True)
             .first()
         )
-        if session:
-            return session
-
     except OperationalError:
-        # Otro request tiene el lock; fallback a lectura normal para no romper el flujo.
+        # Otro request tiene el lock; fallback a lectura normal
         db.rollback()
-        session = db.query(ChatSessions).filter(ChatSessions.phone == phone).first()
-        if session:
-            return session
-        # si no existe, continuamos a crear
+        session = (
+            db.query(ChatSessions)
+            .filter(ChatSessions.phone == phone)
+            .order_by(ChatSessions.last_message_at.desc(), ChatSessions.id.desc())
+            .first()
+        )
 
-    # 2) Crear sesión (puede competir con otro request)
-    session = ChatSessions(
+    is_session_finished = False
+    if session:
+        if session.state in terminal_states:
+            is_session_finished = True
+
+    # Si hay sesión y NO está finalizada, la retornamos
+    if session and not is_session_finished:
+        return session
+
+    # Si está finalizada, verificamos si quiere iniciar otra verificación
+    if session and is_session_finished:
+        from app.utils.folio_parser import extraer_folio
+        
+        # Validar si el usuario quiere verificar otro folio
+        is_starting_new = False
+        if intent in ["MENU_VERIFICACION", "SELECCIONAR_FOLIO"] or (intent and intent.startswith("SELECCIONAR_FOLIO_")):
+            is_starting_new = True
+        elif text:
+            # Solo considerar que quiere iniciar nueva verificación si la única
+            # cosa relevante en el mensaje es un folio (texto corto, sin oración compleja)
+            stripped = text.strip()
+            folio_val = extraer_folio(stripped)
+            # El mensaje completo debe ser esencialmente el folio solo, o una frase muy corta
+            # Evitamos disparar con mensajes largos que contengan números (ej: montos, teléfonos)
+            only_folio = folio_val and len(stripped.split()) <= 3
+            if only_folio:
+                is_starting_new = True
+            elif stripped.lower() in ["verificar", "verificacion", "otro folio", "nueva verificacion", "iniciar verificacion"]:
+                is_starting_new = True
+
+        if not is_starting_new:
+            return session
+
+    # 2) Si no hay sesión o la anterior ya finalizó Y quiere iniciar una nueva, creamos una nueva
+    new_session = ChatSessions(
         phone=phone,
         folio=folio,
         state=ChatState.ESPERA.value,
     )
-    db.add(session)
+    db.add(new_session)
 
     try:
-        db.flush()  # intenta insertar
-        return session
+        db.flush()
+        return new_session
 
     except IntegrityError:
-        # Otro proceso la creó primero
         db.rollback()
-
-        # Volver a leer (idealmente con lock pero sin nowait para evitar crash)
+        # Fallback en caso de colisión (aunque ya no hay unique=True en phone)
         try:
-            session = (
+            return (
                 db.query(ChatSessions)
                 .filter(ChatSessions.phone == phone)
+                .order_by(ChatSessions.last_message_at.desc(), ChatSessions.id.desc())
                 .with_for_update()
                 .first()
             )
         except OperationalError:
             db.rollback()
-            session = db.query(ChatSessions).filter(ChatSessions.phone == phone).first()
-
-        if not session:
-            # Esto sería raro (integrity error pero no aparece)
-            raise
-
-        return session
+            return (
+                db.query(ChatSessions)
+                .filter(ChatSessions.phone == phone)
+                .order_by(ChatSessions.last_message_at.desc(), ChatSessions.id.desc())
+                .first()
+            )
 
 
 def update_session(

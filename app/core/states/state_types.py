@@ -6,7 +6,6 @@ from app.core.states.states import ChatState
 # Si usuario dice NO → INCONSISTENCIA
 
 STATE_CONFIRMATION = {
-    ChatState.CONFIRMAR_FOLIO,
     ChatState.CONFIRMAR_NOMBRE,
     ChatState.CONFIRMAR_DOMICILIO,
     ChatState.CONFIRMAR_FECHA,
@@ -113,3 +112,40 @@ def get_state_type(state: ChatState) -> str:
         return "system"
 
     return "unknown"
+
+def is_persistent_state(state: ChatState) -> bool:
+    """
+    Retorna True si el estado es un estado "principal" del flujo de verificación
+    del cual el usuario NO debería ser redirigido accidentalmente al salir de un
+    estado de servicio (ej. MENU_AYUDA, DUDA).
+    """
+    return get_state_type(state) in ("confirmation", "information") or is_terminal_state(state)
+
+def is_terminal_state(state: ChatState) -> bool:
+    """
+    Retorna True si el estado marca el final completo del proceso (ej. finalización,
+    escalamiento definitivo a llamada).
+    """
+    return state in {
+        ChatState.FINALIZADO,
+        ChatState.ACLARACION,
+        ChatState.LLAMADA,
+        ChatState.DEVOLUCION_FINALIZADA
+    }
+
+def get_menu_ayuda_buttons(previous_state: str) -> list:
+    """
+    Retorna los botones del menú de ayuda, excluyendo la opción de "Ir a verificación"
+    si ya se alcanzó un estado terminal.
+    """
+    from app.core.flow.flow import FLOW
+    
+    buttons = FLOW.get(ChatState.MENU_AYUDA, {}).get("buttons", []).copy()
+    
+    try:
+        if previous_state and is_terminal_state(ChatState(previous_state)):
+            buttons = [b for b in buttons if b.get("id") != "MENU_VERIFICACION"]
+    except ValueError:
+        pass
+        
+    return buttons

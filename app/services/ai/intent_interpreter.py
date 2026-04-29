@@ -62,7 +62,7 @@ def should_use_ai(text: str, detected_intent: str, state=None) -> bool:
     
     # CONFIRMATION → NO IA
     if state_type == "confirmation":
-        return False
+        return word_count >= 2  # Permitir IA si parece una corrección o detalle
 
     # INCONSISTENCIA → SIEMPRE IA
     if state_type == "inconsistency":
@@ -115,6 +115,8 @@ def interpret_intent_with_ai(
     }
     """
 
+    estado_origen = context.state if context else "No especificado"
+
     prompt = f"""
 Eres un sistema que clasifica mensajes de usuarios en un chatbot de verificación.
 
@@ -135,6 +137,11 @@ INTENTS POSIBLES
 - descuento
 
 --------------------------------------
+CONTEXTO
+--------------------------------------
+Estado actual del usuario: {estado_origen}
+
+--------------------------------------
 MENSAJE DEL USUARIO
 --------------------------------------
 
@@ -144,6 +151,7 @@ MENSAJE DEL USUARIO
 REGLAS
 --------------------------------------
 
+- REGLA ESTRICTA: Si el "Estado actual" es una confirmación (ej: CONFIRMAR_DOMICILIO, CONFIRMAR_FECHA, CONFIRMAR_PAGO_INICIAL, etc.) y el usuario proporciona un dato diferente, un número, o una corrección (ej: "mi numero de casa es 32", "fue el 10", "fue por 600"), DEBES clasificarlo obligatoriamente como "negative".
 - "sí", "correcto", "todo bien" → affirmative
 - "no", "está mal", "yo pagué 550" → negative
 - preguntas → doubt

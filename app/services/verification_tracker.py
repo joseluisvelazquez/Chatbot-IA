@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 
 
 STEP_MAP = {
-    ChatState.CONFIRMAR_FOLIO: "folio",
     ChatState.CONFIRMAR_NOMBRE: "nombre",
     ChatState.CONFIRMAR_DOMICILIO: "domicilio",
     ChatState.CONFIRMAR_FECHA: "fecha",
@@ -25,14 +24,13 @@ STEP_MAP = {
     ChatState.INFO_BENEFICIOS: "beneficios",
     ChatState.INFO_BENEFICIOS2: "beneficios",
     
-    ChatState.FINALIZADO: "finalizado",
+    # ChatState.FINALIZADO: "finalizado",
 
 
 }
 
 
 NEGATIVE_INTENTS = {
-    "FOLIO_NO",
     "NOMBRE_NO",
     "DOMICILIO_NO",
     "FECHA_NO",

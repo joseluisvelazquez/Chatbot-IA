@@ -15,6 +15,10 @@ from app.router.siga_bridge_router import router as siga_bridge_router
 
 
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from app.api.external import router as external_router
 
 
 
@@ -24,6 +28,8 @@ app.include_router(panel_router)
 app.include_router(media_router)
 app.include_router(auth_router)  
 app.include_router(siga_bridge_router)
+app.include_router(external_router)
+
 app.mount("/panel", StaticFiles(directory=str(PANEL_DIR), html=True), name="panel")
 app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 

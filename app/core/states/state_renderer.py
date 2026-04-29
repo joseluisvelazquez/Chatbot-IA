@@ -52,9 +52,20 @@ def render_state(next_state, session, db):
     if not venta:
         return reply, buttons, image_id
 
-    if next_state in [ChatState.CONFIRMAR_FOLIO, ChatState.CONFIRMAR_FOLIO_DEVOLUCION, ChatState.CONFIRMAR_FOLIO_DESCUENTO]:
+    if next_state in [ChatState.CONFIRMAR_FOLIO_DEVOLUCION, ChatState.CONFIRMAR_FOLIO_DESCUENTO]:
         from app.content import messages as msg
         reply = msg.CONFIRMAR_FOLIO_DETECTADO.format(folio=session.folio)
+
+    elif next_state == ChatState.RETO_SEGURIDAD:
+        from app.content import messages as msg
+        reply = msg.RETO_SEGURIDAD_SOLICITUD.format(folio=session.folio)
+
+    elif next_state == ChatState.INICIO:
+        reply = reply.format(folio=session.folio)
+
+    elif next_state == ChatState.INICIO2:
+        from app.content import messages as msg
+        reply = msg.INICIO2.format(folio=session.folio)
 
     elif next_state == ChatState.CONFIRMAR_NOMBRE:
         reply = MessageBuilder.confirmar_nombre(

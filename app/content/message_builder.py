@@ -80,31 +80,28 @@ class MessageBuilder:
         if saldo < 0:
             saldo = Decimal("0")
 
-        def money(val):
-            return f"${val:,.2f}"
+        def money_aligned(val, prefix=''):
+            # U+2007 es el "Figure Space", tiene el grosor exacto de un número en WhatsApp.
+            # Nos ayuda a alinear los decimales verticalmente sin usar la fuente de código.
+            txt = f"{prefix}${val:,.2f}"
+            return txt.rjust(11, '\u2007')
 
-        # Alineación exacta usando caracteres y el formato monospace de WhatsApp (```)
-        col = 20  
-        
-        def line(label, value):
-            # ljust rellena con espacios a la derecha, rjust a la izquierda
-            return f"{label.ljust(col)}{money(value).rjust(15)}"
+        # Usamos el Figure Space repetido para empujar las cantidades y alinearlas.
+        esp = '\u2007'
 
         return (
             "Claro, con gusto te comparto el desglose de tu cuenta:\n\n"
-            "```"
-            f"{line('Precio del equipo', precio)}\n"
-            f"{line('- Pago inicial', pago)}\n"
-            f"{line('- Subsidio', subsidio)}\n"
-            f"{'-' * 40}\n"
-            f"{line('Saldo restante', saldo)}"
-            "```"
+            f"*Precio del equipo:* {esp*2}{money_aligned(precio)}\n"
+            f"*Pago inicial:* {esp*10}{money_aligned(pago, '-')}\n"
+            f"*Subsidio:* {esp*13}{money_aligned(subsidio, '-')}\n"
+            "----------------------------------------------------\n"
+            f"*Saldo restante:* {esp*7}{money_aligned(saldo)}"
         )
     
     @staticmethod
     def build_devolucion_confirmacion() -> str:
         return (
-            "¡Claro que sí! Es posible realizar la devolución del equipo, solo necesitas seguir el siguiente proceso:\n\n"
+            "Si es posible realizar la devolución del equipo, solo necesitas seguir el siguiente proceso:\n\n"
             "- Se deberá cubrir un cargo de $850 por gastos de traslado y gestión.\n"
             "- Posteriormente se le notificará el día de recolección.\n\n"
             "¿Deseas continuar con la devolución?"

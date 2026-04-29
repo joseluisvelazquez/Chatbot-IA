@@ -163,7 +163,7 @@ export async function initConversationsPage() {
     window.handleTyping = handleTyping
     window.handleKeyDown = handleKeyDown
     window.autoResize = autoResize
-    
+
     // reset visual de la vista al volver a entrar al módulo
     lastLoadedSessionId = null
     isLoadingChat = false
@@ -191,13 +191,13 @@ export async function initConversationsPage() {
             : -1
 
         if (
-                sessionKey &&
-                (
-                    forceRender || 
-                    sessionKey !== lastMessagesSessionKey ||
-                    currentMessagesVersion !== lastMessagesVersion
-                )
-            ) {
+            sessionKey &&
+            (
+                forceRender ||
+                sessionKey !== lastMessagesSessionKey ||
+                currentMessagesVersion !== lastMessagesVersion
+            )
+        ) {
             console.time("renderMessages")
             renderMessagesIncremental(state)
             forceRender = false
@@ -225,7 +225,7 @@ export async function initConversationsPage() {
         type: "conversations/loaded",
         payload: sessions
     })
-    
+
     const savedSearch = localStorage.getItem("chatSearch")
     if (savedSearch) {
         searchTerm = savedSearch
@@ -259,15 +259,15 @@ export async function initConversationsPage() {
         if (saved) {
             try {
                 selected = JSON.parse(saved)
-            } catch {}
+            } catch { }
         }
     }
 
     if (selected?.sessionId) {
-    const sessionIdNum = Number(selected.sessionId)
-    const sessionFromStore = state.conversations.byId[sessionIdNum]
+        const sessionIdNum = Number(selected.sessionId)
+        const sessionFromStore = state.conversations.byId[sessionIdNum]
 
-    if (!sessionFromStore) {
+        if (!sessionFromStore) {
             console.warn("Sesión inválida desde localStorage, limpiando...")
             setSelectedSession(null)
             localStorage.removeItem("lastSession")
@@ -299,7 +299,7 @@ export async function initConversationsPage() {
         showMobileConversationList()
     }
 
-    
+
     requestAnimationFrame(() => {
         setupInputHandler()
         setupEmojiPicker()
@@ -423,12 +423,40 @@ function formatDateSeparator(dateString) {
 function formatWhatsAppText(text) {
     if (!text) return ""
 
-    return escapeHtml(text)
+    let formatted = text
         .replace(/\n/g, "<br>")
         .replace(/\*(.*?)\*/g, "<b>$1</b>")
         .replace(/_(.*?)_/g, "<i>$1</i>")
         .replace(/~(.*?)~/g, "<s>$1</s>")
         .replace(/`(.*?)`/g, "<code>$1</code>")
+
+    // Fix visual para web del mensaje de desglose de cuenta con espaciadores \u2007
+    if (formatted.includes('\u2007')) {
+        formatted = formatted.split('<br>').map(line => {
+            if (line.includes('te comparto el desglose de tu cuenta')) {
+                return `<div class="mb-2">${line}</div>`;
+            }
+            if (line.includes('\u2007') && line.includes('</b>')) {
+                let cleanLine = line.replace(/\u2007/g, '').trim();
+                let parts = cleanLine.split('</b>');
+                if (parts.length >= 2) {
+                    let label = parts[0].replace('<b>', '').trim();
+                    let amount = parts[1].trim();
+                    return `<div class="flex justify-between gap-4 py-[2px]"><b>${label}</b><span>${amount}</span></div>`;
+                }
+            }
+            if (line.includes('----')) {
+                return `<div class="border-t border-dashed border-gray-400 dark:border-slate-500 my-2 opacity-60"></div>`;
+            }
+            return line;
+        }).join('<br>');
+
+        // Remove empty brs around our generated divs to keep spacing tight
+        formatted = formatted.replace(/<br><div/g, '<div');
+        formatted = formatted.replace(/<\/div><br>/g, '</div>');
+    }
+
+    return formatted
 }
 
 const BUTTON_LABELS = {
@@ -650,13 +678,12 @@ function updateSidebarNode(node, s) {
                 ${escapeHtml(displayName)}
             </div>
 
-            ${
-                s.no_cuenta
-                ? `<div class="text-xs text-gray-400">
+            ${s.no_cuenta
+            ? `<div class="text-xs text-gray-400">
                         Cuenta: ${escapeHtml(s.no_cuenta)}
                 </div>`
-                : ""
-            }
+            : ""
+        }
 
             <div class="text-xs text-gray-500">
                 ${escapeHtml(s.last_message_at ?? "")}
@@ -711,9 +738,9 @@ function createMessageNode(rawMsg, timeOverride = "") {
     const time = timeOverride || (msg.created_at ? formatTime(msg.created_at) : "")
     const label =
         msg.direction === "out" ? "Bot 🤖" :
-        msg.direction === "agent" ? "Tú 🧑‍💻" :
-        msg.direction === "in" ? "Cliente 👤" :
-        ""
+            msg.direction === "agent" ? "Tú 🧑‍💻" :
+                msg.direction === "in" ? "Cliente 👤" :
+                    ""
 
     let bodyContent = ""
     const mediaUrl = msg.media_url
@@ -730,11 +757,10 @@ function createMessageNode(rawMsg, timeOverride = "") {
                         onclick="openImageViewer('${mediaUrl}')"
                         loading="lazy"
                     />
-                    ${
-                        cleanContent
-                            ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
-                            : ""
-                    }
+                    ${cleanContent
+                    ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
+                    : ""
+                }
                 </div>
             `
         } else {
@@ -758,10 +784,9 @@ function createMessageNode(rawMsg, timeOverride = "") {
 
                 </a>
 
-                ${
-                    cleanContent
-                        ? `<span class="text-sm mt-1 block">${formatWhatsAppText(cleanContent)}</span>`
-                        : ""
+                ${cleanContent
+                    ? `<span class="text-sm mt-1 block">${formatWhatsAppText(cleanContent)}</span>`
+                    : ""
                 }
             `
         }
@@ -1218,7 +1243,7 @@ export async function send() {
             }
 
             removeAllFiles()
-        } 
+        }
         // 💬 SOLO TEXTO
         else {
             await sendMessage({
@@ -1548,7 +1573,7 @@ function setupSearchAndFilters() {
     }
 
     if (btnUnread) {
-        
+
 
         btnUnread.onclick = () => {
             filterMode = "unread"
@@ -1584,17 +1609,16 @@ function renderMultiPreview() {
         <div class="flex flex-col items-center w-full gap-2">
 
             <div class="relative w-full max-w-[520px]">
-                ${
-                    isImage
-                    ? `
+                ${isImage
+            ? `
                         <img 
                             id="mainPreviewImage"
                             src="${mainUrl}" 
                             class="w-full max-h-[420px] object-contain rounded-xl"
                         />
                     `
-                    : isPDF
-                    ? `
+            : isPDF
+                ? `
                         <embed
                             id="mainPreviewImage"
                             src="${mainUrl}"
@@ -1602,7 +1626,7 @@ function renderMultiPreview() {
                             class="w-full h-[420px] rounded-xl bg-white"
                         />
                     `
-                    : `
+                : `
                         <div 
                             id="mainPreviewImage"
                             class="w-full max-w-[520px] h-[200px] flex flex-col items-center justify-center bg-gray-300 dark:bg-slate-700 rounded-xl text-sm"
@@ -1610,7 +1634,7 @@ function renderMultiPreview() {
                             📄 ${mainFile.name}
                         </div>
                     `
-                }
+        }
 
                 <button
                     type="button"
@@ -1626,28 +1650,28 @@ function renderMultiPreview() {
             </div>
         </div>
     `
-    
+
     const thumbContainer = document.getElementById("thumbContainer")
 
     thumbContainer.innerHTML = selectedFiles.map((file, i) => {
         const url = URL.createObjectURL(file)
         return `
             <div class="relative shrink-0 group">
-                ${file.type.startsWith("image") 
-                    ? `
+                ${file.type.startsWith("image")
+                ? `
                         <img
                             src="${url}"
                             data-thumb
                             onclick="selectPreview(${i})"
                             class="
                                 w-16 h-16 object-cover rounded-md cursor-pointer
-                                ${i === selectedPreviewIndex 
-                                    ? "ring-2 ring-green-500" 
-                                    : "opacity-70 hover:opacity-100"}
+                                ${i === selectedPreviewIndex
+                    ? "ring-2 ring-green-500"
+                    : "opacity-70 hover:opacity-100"}
                             "
                         />
                     `
-                    : `
+                : `
                         <div
                             data-thumb
                             onclick="selectPreview(${i})"
@@ -1655,15 +1679,15 @@ function renderMultiPreview() {
                                 w-16 h-16 flex items-center justify-center
                                 bg-red-500 text-white text-xs font-bold
                                 rounded-md cursor-pointer
-                                ${i === selectedPreviewIndex 
-                                    ? "ring-2 ring-green-500" 
-                                    : "opacity-70 hover:opacity-100"}
+                                ${i === selectedPreviewIndex
+                    ? "ring-2 ring-green-500"
+                    : "opacity-70 hover:opacity-100"}
                             "
                         >
                             PDF
                         </div>
                     `
-                }
+            }
 
                 <button
                     type="button"
@@ -1709,7 +1733,7 @@ function updatePreviewUI() {
                 />
             `
         }
-    } 
+    }
     else if (isPDF) {
         container.outerHTML = `
             <embed
@@ -1719,7 +1743,7 @@ function updatePreviewUI() {
                 class="w-full h-[420px] rounded-xl bg-white"
             />
         `
-    } 
+    }
     else {
         container.outerHTML = `
             <div 
