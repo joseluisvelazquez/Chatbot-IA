@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import datetime
 
@@ -249,18 +250,6 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
     empresa_raw = payload.get("empresa")
     exp_raw = payload.get("exp")
     jti = str(payload.get("jti", "")).strip()
-    print("JTI:", jti)
-
-    token_row = (
-        db.query(AuthToken)
-        .filter(AuthToken.jti == jti)
-        .first()
-    )
-
-    print("TOKEN_ROW:", token_row)
-
-    if token_row:
-        print("USED_AT:", token_row.used_at)
 
     if not username:
         raise AuthError("Token sin usuario")
@@ -283,13 +272,9 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
 
     now = int(time.time())
 
-    print("DIFF:", exp - now)
     CLOCK_SKEW = 120  # 2 minutos
 
     if exp <= now - CLOCK_SKEW:
-        
-        print("NOW:", now)
-        print("EXP:", exp)
         raise AuthError("Token expirado")
 
     
@@ -300,15 +285,19 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
         .first()
     )
 
-    if not token_row:
-        raise AuthError("Token no registrado")
-
-    if token_row.used_at is not None:
+    if token_row and token_row.used_at is not None:
         raise AuthError("Token ya utilizado")
 
+    if token_row:
+        token_row.used_at = now
+    else:
+        db.add(AuthToken(jti=jti, used_at=now))
+
     # Marcar como usado inmediatamente dentro de la transacción actual.
-    token_row.used_at = int(time.time())
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise AuthError("Token ya utilizado") from exc
 
     role = ROLE_MAP.get(puesto, "viewer")
 
