@@ -5,6 +5,7 @@ import copy
 import logging
 import time
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -12,6 +13,9 @@ from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+_BODY_PREVIEW_LIMIT = 500
+_SENSITIVE_QUERY_KEYS = {"phone", "folio", "cuenta", "token", "bridge_token", "x-bridge-token"}
+_SENSITIVE_HEADER_MARKERS = ("authorization", "cookie", "token")
 _CACHE_TTLS_SECONDS = {
     "customer": 300.0,
     "account": 60.0,
@@ -33,6 +37,53 @@ _metrics: dict[str, Any] = {
     "latency_ms_total": 0.0,
     "latency_count": 0,
 }
+
+
+def _sanitize_url(url: httpx.URL | str) -> str:
+    try:
+        parts = urlsplit(str(url))
+        query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+        redacted_pairs = []
+        for key, value in query_pairs:
+            key_lower = key.lower()
+            if key_lower in _SENSITIVE_QUERY_KEYS or "token" in key_lower:
+                redacted_pairs.append((key, "[redacted]"))
+            else:
+                redacted_pairs.append((key, value))
+
+        return urlunsplit(
+            (
+                parts.scheme,
+                parts.netloc,
+                parts.path,
+                urlencode(redacted_pairs),
+                parts.fragment,
+            )
+        )
+    except Exception:
+        return "[unavailable]"
+
+
+def _sanitize_headers(headers: httpx.Headers) -> dict[str, str]:
+    sanitized: dict[str, str] = {}
+    for key, value in headers.items():
+        key_lower = key.lower()
+        if any(marker in key_lower for marker in _SENSITIVE_HEADER_MARKERS):
+            sanitized[key] = "[redacted]"
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+def _record_http_error(status_code: int) -> None:
+    if status_code == 400:
+        _metrics["errors"]["400"] += 1
+    elif status_code == 401:
+        _metrics["errors"]["401"] += 1
+    elif status_code == 429:
+        _metrics["errors"]["429"] += 1
+    elif status_code >= 500:
+        _metrics["errors"]["500"] += 1
 
 
 def _cache_key(action: str, request_params: dict[str, Any]) -> tuple[str, tuple[tuple[str, str], ...]]:
@@ -307,6 +358,7 @@ class SigaBridgeClient:
                 async with httpx.AsyncClient(
                     timeout=self._timeout(),
                     transport=self.transport,
+                    follow_redirects=True,
                 ) as client:
                     response = await client.get(
                         self.base_url,
@@ -317,6 +369,7 @@ class SigaBridgeClient:
                 latency_ms = (time.perf_counter() - started_at) * 1000
                 _metrics["latency_ms_total"] += latency_ms
                 _metrics["latency_count"] += 1
+                self._log_response_debug(response, action, latency_ms)
 
                 if response.status_code in self._TRANSIENT_STATUS_CODES and attempt < attempts:
                     logger.warning(
@@ -372,6 +425,9 @@ class SigaBridgeClient:
         response: httpx.Response,
         action: str,
     ) -> dict[str, Any] | list[Any] | None:
+        if not self._is_json_response(response):
+            self._raise_non_json_response(response, action)
+
         payload = self._decode_json(response, action)
 
         if response.status_code >= 400:
@@ -387,14 +443,126 @@ class SigaBridgeClient:
 
         return data
 
+    def _log_response_debug(
+        self,
+        response: httpx.Response,
+        action: str,
+        latency_ms: float,
+    ) -> None:
+        redirect_chain = [
+            {
+                "status_code": item.status_code,
+                "url": _sanitize_url(item.url),
+                "location": (
+                    _sanitize_url(item.headers["location"])
+                    if item.headers.get("location")
+                    else None
+                ),
+            }
+            for item in response.history
+        ]
+        try:
+            request_url = response.request.url
+        except RuntimeError:
+            request_url = response.url
+
+        should_log_body = response.status_code >= 400 or not self._is_json_response(response)
+        logger.info(
+            "siga_bridge_response_debug",
+            extra={
+                "action": action,
+                "status_code": response.status_code,
+                "url": _sanitize_url(request_url),
+                "final_url": _sanitize_url(response.url),
+                "headers": _sanitize_headers(response.headers),
+                "content_type": self._content_type(response),
+                "body_preview": (
+                    self._body_preview(response)
+                    if should_log_body
+                    else "[omitted_json_success]"
+                ),
+                "latency_ms": round(latency_ms, 2),
+                "redirect_count": len(response.history),
+                "redirect_chain": redirect_chain,
+            },
+        )
+
+    def _content_type(self, response: httpx.Response) -> str:
+        return response.headers.get("content-type", "")
+
+    def _is_json_response(self, response: httpx.Response) -> bool:
+        return "application/json" in self._content_type(response).lower()
+
+    def _body_preview(self, response: httpx.Response) -> str:
+        try:
+            return response.text[:_BODY_PREVIEW_LIMIT]
+        except UnicodeDecodeError:
+            return response.content[:_BODY_PREVIEW_LIMIT].decode("utf-8", errors="replace")
+        except Exception:
+            return "[unavailable]"
+
+    def _looks_like_html(self, body_preview: str, content_type: str) -> bool:
+        normalized_body = body_preview.lstrip().lower()
+        normalized_type = content_type.lower()
+        return (
+            "text/html" in normalized_type
+            or normalized_body.startswith("<!doctype html")
+            or normalized_body.startswith("<html")
+            or "<html" in normalized_body[:120]
+        )
+
+    def _raise_non_json_response(self, response: httpx.Response, action: str) -> None:
+        status_code = response.status_code
+        content_type = self._content_type(response)
+        body_preview = self._body_preview(response)
+        is_html = self._looks_like_html(body_preview, content_type)
+        response_kind = "HTML instead of JSON" if is_html else "non-JSON response"
+        message = f"SIGA Bridge returned {response_kind}"
+        bridge_error = (
+            f"status={status_code}; content_type={content_type or '[missing]'}; "
+            f"body_preview={body_preview}"
+        )
+
+        logger.warning(
+            "siga_bridge_non_json_response",
+            extra={
+                "action": action,
+                "status_code": status_code,
+                "content_type": content_type,
+                "body_preview": body_preview,
+                "final_url": _sanitize_url(response.url),
+                "redirect_count": len(response.history),
+            },
+        )
+
+        kwargs = {
+            "action": action,
+            "status_code": status_code,
+            "bridge_error": bridge_error,
+        }
+
+        if status_code >= 400:
+            _record_http_error(status_code)
+        if status_code == 400:
+            raise SigaBridgeBadRequestError(message, **kwargs)
+        if status_code == 401:
+            raise SigaBridgeUnauthorizedError("SIGA Bridge unauthorized", **kwargs)
+        if status_code == 429:
+            raise SigaBridgeRateLimitError(message, **kwargs)
+        if status_code >= 500:
+            raise SigaBridgeServerError(message, **kwargs)
+
+        raise SigaBridgeContractError(message, **kwargs)
+
     def _decode_json(self, response: httpx.Response, action: str) -> dict[str, Any]:
         try:
             payload = response.json()
         except ValueError as exc:
             raise SigaBridgeContractError(
-                "SIGA Bridge returned non-JSON response",
+                "SIGA Bridge returned invalid JSON response",
                 action=action,
                 status_code=response.status_code,
+                bridge_error=self._body_preview(response),
             ) from exc
 
         if not isinstance(payload, dict):
@@ -459,16 +627,16 @@ class SigaBridgeClient:
         }
 
         if status_code == 400:
-            _metrics["errors"]["400"] += 1
+            _record_http_error(status_code)
             raise SigaBridgeBadRequestError(message, **kwargs)
         if status_code == 401:
-            _metrics["errors"]["401"] += 1
+            _record_http_error(status_code)
             raise SigaBridgeUnauthorizedError(message, **kwargs)
         if status_code == 429:
-            _metrics["errors"]["429"] += 1
+            _record_http_error(status_code)
             raise SigaBridgeRateLimitError(message, **kwargs)
         if status_code >= 500:
-            _metrics["errors"]["500"] += 1
+            _record_http_error(status_code)
             raise SigaBridgeServerError(message, **kwargs)
 
         if ok is False:

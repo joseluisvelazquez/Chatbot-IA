@@ -93,6 +93,41 @@ def test_ok_false_with_2xx_raises_contract_error():
         run(client.ping())
 
 
+def test_html_2xx_raises_contract_error_with_body_preview():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content="<html><body>IONOS maintenance page</body></html>",
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
+
+    client = make_client(handler)
+
+    with pytest.raises(SigaBridgeContractError) as exc_info:
+        run(client.ping())
+
+    assert "HTML instead of JSON" in str(exc_info.value)
+    assert exc_info.value.status_code == 200
+    assert "IONOS maintenance page" in (exc_info.value.bridge_error or "")
+
+
+def test_invalid_json_content_type_raises_contract_error_with_preview():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content="{invalid",
+            headers={"content-type": "application/json"},
+        )
+
+    client = make_client(handler)
+
+    with pytest.raises(SigaBridgeContractError) as exc_info:
+        run(client.ping())
+
+    assert "invalid JSON" in str(exc_info.value)
+    assert "{invalid" in (exc_info.value.bridge_error or "")
+
+
 def test_401_maps_to_unauthorized_exception():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -113,6 +148,48 @@ def test_401_maps_to_unauthorized_exception():
     assert exc_info.value.status_code == 401
     assert "unauthorized" in str(exc_info.value)
     assert get_siga_bridge_metrics()["errors"]["401"] == 1
+
+
+def test_401_html_maps_to_unauthorized_exception():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            content="<html><body>Unauthorized</body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    client = make_client(handler)
+
+    with pytest.raises(SigaBridgeUnauthorizedError) as exc_info:
+        run(client.ping())
+
+    assert exc_info.value.status_code == 401
+    assert "unauthorized" in str(exc_info.value).lower()
+    assert "Unauthorized" in (exc_info.value.bridge_error or "")
+    assert get_siga_bridge_metrics()["errors"]["401"] == 1
+
+
+def test_redirects_are_followed_and_final_json_is_parsed():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.scheme == "http":
+            return httpx.Response(
+                302,
+                headers={"location": "https://bridge.local/bridge/?action=ping"},
+            )
+        return httpx.Response(
+            200,
+            json=bridge_payload(action="ping", data={"status": "ok"}),
+        )
+
+    client = make_client(handler)
+
+    assert run(client.ping()) == {"status": "ok"}
+    assert len(calls) == 2
+    assert calls[0].startswith("http://bridge.local/bridge/")
+    assert calls[1].startswith("https://bridge.local/bridge/")
 
 
 def test_timeout_retries_once_for_get():
