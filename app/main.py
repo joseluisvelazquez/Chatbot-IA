@@ -45,7 +45,9 @@ app.add_middleware(
         "http://192.168.50.165:5500",
         "http://192.168.1.106:5500",
         "http://192.168.1.71:5500",
-        "http://192.168.50.191:5500"
+        "http://192.168.50.191:5500",
+        "https://chatbot.mxcomp.com.mx",
+        "https://chatbot.mxcomp.mx",
     ],
     allow_credentials=True,
     allow_methods=["*"],
