@@ -50,6 +50,21 @@ def _first_non_empty(record: dict[str, Any] | None, keys: tuple[str, ...]) -> An
     return None
 
 
+def _verification_payload_found(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    if payload.get("found") is False:
+        return False
+
+    sale = payload.get("sale")
+    if isinstance(sale, dict) and sale:
+        return True
+
+    sales = payload.get("sales")
+    return isinstance(sales, list) and any(isinstance(item, dict) and item for item in sales)
+
+
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -197,13 +212,22 @@ async def enrich_verification_with_bridge(
         bridge["verification"] = verification
         if error:
             errors.append(error)
-        elif isinstance(verification, dict) and verification.get("found") is not False:
+        elif _verification_payload_found(verification):
             if isinstance(verification.get("customer"), dict):
                 bridge["customer"] = verification["customer"]
             if isinstance(verification.get("account"), dict):
                 bridge["account"] = verification["account"]
             if verification.get("recent_payments") is not None:
                 bridge["payments"] = verification.get("recent_payments")
+        else:
+            logger.info(
+                "siga_bridge_verification_not_found_or_invalid",
+                extra={
+                    "company_id": company_id,
+                    "folio": folio,
+                    "payload_type": type(verification).__name__,
+                },
+            )
 
     if cuenta and bridge["account"] is None:
         account, error = await _safe_bridge_call(
@@ -272,7 +296,7 @@ async def enrich_verification_with_bridge(
     if not enriched.get("no_cuenta") and bridge_cuenta:
         enriched["no_cuenta"] = str(bridge_cuenta)
 
-    bridge["available"] = any(
+    bridge["available"] = _verification_payload_found(bridge["verification"]) or any(
         bridge.get(key) is not None
         for key in ("customer", "account", "payments")
     )

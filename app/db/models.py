@@ -294,7 +294,7 @@ class ChatSessions(Base):
     previous_state: Mapped[Optional[str]] = mapped_column(VARCHAR(50))
     last_message: Mapped[Optional[str]] = mapped_column(TEXT)
     last_message_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
-    extra_json: Mapped[dict[str, Any]] = mapped_column(MYSQL_JSON, nullable=False, default=dict)
+    extra_json: Mapped[dict[str, any]] = mapped_column(MYSQL_JSON, nullable=False, default=dict)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime, server_default=text("CURRENT_TIMESTAMP")
     )
