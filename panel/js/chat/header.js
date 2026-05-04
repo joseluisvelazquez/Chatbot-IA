@@ -129,6 +129,40 @@ function buildBadge(className, label) {
     `
 }
 
+function realtimeMeta(status = "unknown") {
+    const map = {
+        reconnecting: {
+            label: "Reintentando conexion",
+            dot: "bg-amber-500",
+            className: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
+        },
+        disconnected: {
+            label: "Tiempo real desconectado",
+            dot: "bg-red-500",
+            className: "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300",
+        },
+        error: {
+            label: "Sin actualizaciones automaticas",
+            dot: "bg-red-500",
+            className: "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300",
+        },
+    }
+
+    return map[status] || null
+}
+
+function buildRealtimeBadge(status) {
+    const meta = realtimeMeta(status)
+    if (!meta) return ""
+
+    return `
+        <span class="${badgeClassNames()} ${meta.className}" title="El WebSocket solo indica actividad; los datos se confirman con backend.">
+            <span class="mr-1.5 h-1.5 w-1.5 rounded-full ${meta.dot}"></span>
+            ${escapeHtml(meta.label)}
+        </span>
+    `
+}
+
 export function renderHeader({
     session,
     displayName,
@@ -140,14 +174,23 @@ export function renderHeader({
     onReturnToGestor,
     onAssignManager,
     onCloseSupport,
+    realtimeStatus = "unknown",
 }) {
     const header = document.getElementById("chatHeader")
     if (!header) return
 
     if (!session) {
         header.innerHTML = `
-            <div class="text-sm text-gray-400">
-                Selecciona una conversacion
+            <div class="flex min-h-[72px] items-center justify-between gap-3">
+                <div class="min-w-0">
+                    <div class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        Selecciona una conversacion
+                    </div>
+                    <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        La lista se mantiene actualizada con eventos en tiempo real y se confirma contra backend al abrir un chat.
+                    </div>
+                </div>
+                ${buildRealtimeBadge(realtimeStatus)}
             </div>
         `
         return
@@ -168,6 +211,7 @@ export function renderHeader({
         session.owner_type ||
         "Sin asignar"
     )
+    const safeFolio = escapeHtml(session.folio || session.no_cuenta || "")
 
     const actionHandlers = {
         onTakeChat,
@@ -185,7 +229,8 @@ export function renderHeader({
 
     const badges = [
         buildBadge(meta.className, meta.label),
-    ]
+        buildRealtimeBadge(realtimeStatus),
+    ].filter(Boolean)
 
     if (hasPendingAction(session)) {
         badges.push(
@@ -239,6 +284,7 @@ export function renderHeader({
                             </div>
                             <div class="truncate text-xs text-slate-500 dark:text-slate-400">
                                 ${safePhone || "Sin telefono"}
+                                ${safeFolio ? `<span class="mx-1 text-slate-300 dark:text-slate-600">/</span><span>Folio ${safeFolio}</span>` : ""}
                             </div>
                         </div>
                     </div>

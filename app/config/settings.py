@@ -85,6 +85,16 @@ class Settings(BaseSettings):
     TEST_PHONE_ONLY: list[str]
     DEBUG: bool = True
 
+    # ============================================================
+    # SIGA Bridge v1
+    # ============================================================
+    SIGA_BRIDGE_BASE_URL: str = "http://localhost/PruebasP/bridge/"
+    SIGA_BRIDGE_TOKEN: str | None = None
+    SIGA_BRIDGE_ENABLED: bool = False
+    SIGA_BRIDGE_TIMEOUT_CONNECT: float = 2.0
+    SIGA_BRIDGE_TIMEOUT_READ: float = 5.0
+    SIGA_BRIDGE_ALLOW_INSECURE_LOCAL: bool = False
+
     @property
     def DATABASE_URL(self) -> str:
         return (

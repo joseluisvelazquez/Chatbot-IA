@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import datetime
 
@@ -332,15 +333,19 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
         .first()
     )
 
-    if not token_row:
-        raise AuthError("Token no registrado")
-
-    if token_row.used_at is not None:
+    if token_row and token_row.used_at is not None:
         raise AuthError("Token ya utilizado")
 
+    if token_row:
+        token_row.used_at = now
+    else:
+        db.add(AuthToken(jti=jti, used_at=now))
+
     # Marcar como usado inmediatamente dentro de la transacción actual.
-    token_row.used_at = int(time.time())
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise AuthError("Token ya utilizado") from exc
 
     role = normalize_role(ROLE_MAP.get(puesto, panel_role_for_puesto(puesto) or ROLE_LECTURA))
 

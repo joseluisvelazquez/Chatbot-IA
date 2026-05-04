@@ -6,12 +6,17 @@ export function createAssignManagerModal({
     canAssignManager,
     getSelectedConversation,
     getCurrentSessionId,
+    getState,
+    onAssignOptimistic,
+    onAssignRollback,
     onAssigned,
     showToast,
 }) {
     let managersCache = []
     let isManagersLoading = false
     let isAssignManagerSubmitting = false
+    let managersController = null
+    let searchDebounceTimer = null
 
     function getNodes() {
         return {
@@ -42,6 +47,20 @@ export function createAssignManagerModal({
 
         if (close) close.disabled = disabled
         if (search) search.disabled = disabled
+    }
+
+    function getLiveLoad(username, fallback = 0) {
+        if (typeof getState !== "function" || !username) return Number(fallback || 0)
+
+        const state = getState()
+        const sessions = state.conversations?.order
+            ?.map((id) => state.conversations.byId[id])
+            ?.filter(Boolean) || []
+
+        return sessions.filter((session) => (
+            String(session.assigned_user_id || "").toLowerCase() === String(username).toLowerCase()
+            && !["closed", "completed"].includes(String(session.status_operativo || "").toLowerCase())
+        )).length
     }
 
     function renderList(filterText = "") {
@@ -76,7 +95,7 @@ export function createAssignManagerModal({
                         </div>
                     </div>
                     <div class="shrink-0 text-right text-xs text-slate-500 dark:text-slate-400">
-                        <div>${Number(item.current_load || 0)} chats</div>
+                        <div>${getLiveLoad(item.username, item.current_load)} chats</div>
                         <div class="${item.is_online ? "text-emerald-600 dark:text-emerald-400" : ""}">
                             ${item.is_online ? "En linea" : "Sin sesion"}
                         </div>
@@ -110,13 +129,16 @@ export function createAssignManagerModal({
         }
 
         isManagersLoading = true
+        if (managersController) managersController.abort()
+        managersController = new AbortController()
         setLoadingState(true)
 
         try {
-            const response = await getAvailableManagers()
+            const response = await getAvailableManagers({ signal: managersController.signal })
             managersCache = Array.isArray(response) ? response : []
             renderList(search?.value || "")
         } catch (error) {
+            if (managersController?.signal?.aborted) return
             managersCache = []
 
             if (list) {
@@ -129,6 +151,7 @@ export function createAssignManagerModal({
             }
         } finally {
             isManagersLoading = false
+            managersController = null
             setLoadingState(false)
         }
     }
@@ -173,6 +196,9 @@ export function createAssignManagerModal({
 
         isAssignManagerSubmitting = true
         setButtonsDisabled(true)
+        const rollbackState = typeof onAssignOptimistic === "function"
+            ? onAssignOptimistic(username)
+            : null
 
         try {
             const updated = await assignConversationManager(sessionId, username)
@@ -183,6 +209,9 @@ export function createAssignManagerModal({
             close()
             showToast(`Chat asignado a ${username}`, "success")
         } catch (error) {
+            if (typeof onAssignRollback === "function") {
+                onAssignRollback(rollbackState)
+            }
             showToast(error.message || "No se pudo asignar el gestor", "error")
         } finally {
             setButtonsDisabled(false)
@@ -201,7 +230,11 @@ export function createAssignManagerModal({
             }
         })
         search?.addEventListener("input", (event) => {
-            renderList(event.target.value)
+            window.clearTimeout(searchDebounceTimer)
+            const value = event.target.value
+            searchDebounceTimer = window.setTimeout(() => {
+                renderList(value)
+            }, 180)
         })
         modal.dataset.bound = "true"
     }

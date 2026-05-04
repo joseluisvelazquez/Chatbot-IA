@@ -13,7 +13,7 @@ export function createConversationOperationHandlers({
 }) {
     let isChatOperationInFlight = false
 
-    async function applyConversationOperation(operation) {
+    async function applyConversationOperation(operation, options = {}) {
         const currentSessionId = getCurrentSessionId()
         if (!currentSessionId || isChatOperationInFlight) return
 
@@ -22,6 +22,28 @@ export function createConversationOperationHandlers({
         const sessionId = Number(currentSessionId)
         const previousState = getState()
         const previousSession = previousState.conversations.byId[sessionId] || null
+        const optimisticPatch = typeof options.optimisticPatch === "function"
+            ? options.optimisticPatch(previousSession)
+            : null
+
+        if (previousSession && optimisticPatch && typeof optimisticPatch === "object") {
+            dispatch({
+                type: "conversations/upsert",
+                payload: {
+                    ...previousSession,
+                    ...optimisticPatch,
+                    id: sessionId,
+                    _optimistic: true,
+                },
+            })
+
+            const optimisticState = getState()
+            const optimisticSession = optimisticState.conversations.byId[sessionId]
+            if (optimisticSession) {
+                renderSelectedConversation(optimisticSession)
+                renderSidebar(optimisticState)
+            }
+        }
 
         try {
             const updated = await operation(sessionId)
@@ -81,6 +103,15 @@ export function createConversationOperationHandlers({
             showToast("Operacion realizada correctamente", "success")
         } catch (error) {
             console.error("Operacion de chat fallida:", error)
+
+            if (previousSession && optimisticPatch) {
+                dispatch({
+                    type: "conversations/upsert",
+                    payload: previousSession,
+                })
+                renderSelectedConversation(previousSession)
+                renderSidebar(getState())
+            }
 
             const status = Number(error?.status || 0)
 

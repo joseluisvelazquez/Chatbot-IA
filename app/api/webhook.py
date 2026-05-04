@@ -38,16 +38,58 @@ from app.services.panel_notifications import (
     publish_new_customer_message,
     publish_technical_signal,
 )
+from app.services.siga_bridge_integration import lookup_customer_for_incoming_phone
 from app.services.verification_panel_service import build_verification_snapshot
 from app.services.verification_tracker import STEP_MAP
 from app.websockets.manager import manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+SIGA_LOOKUP_CONCURRENCY = 5
+_siga_lookup_semaphore = asyncio.Semaphore(SIGA_LOOKUP_CONCURRENCY)
 
 
 def utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+async def run_siga_customer_lookup_background(
+    phone: str,
+    *,
+    company_id: int,
+    session_id: int,
+) -> None:
+    async with _siga_lookup_semaphore:
+        await lookup_customer_for_incoming_phone(
+            phone,
+            company_id=company_id,
+            session_id=session_id,
+        )
+
+
+def log_background_task_error(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.info("siga_bridge_background_lookup_cancelled")
+    except Exception:
+        logger.exception("siga_bridge_background_lookup_failed")
+
+
+def schedule_siga_customer_lookup(
+    phone: str,
+    *,
+    company_id: int,
+    session_id: int,
+) -> None:
+    task = asyncio.create_task(
+        run_siga_customer_lookup_background(
+            phone,
+            company_id=company_id,
+            session_id=session_id,
+        )
+    )
+    task.add_done_callback(log_background_task_error)
 
 
 def verify_meta_signature(raw_body: bytes, signature_header: str | None) -> bool:
@@ -435,6 +477,13 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             db.refresh(bot_msg)
 
         snapshot = build_verification_snapshot(db, chat)
+
+        if settings.SIGA_BRIDGE_ENABLED:
+            schedule_siga_customer_lookup(
+                phone,
+                company_id=int(getattr(settings, "PANEL_ALLOWED_EMPRESA_ID", 1) or 1),
+                session_id=chat.id,
+            )
 
     except IntegrityError:
         db.rollback()

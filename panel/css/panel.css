@@ -27,12 +27,7 @@ body {
     -webkit-overflow-scrolling: touch;
 }
 
-button,
-input,
-textarea {
-    font: inherit;
-}
-
+.panel-kpi-card,
 .kpi-card {
     display: flex;
     min-width: 0;
@@ -42,19 +37,30 @@ textarea {
     border-radius: 0.5rem;
     background: #ffffff;
     padding: 1rem;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+    transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
+.panel-kpi-card:hover,
+.kpi-card:hover {
+    border-color: rgb(203 213 225);
+    box-shadow: 0 8px 24px rgb(15 23 42 / 0.08);
+}
+
+.dark .panel-kpi-card,
 .dark .kpi-card {
     border-color: rgb(51 65 85);
     background: rgb(30 41 59);
 }
 
+.panel-kpi-card svg,
 .kpi-card svg {
     width: 1.25rem;
     height: 1.25rem;
     color: rgb(37 99 235);
 }
 
+.panel-kpi-card h3,
 .kpi-card h3 {
     overflow-wrap: anywhere;
     font-size: 1.5rem;
@@ -62,29 +68,35 @@ textarea {
     line-height: 1.1;
 }
 
+.panel-kpi-card p,
 .kpi-card p {
     overflow-wrap: anywhere;
     font-size: 0.875rem;
     color: rgb(100 116 139);
 }
 
+.dark .panel-kpi-card p,
 .dark .kpi-card p {
     color: rgb(148 163 184);
 }
 
+.panel-card,
 .card {
     min-width: 0;
     border: 1px solid rgb(226 232 240);
     border-radius: 0.5rem;
     background: #ffffff;
     padding: 1rem;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
 }
 
+.dark .panel-card,
 .dark .card {
     border-color: rgb(51 65 85);
     background: rgb(30 41 59);
 }
 
+.panel-card-title,
 .card-title {
     margin-bottom: 1rem;
     font-size: 1rem;

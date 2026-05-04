@@ -10,6 +10,8 @@ from app.jobs.inactivity_reminders import run_inactivity_reminders_job
 from app.router.auth_router import router as auth_router
 from app.router.panel_router import router as panel_router
 from app.router.media_router import router as media_router
+from app.router.siga_bridge_router import router as siga_bridge_router
+from app.services.siga_bridge import close_siga_bridge_client
 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +24,7 @@ app.include_router(panel_router)
 app.include_router(media_router)
 app.include_router(panel_send_router)
 app.include_router(auth_router)  
+app.include_router(siga_bridge_router)
 app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
 
 app.mount("/media", StaticFiles(directory="/app/media"), name="media")
@@ -52,8 +55,9 @@ def startup():
 
 
 @app.on_event("shutdown")
-def shutdown():
+async def shutdown():
     scheduler.shutdown(wait=False)
+    await close_siga_bridge_client()
 
 
 @app.get("/")

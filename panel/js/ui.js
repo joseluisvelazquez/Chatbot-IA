@@ -272,6 +272,68 @@ function statusClass(status) {
     return `inline-flex items-center px-2.5 py-1 text-xs rounded-full font-medium ${map[status] || "bg-gray-400/20 text-gray-300"}`;
 }
 
+const visual = {
+    card: "rounded-lg border border-gray-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800",
+    cardSoft: "rounded-lg border border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-900/40",
+    section: "rounded-lg border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800",
+    buttonBase: "inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:focus-visible:ring-offset-slate-900",
+    buttonPrimary: "bg-blue-600 text-white hover:bg-blue-700",
+    buttonNeutral: "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
+    mutedText: "text-sm text-slate-500 dark:text-slate-400",
+    labelText: "text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500",
+};
+
+function panelToneClass(tone = "info") {
+    const tones = {
+        info: "border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200",
+        success: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200",
+        warning: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200",
+        error: "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200",
+        neutral: "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-200",
+    };
+    return tones[tone] || tones.info;
+}
+
+function renderStatusBadge(label, tone = "neutral", extraClass = "") {
+    return `
+        <span class="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${panelToneClass(tone)} ${extraClass}">
+            ${escapeHtml(label)}
+        </span>
+    `;
+}
+
+function renderPanel({ title = "", body = "", tone = "info", icon = "info" } = {}) {
+    return `
+        <div class="rounded-lg border p-4 ${panelToneClass(tone)}">
+            <div class="flex gap-3">
+                <i data-lucide="${escapeHtml(icon)}" class="mt-0.5 h-4 w-4 shrink-0"></i>
+                <div class="min-w-0">
+                    ${title ? `<div class="text-sm font-semibold">${escapeHtml(title)}</div>` : ""}
+                    ${body ? `<div class="mt-1 text-sm opacity-90">${body}</div>` : ""}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderEmptyState({ title = "Sin datos", body = "", icon = "inbox" } = {}) {
+    return `
+        <div class="flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 p-6 text-center dark:border-slate-700 dark:bg-slate-900/30">
+            <div class="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg bg-white text-slate-500 shadow-sm dark:bg-slate-800 dark:text-slate-300">
+                <i data-lucide="${escapeHtml(icon)}" class="h-5 w-5"></i>
+            </div>
+            <div class="text-sm font-semibold text-slate-900 dark:text-slate-100">${escapeHtml(title)}</div>
+            ${body ? `<div class="mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">${body}</div>` : ""}
+        </div>
+    `;
+}
+
+function renderSkeletonRows(count = 4) {
+    return Array.from({ length: count }).map((_, index) => `
+        <div class="h-12 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-700/60 ${index % 2 ? "w-5/6" : "w-full"}"></div>
+    `).join("");
+}
+
 function kpiCard(icon, id, label) {
     return `
         <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-4 flex flex-col gap-2">
@@ -283,7 +345,8 @@ function kpiCard(icon, id, label) {
 }
 
 function renderProgressBar(percent) {
-    const safe = Math.max(0, Math.min(100, percent || 0));
+    const numeric = Number(percent);
+    const safe = Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : 0;
 
     return `
         <div class="flex min-w-[120px] items-center gap-2 md:min-w-[160px]">
@@ -300,7 +363,13 @@ window.ui = {
     formatDateTime,
     statusLabel,
     statusClass,
-    renderProgressBar
+    renderProgressBar,
+    visual,
+    panelToneClass,
+    renderStatusBadge,
+    renderPanel,
+    renderEmptyState,
+    renderSkeletonRows
 };
 
 window.ui.kpiCard = kpiCard;

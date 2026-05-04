@@ -13,6 +13,7 @@ export function createSidebarController({
     const sidebarNodes = new Map()
     let searchTerm = ""
     let filterMode = "all"
+    let searchDebounceTimer = null
 
     function createSidebarNode(session) {
         const element = document.createElement("div")
@@ -183,9 +184,13 @@ export function createSidebarController({
 
         if (input) {
             input.addEventListener("input", (event) => {
-                searchTerm = event.target.value.toLowerCase().trim()
-                localStorage.setItem("chatSearch", searchTerm)
-                render(getState())
+                const value = event.target.value
+                window.clearTimeout(searchDebounceTimer)
+                searchDebounceTimer = window.setTimeout(() => {
+                    searchTerm = value.toLowerCase().trim()
+                    localStorage.setItem("chatSearch", searchTerm)
+                    render(getState())
+                }, 180)
             })
         }
 

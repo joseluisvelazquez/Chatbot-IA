@@ -58,6 +58,9 @@ let lastMessagesVersion = -1
 let lastMessagesSessionKey = null
 let lastPreviewVersion = -1
 let lastRealtimeResyncAt = 0
+let chatViewController = null
+let conversationsListController = null
+let realtimeStatus = "unknown"
 
 const renderedMessageIdsBySession = new Map()
 
@@ -68,6 +71,8 @@ const LOAD_COOLDOWN = 500
 const MAX_RENDERED_MESSAGES = 300
 const PAGE_SIZE = 30
 const REALTIME_RESYNC_COOLDOWN_MS = 1500
+const SKELETON_DELAY_MS = 1000
+const SLOW_LOAD_DELAY_MS = 3000
 
 let paginationState = createPaginationState()
 let mobileResizeBound = false
@@ -102,6 +107,35 @@ const assignManagerModal = createAssignManagerModal({
     canAssignManager,
     getSelectedConversation: getSelectedConversationFromState,
     getCurrentSessionId: () => currentSessionId,
+    getState,
+    onAssignOptimistic: (username) => {
+        const sessionId = Number(currentSessionId || 0)
+        const previous = sessionId ? getState().conversations.byId[sessionId] || null : null
+        if (!previous) return null
+
+        dispatch({
+            type: "conversations/upsert",
+            payload: {
+                ...previous,
+                assigned_user_id: username,
+                assigned_role: "gestor",
+                status_operativo: "assigned_gestor",
+                transfer_pending: false,
+                _optimistic: true,
+            },
+        })
+
+        const optimistic = getState().conversations.byId[sessionId]
+        renderSelectedConversation(optimistic)
+        renderSidebarFromState(getState())
+        return previous
+    },
+    onAssignRollback: (previous) => {
+        if (!previous) return
+        dispatch({ type: "conversations/upsert", payload: previous })
+        renderSelectedConversation(previous)
+        renderSidebarFromState(getState())
+    },
     onAssigned: (updated) => {
         dispatch({ type: "conversations/upsert", payload: updated })
         const session = getSelectedConversationFromState() || updated
@@ -177,6 +211,51 @@ function showMobileConversationList() {
 }
 
 window.showMobileConversationList = showMobileConversationList
+
+function abortChatViewRequests() {
+    if (chatViewController) {
+        chatViewController.abort()
+    }
+    chatViewController = new AbortController()
+    return chatViewController
+}
+
+function abortConversationListRequest() {
+    if (conversationsListController) {
+        conversationsListController.abort()
+    }
+    conversationsListController = new AbortController()
+    return conversationsListController
+}
+
+function renderChatSkeleton(message = "Consultando datos...") {
+    const list = document.getElementById("messages")
+    if (!list) return
+
+    list.innerHTML = `
+        <div class="mx-auto mt-6 flex w-full max-w-3xl flex-col gap-4 px-2" aria-live="polite">
+            <div class="text-xs font-medium text-slate-500 dark:text-slate-400">${message}</div>
+            ${Array.from({ length: 5 }).map((_, index) => `
+                <div class="h-16 animate-pulse rounded-2xl bg-white dark:bg-slate-800 ${index % 2 ? "ml-auto w-2/3" : "w-3/4"}"></div>
+            `).join("")}
+        </div>
+    `
+}
+
+function renderInlineChatStatus(message = "Actualizando datos...") {
+    const list = document.getElementById("messages")
+    if (!list || document.getElementById("chatInlineStatus")) return
+
+    const status = document.createElement("div")
+    status.id = "chatInlineStatus"
+    status.className = "mx-auto my-2 inline-flex items-center gap-2 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-medium text-white shadow dark:bg-slate-100 dark:text-slate-900"
+    status.textContent = message
+    list.prepend(status)
+}
+
+function removeInlineChatStatus() {
+    document.getElementById("chatInlineStatus")?.remove()
+}
 
 function syncPreviewFromStore() {
     const preview = getState().chat.preview
@@ -256,11 +335,24 @@ function renderConversationPlaceholder(message = "Selecciona una conversacion") 
     const list = document.getElementById("messages")
 
     if (header) {
-        header.innerHTML = `<div class="text-sm text-gray-400">${escapeHtml(message)}</div>`
+        renderHeader(null, "", "")
     }
 
     if (list) {
-        list.innerHTML = ""
+        list.innerHTML = `
+            <div class="flex min-h-[360px] items-center justify-center p-4">
+                <div class="max-w-md rounded-lg border border-dashed border-slate-300 bg-white/70 p-6 text-center shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
+                    <div class="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300">
+                        <i data-lucide="message-square" class="h-5 w-5"></i>
+                    </div>
+                    <div class="text-sm font-semibold text-slate-900 dark:text-slate-100">${escapeHtml(message)}</div>
+                    <div class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                        Elige un chat de la lista para cargar mensajes, owner operativo y acciones disponibles.
+                    </div>
+                </div>
+            </div>
+        `
+        if (window.lucide) window.lucide.createIcons()
     }
 
     removeTyping()
@@ -281,6 +373,7 @@ function clearActiveConversation(options = {}) {
     const sessionIdToRemove = Number(removeSessionId || 0)
 
     chatLoadRequestId += 1
+    abortChatViewRequests()
     currentSessionId = null
     lastLoadedSessionId = null
     isLoadingChat = false
@@ -351,6 +444,15 @@ function handleRealtimeConversationEvent(event) {
     if (!event || typeof event !== "object") return
 
     if (event.type === "socket_status") {
+        realtimeStatus = event.status || "unknown"
+
+        const session = getSelectedConversationFromState()
+        if (session) {
+            renderSelectedConversation(session)
+        } else {
+            renderConversationPlaceholder()
+        }
+
         if (event.status === "connected") {
             void syncConversationVisibilityFromBackend({ force: true })
         }
@@ -483,10 +585,12 @@ export async function initConversationsPage() {
     unsubscribeChatRealtime = subscribeWebSocket(handleRealtimeConversationEvent)
 
     let sessions = []
+    const listRequest = abortConversationListRequest()
 
     try {
-        sessions = await getConversations()
+        sessions = await getConversations(100, 0, { signal: listRequest.signal })
     } catch (error) {
+        if (listRequest.signal.aborted) return
         console.error("No se pudieron cargar las conversaciones:", error)
         showToast(error.message || "No se pudieron cargar las conversaciones", "error")
         sessions = []
@@ -879,12 +983,41 @@ function createMessageNode(rawMsg, timeOverride = "") {
             ? "text-gray-900 dark:text-gray-300"
             : "text-gray-800 dark:!text-black"
 
+    const messageFailed = ["failed", "error"].includes(String(msg.status || msg.delivery_status || "").toLowerCase())
+        || Boolean(msg.failed || msg.error)
+    const retryAction = messageFailed
+        ? `
+            <div class="mt-2 flex items-center justify-end gap-2 text-[11px]">
+                <span class="rounded-full bg-red-100 px-2 py-1 font-medium text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                    No enviado
+                </span>
+                ${typeof window.retryFailedMessage === "function"
+                    ? `<button
+                        type="button"
+                        data-retry-message-id="${escapeHtml(msg.id || "")}"
+                        class="rounded-md border border-red-200 bg-white px-2 py-1 font-medium text-red-700 transition hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:border-red-900 dark:bg-slate-900 dark:text-red-300 dark:hover:bg-red-950/30"
+                        title="Reintentar envio"
+                    >
+                        Reintentar
+                    </button>`
+                    : ""
+                }
+            </div>
+        `
+        : ""
+
     bubble.innerHTML = `
         ${bodyContent}
         <div class="text-[10px] ${metaClass} mt-1 text-right">
             ${label ? `${label} · ${time}` : time}
         </div>
+        ${retryAction}
     `
+
+    const retryButton = bubble.querySelector("[data-retry-message-id]")
+    if (retryButton && typeof window.retryFailedMessage === "function") {
+        retryButton.onclick = () => window.retryFailedMessage(msg.id)
+    }
 
     wrapper.appendChild(bubble)
     return wrapper
@@ -1126,6 +1259,8 @@ export async function loadChat(sessionId, phone, name = null) {
     }
 
     const requestId = ++chatLoadRequestId
+    const requestController = abortChatViewRequests()
+    const requestSignal = requestController.signal
     imageList = []
     currentImageIndex = 0
     thumbsRendered = false
@@ -1153,6 +1288,16 @@ export async function loadChat(sessionId, phone, name = null) {
 
     const safePhone = phone || sessionInfo?.phone || ""
     const displayName = sessionInfo?.display_name || sessionInfo?.name || name || safePhone || "Cliente sin nombre"
+    const skeletonTimer = window.setTimeout(() => {
+        if (!isChatLoadInvalid(requestId, numericSessionId)) {
+            renderChatSkeleton("Consultando mensajes...")
+        }
+    }, SKELETON_DELAY_MS)
+    const slowTimer = window.setTimeout(() => {
+        if (!isChatLoadInvalid(requestId, numericSessionId)) {
+            renderInlineChatStatus("Sincronizando...")
+        }
+    }, SLOW_LOAD_DELAY_MS)
 
 
     try {
@@ -1162,8 +1307,9 @@ export async function loadChat(sessionId, phone, name = null) {
         updateComposerState(sessionInfo)
 
         try {
-            await markConversationRead(numericSessionId)
+            await markConversationRead(numericSessionId, { signal: requestSignal })
         } catch (err) {
+            if (requestSignal.aborted) return
             const status = Number(err?.status || 0)
 
             if (status === 403 || status === 404) {
@@ -1201,8 +1347,9 @@ export async function loadChat(sessionId, phone, name = null) {
 
         let messages = null
         try {
-            messages = await getMessages(numericSessionId, PAGE_SIZE, 0)
+            messages = await getMessages(numericSessionId, PAGE_SIZE, 0, { signal: requestSignal })
         } catch (error) {
+            if (requestSignal.aborted) return
             const status = Number(error?.status || 0)
 
             if (status === 403 || status === 404) {
@@ -1244,6 +1391,9 @@ export async function loadChat(sessionId, phone, name = null) {
         lastLoadedSessionId = numericSessionId
 
     } finally {
+        window.clearTimeout(skeletonTimer)
+        window.clearTimeout(slowTimer)
+        removeInlineChatStatus()
         if (requestId === chatLoadRequestId) {
             isLoadingChat = false
             dispatch({
@@ -1721,6 +1871,7 @@ function renderHeader(session, displayName, phone) {
         onReturnToGestor: () => returnCurrentChat('gestor'),
         onAssignManager: openAssignManagerModal,
         onCloseSupport: closeSupportToOriginalGestor,
+        realtimeStatus,
     })
 }
 
@@ -1748,36 +1899,91 @@ async function applyConversationOperation(operation) {
 }
 
 function takeCurrentChat() {
-    return applyConversationOperation((sessionId) => takeConversation(sessionId))
+    return conversationOperations.applyConversationOperation(
+        (sessionId) => takeConversation(sessionId),
+        {
+            optimisticPatch: () => ({
+                status_operativo: "assigned_gestor",
+                assigned_user_id: getCurrentUser()?.username || null,
+                assigned_role: "gestor",
+            }),
+        }
+    )
 }
 
 function transferCurrentChat(destination) {
-    return applyConversationOperation((sessionId) => transferConversation(sessionId, destination))
+    return conversationOperations.applyConversationOperation(
+        (sessionId) => transferConversation(sessionId, destination),
+        {
+            optimisticPatch: () => ({
+                status_operativo: destination === "soporte_tecnico" ? "assigned_soporte" : destination,
+                assigned_role: destination === "soporte_tecnico" ? "soporte" : destination,
+                transfer_pending: false,
+            }),
+        }
+    )
 }
 
 function returnCurrentChat(destination) {
-    return applyConversationOperation((sessionId) => returnConversation(sessionId, destination))
+    return conversationOperations.applyConversationOperation(
+        (sessionId) => returnConversation(sessionId, destination),
+        {
+            optimisticPatch: () => ({
+                status_operativo: destination === "gestor" ? "assigned_gestor" : "assistant_active",
+                assigned_role: destination,
+                transfer_pending: false,
+            }),
+        }
+    )
 }
 
 function closeSupportToOriginalGestor() {
-    return applyConversationOperation((sessionId) => closeTechnicalIncident(sessionId, {
-        return_action: 'return_to_original_gestor',
-        fallback_destination: 'jefe_operativo',
-    }))
+    return conversationOperations.applyConversationOperation(
+        (sessionId) => closeTechnicalIncident(sessionId, {
+            return_action: 'return_to_original_gestor',
+            fallback_destination: 'jefe_operativo',
+        }),
+        {
+            optimisticPatch: () => ({
+                status_operativo: "assigned_gestor",
+                assigned_role: "gestor",
+                transfer_pending: false,
+            }),
+        }
+    )
 }
 
 function closeSupportToAssistant() {
-    return applyConversationOperation((sessionId) => closeTechnicalIncident(sessionId, {
-        return_action: 'assistant_active',
-        fallback_destination: 'jefe_operativo',
-    }))
+    return conversationOperations.applyConversationOperation(
+        (sessionId) => closeTechnicalIncident(sessionId, {
+            return_action: 'assistant_active',
+            fallback_destination: 'jefe_operativo',
+        }),
+        {
+            optimisticPatch: () => ({
+                status_operativo: "assistant_active",
+                assigned_role: "assistant",
+                transfer_pending: false,
+            }),
+        }
+    )
 }
 
 function closeSupportToQueue() {
-    return applyConversationOperation((sessionId) => closeTechnicalIncident(sessionId, {
-        return_action: 'cola_general',
-        fallback_destination: 'jefe_operativo',
-    }))
+    return conversationOperations.applyConversationOperation(
+        (sessionId) => closeTechnicalIncident(sessionId, {
+            return_action: 'cola_general',
+            fallback_destination: 'jefe_operativo',
+        }),
+        {
+            optimisticPatch: () => ({
+                status_operativo: "unassigned",
+                assigned_user_id: null,
+                assigned_role: null,
+                transfer_pending: false,
+            }),
+        }
+    )
 }
 
 window.takeCurrentChat = takeCurrentChat

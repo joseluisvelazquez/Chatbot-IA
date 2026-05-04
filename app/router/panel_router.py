@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import desc, func, select, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -74,6 +75,7 @@ from app.services.panel_notifications import (
     publish_chat_operation,
 )
 from app.services.panel_staff import get_available_managers
+from app.services.siga_bridge_integration import enrich_verification_with_bridge
 from app.services.verification_panel_service import (
     build_verification_snapshot,
     classify_panel_status,
@@ -736,12 +738,7 @@ def get_verifications(
     }
 
 
-@router.get("/verifications/{session_id}")
-def get_verification_by_session(
-    session_id: int,
-    db: Session = Depends(get_db),
-    user=Depends(require_empresa_panel),
-):
+def build_verification_detail_sync(session_id: int, db: Session, user) -> dict:
     session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
     if not session or not session.folio:
         raise HTTPException(404, "Verificación no encontrada")
@@ -797,6 +794,25 @@ def get_verification_by_session(
         "last_activity": session.last_message_at,
         "siga_url": build_siga_url(no_cuenta, folio),
     }
+
+
+@router.get("/verifications/{session_id}")
+async def get_verification_by_session(
+    session_id: int,
+    refresh_siga: bool = False,
+    db: Session = Depends(get_db),
+    user=Depends(require_empresa_panel),
+):
+    item = await run_in_threadpool(build_verification_detail_sync, session_id, db, user)
+
+    if normalize_role(user.role) in {"admin", "jefe_operativo"}:
+        return await enrich_verification_with_bridge(
+            item,
+            company_id=user.empresa_id,
+            bypass_cache=refresh_siga,
+        )
+
+    return item
 
 
 @router.patch("/inconsistencias/{inconsistencia_id}/resolution", dependencies=HTTP_ORIGIN_DEPENDENCIES)

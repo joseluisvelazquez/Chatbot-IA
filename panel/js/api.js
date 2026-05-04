@@ -6,7 +6,7 @@ const RETRYABLE_METHODS = new Set(["GET"])
 
 export class ApiRequestError extends Error {
     constructor(message, options = {}) {
-        super(message)
+        super(humanizeApiErrorMessage(message, options))
         this.name = "ApiRequestError"
         this.status = options.status ?? null
         this.payload = options.payload ?? null
@@ -69,8 +69,45 @@ function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function humanizeApiErrorMessage(message = "", options = {}) {
+    const raw = String(message || "").trim()
+    const lower = raw.toLowerCase()
+
+    if (options.isTimeout || lower.includes("timeout") || lower.includes("tard")) {
+        return "Tiempo de espera agotado"
+    }
+
+    if (options.isNetworkError || lower.includes("failed to fetch") || lower.includes("network")) {
+        return "No se pudo conectar con el servidor"
+    }
+
+    if (lower.includes("siga")) {
+        if (lower.includes("fallback")) return "Mostrando datos anteriores"
+        return "No se pudo conectar con SIGA"
+    }
+
+    if (lower.startsWith("http ") || lower.includes("traceback") || lower.includes("sqlalchemy")) {
+        return "No se pudo completar la operacion"
+    }
+
+    return raw || "No se pudo completar la operacion"
+}
+
 async function fetchWithTimeout(url, config, timeoutMs) {
     const controller = new AbortController()
+    const externalSignal = config.signal
+    const abortFromExternalSignal = () => {
+        controller.abort(externalSignal?.reason)
+    }
+
+    if (externalSignal) {
+        if (externalSignal.aborted) {
+            abortFromExternalSignal()
+        } else {
+            externalSignal.addEventListener("abort", abortFromExternalSignal, { once: true })
+        }
+    }
+
     const timer = setTimeout(() => controller.abort(), timeoutMs)
 
     try {
@@ -80,6 +117,9 @@ async function fetchWithTimeout(url, config, timeoutMs) {
         })
     } finally {
         clearTimeout(timer)
+        if (externalSignal) {
+            externalSignal.removeEventListener("abort", abortFromExternalSignal)
+        }
     }
 }
 
@@ -179,10 +219,11 @@ export async function apiRequest(endpoint, options = {}) {
             }
 
             if (error?.name === "AbortError") {
+                const wasExternalAbort = Boolean(options.signal?.aborted)
                 throw new ApiRequestError(
-                    "La solicitud tardó demasiado",
+                    wasExternalAbort ? "Solicitud cancelada" : "Tiempo de espera agotado",
                     {
-                        isTimeout: true,
+                        isTimeout: !wasExternalAbort,
                     }
                 )
             }
@@ -216,16 +257,27 @@ export async function apiRequest(endpoint, options = {}) {
    ENDPOINTS
 =========================== */
 
-export const fetchVerifications = (status = "", limit = 500, offset = 0) => {
+export const fetchVerifications = (status = "", limit = 500, offset = 0, options = {}) => {
     const params = new URLSearchParams()
     if (status) params.set("status", status)
     params.set("limit", String(limit))
     params.set("offset", String(offset))
-    return apiRequest(`/panel/verifications?${params}`)
+    return apiRequest(`/panel/verifications?${params}`, {
+        signal: options.signal,
+    })
 }
 
-export const getVerificationBySession = (sessionId) =>
-    apiRequest(`/panel/verifications/${sessionId}`)
+export const getVerificationBySession = (sessionId, options = {}) => {
+    const params = new URLSearchParams()
+    if (options.refreshSiga) {
+        params.set("refresh_siga", "true")
+    }
+
+    const query = params.toString()
+    return apiRequest(`/panel/verifications/${sessionId}${query ? `?${query}` : ""}`, {
+        signal: options.signal,
+    })
+}
 
 export const updateInconsistenciaPanelResolution = (
     inconsistenciaId,
@@ -240,11 +292,15 @@ export const updateInconsistenciaPanelResolution = (
         }),
     })
 
-export const getConversations = (limit = 100, offset = 0) =>
-    apiRequest(`/panel/conversations?limit=${limit}&offset=${offset}`)
+export const getConversations = (limit = 100, offset = 0, options = {}) =>
+    apiRequest(`/panel/conversations?limit=${limit}&offset=${offset}`, {
+        signal: options.signal,
+    })
 
-export const getAvailableManagers = () =>
-    apiRequest("/panel/gestores-disponibles")
+export const getAvailableManagers = (options = {}) =>
+    apiRequest("/panel/gestores-disponibles", {
+        signal: options.signal,
+    })
 
 export const assignConversationManager = (sessionId, username, reason = null) =>
     apiRequest(`/panel/chats/${sessionId}/assign-manager`, {
@@ -257,12 +313,15 @@ export const syncInactiveManagerAssignments = () =>
         method: "POST",
     })
 
-export const getMessages = (sessionId, limit = 30, offset = 0) =>
-    apiRequest(`/panel/messages/${sessionId}?limit=${limit}&offset=${offset}`)
+export const getMessages = (sessionId, limit = 30, offset = 0, options = {}) =>
+    apiRequest(`/panel/messages/${sessionId}?limit=${limit}&offset=${offset}`, {
+        signal: options.signal,
+    })
 
-export const markConversationRead = (sessionId) =>
+export const markConversationRead = (sessionId, options = {}) =>
     apiRequest(`/panel/conversations/${sessionId}/read`, {
         method: "POST",
+        signal: options.signal,
     })
 
 export const sendMessage = (payload) =>
@@ -347,3 +406,6 @@ export const getDashboardFunnel = (days = 7) =>
 
 export const getDashboardStateTimes = (days = 7) =>
     apiRequest(`/panel/dashboard/state-times?days=${days}`)
+
+export const getSigaBridgeMetrics = () =>
+    apiRequest("/panel/siga-bridge/metrics")

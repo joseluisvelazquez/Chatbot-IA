@@ -13,11 +13,11 @@ export function getLastRenderedDate(list) {
 
 export function insertDateSeparator(list, dateString) {
     const separator = document.createElement("div")
-    separator.className = "flex justify-center my-2"
+    separator.className = "sticky top-2 z-10 flex justify-center my-3 pointer-events-none"
     separator.dataset.separatorType = "date"
 
     separator.innerHTML = `
-        <div class="text-xs px-3 py-1 rounded-full bg-gray-300 dark:bg-slate-700 text-gray-700 dark:text-gray-200">
+        <div class="rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-semibold text-slate-500 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/90 dark:text-slate-300">
             ${formatDateSeparator(dateString)}
         </div>
     `
@@ -30,13 +30,15 @@ export function ensureNewMessagesSeparator(list) {
 
     const separator = document.createElement("div")
     separator.id = "newMessagesSeparator"
-    separator.className = "flex justify-center my-2"
+    separator.className = "flex items-center gap-3 my-4"
     separator.dataset.separatorType = "new"
 
     separator.innerHTML = `
-        <div class="text-xs px-3 py-1 rounded-full bg-blue-500 text-white">
+        <div class="h-px flex-1 bg-blue-200 dark:bg-blue-900"></div>
+        <div class="rounded-full bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white shadow-sm">
             Nuevos mensajes
         </div>
+        <div class="h-px flex-1 bg-blue-200 dark:bg-blue-900"></div>
     `
 
     list.appendChild(separator)

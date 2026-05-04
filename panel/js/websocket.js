@@ -69,6 +69,11 @@ function scheduleReconnect() {
     reconnectAttempts += 1
 
     const delay = reconnectDelay()
+    emit({
+        type: "socket_status",
+        status: "reconnecting",
+        delay,
+    })
 
     reconnectTimer = setTimeout(() => {
         reconnectTimer = null
