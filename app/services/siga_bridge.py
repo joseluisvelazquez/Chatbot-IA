@@ -126,6 +126,18 @@ def _set_cached(action: str, request_params: dict[str, Any], value: Any) -> None
     if ttl is None:
         return
 
+    if action == "customer" and isinstance(value, dict):
+        customers = value.get("customers")
+        if isinstance(customers, list) and len(customers) == 0:
+            logger.info(
+                "siga_bridge_customer_empty_not_cached",
+                extra={
+                    "action": action,
+                    "company_id": request_params.get("company_id"),
+                },
+            )
+            return
+
     _cache[_cache_key(action, request_params)] = (
         time.monotonic() + ttl,
         copy.deepcopy(value),
@@ -259,6 +271,16 @@ class SigaBridgeClient:
         params: dict[str, Any] = {"phone": phone}
         if company_id is not None:
             params["company_id"] = company_id
+        digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+        logger.info(
+            "siga_bridge_customer_lookup_input",
+            extra={
+                "company_id": company_id,
+                "phone_digits_len": len(digits),
+                "phone_last10": digits[-10:] if len(digits) >= 10 else digits,
+                "lookup_authoritative": False,
+            },
+        )
         return await self._get("customer", params, bypass_cache=bypass_cache)
 
     async def get_folio(
@@ -279,6 +301,14 @@ class SigaBridgeClient:
         params: dict[str, Any] = {"folio": folio}
         if company_id is not None:
             params["company_id"] = company_id
+        logger.info(
+            "siga_bridge_verification_lookup_input",
+            extra={
+                "company_id": company_id,
+                "folio": str(folio or ""),
+                "lookup_authoritative": True,
+            },
+        )
         return await self._get("verification", params)
 
     async def get_account(
