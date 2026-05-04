@@ -435,6 +435,28 @@ FLOW = {
             "affirmative": "__RESUME__",
         },
     },
+    
+    ChatState.RECORDATORIO_24H: {
+        "text": msg.RECORDATORIO_24H,
+        "buttons": [
+            {"id": "REANUDACION", "label": "▶️ Continuar"},
+        ],
+        "options": {
+            "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
+        },
+    },
+
+    ChatState.RECORDATORIO_48H: {
+        "text": msg.RECORDATORIO_48H,
+        "buttons": [
+            {"id": "REANUDACION", "label": "▶️ Continuar"},
+        ],
+        "options": {
+            "REANUDACION": "__RESUME__",
+            "affirmative": "__RESUME__",
+        },
+    },
 
 
     ChatState.FINALIZADO: {

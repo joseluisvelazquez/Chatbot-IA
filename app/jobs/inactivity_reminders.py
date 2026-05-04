@@ -5,14 +5,14 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.db.models import Reminder, ChatSessions
-from app.services.reminder_service import TYPE_1H, TYPE_2H
+from app.services.reminder_service import TYPE_1H, TYPE_2H, TYPE_24H, TYPE_48H
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.core.flow.flow import FLOW
 from app.core.states.states import ChatState
 
 
 # 🔒 Opcional: limitar a un número durante pruebas
-TEST_PHONE_ONLY = ["5214271227177", "5214271665615", "5214271644542"]
+TEST_PHONE_ONLY = []
 
 
 def utcnow_naive() -> datetime:
@@ -23,17 +23,32 @@ def utcnow_naive() -> datetime:
 # ENVÍO DE RECORDATORIO
 # ------------------------------------------------------------
 
+from app.core.states.state_types import is_persistent_state
+
 async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
 
     if reminder_type == TYPE_1H:
         state = ChatState.RECORDATORIO_1H
-    else:
+    elif reminder_type == TYPE_2H:
         state = ChatState.RECORDATORIO_2H
+    elif reminder_type == TYPE_24H:
+        state = ChatState.RECORDATORIO_24H
+    elif reminder_type == TYPE_48H:
+        state = ChatState.RECORDATORIO_48H
+    else:
+        return
 
     node = FLOW[state]
 
     text = node["text"]
     buttons = node["buttons"]
+
+    try:
+        current_state_enum = ChatState(session.state)
+        if is_persistent_state(current_state_enum):
+            session.previous_state = session.state
+    except ValueError:
+        pass
 
     session.state = state.value
 
@@ -53,7 +68,7 @@ async def _send_due_reminders(db: Session) -> None:
         .filter(Reminder.scheduled_at <= now)
         .filter(Reminder.sent_at.is_(None))
         .filter(Reminder.cancelled_at.is_(None))
-        .filter(Reminder.type.in_([TYPE_1H, TYPE_2H]))
+        .filter(Reminder.type.in_([TYPE_1H, TYPE_2H, TYPE_24H, TYPE_48H]))
         .order_by(Reminder.scheduled_at.asc())
         .limit(200)
         .all()

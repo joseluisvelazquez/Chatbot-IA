@@ -118,25 +118,27 @@ def generate_ai_response(
                 # LIMITAR LONGITUD
                 # --------------------------------------
 
-                if len(response_text) > 250:
-                    response_text = response_text[:250]
-
-                # --------------------------------------
-                # SOLO PRIMERA IDEA (CLAVE)
-                # --------------------------------------
-
-                if not response_text.startswith("{"):
-                    for sep in [". ", "\n"]:
-                        if sep in response_text:
-                            response_text = response_text.split(sep)[0].strip()
-                            break
+                if len(response_text) > 800:
+                    # Cortar en el último espacio antes del límite para no romper palabras
+                    corte = response_text[:800].rfind(" ")
+                    if corte != -1:
+                        response_text = response_text[:corte]
+                    else:
+                        response_text = response_text[:800]
 
                 # --------------------------------------
                 # EVITAR PREGUNTAS
                 # --------------------------------------
 
                 if "?" in response_text:
-                    response_text = response_text.split("?")[0].strip()
+                    # En lugar de cortar abruptamente, simplemente quitamos las líneas finales que sean preguntas
+                    lines = response_text.split('\n')
+                    clean_lines = [line for line in lines if "?" not in line]
+                    if clean_lines:
+                        response_text = "\n".join(clean_lines).strip()
+                    else:
+                        # Si todo era pregunta, lo dejamos (para no devolver vacío)
+                        pass
 
                 # --------------------------------------
                 # ASEGURAR FORMATO FINAL

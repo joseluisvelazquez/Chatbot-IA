@@ -28,6 +28,8 @@ def is_doubt(text: str) -> bool:
         "por qué",
         "porque",
         "no entiendo",
+        "no entendi",
+        "no entendí",
         "explícame",
         "explicame",
         "duda",
@@ -91,7 +93,7 @@ def should_use_ai(text: str, detected_intent: str, state=None) -> bool:
 
 
     # PALABRAS CLAVE
-    keywords = ["pero", "aunque", "creo", "pienso", "no entiendo", "duda"]
+    keywords = ["pero", "aunque", "creo", "pienso", "no entiendo", "no entendi", "no entendí", "duda"]
 
     if any(k in text for k in keywords):
         return True
@@ -154,12 +156,12 @@ REGLAS
 - REGLA ESTRICTA: Si el "Estado actual" es una confirmación (ej: CONFIRMAR_DOMICILIO, CONFIRMAR_FECHA, CONFIRMAR_PAGO_INICIAL, etc.) y el usuario proporciona un dato diferente, un número, o una corrección (ej: "mi numero de casa es 32", "fue el 10", "fue por 600"), DEBES clasificarlo obligatoriamente como "negative".
 - "sí", "correcto", "todo bien" → affirmative
 - "no", "está mal", "yo pagué 550" → negative
-- preguntas → doubt
+- preguntas generales, "cómo", "por qué", "qué es el subsidio", "qué descuentos manejan" → doubt
 - quiere asesor → human
 - quiere llamada → call
 - quiere después → later
 - quiere regresar equipo, cancelar compra → devolucion
-- pregunta por su cuenta, cómo se aplica su descuento → descuento
+- reclama o pregunta por qué no se le aplicó su descuento de estudiante/subsidio o por qué no se restó su pago inicial de su cuenta → descuento
 
 --------------------------------------
 CONFIDENCE

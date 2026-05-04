@@ -93,7 +93,7 @@ class MessageBuilder:
             "Claro, con gusto te comparto el desglose de tu cuenta:\n\n"
             f"*Precio del equipo:* {esp*2}{money_aligned(precio)}\n"
             f"*Pago inicial:* {esp*10}{money_aligned(pago, '-')}\n"
-            f"*Subsidio:* {esp*13}{money_aligned(subsidio, '-')}\n"
+            f"*Subsidio:* {esp*15}{money_aligned(subsidio, '-')}\n"
             "----------------------------------------------------\n"
             f"*Saldo restante:* {esp*7}{money_aligned(saldo)}"
         )

@@ -72,17 +72,30 @@ def is_descuento_query(text: str) -> bool:
 
     text = text.lower()
 
-    keywords = [
-        "descuento",
-        "subsidio",
-        "se descuenta",
-        "me dijeron descuento",
-        "pago inicial descuento",
-        "me iban a descontar",
-        "calificacion estudiante",
+    exact_phrases = [
+        "descuento por calificacion",
+        "descuento por calificación",
+        "descuento de estudiante",
+        "descuento por estudiante",
+        "descontar el pago inicial",
+        "restar el pago inicial",
+        "descontar mi enganche",
+        "restar mi enganche",
+        "descontar el enganche",
+        "restar el enganche",
     ]
 
-    return any(k in text for k in keywords)
+    if any(phrase in text for phrase in exact_phrases):
+        return True
+
+    # Búsqueda combinada: acción + objetivo
+    has_action = any(w in text for w in ["descuento", "descontar", "descontado", "restar", "restado", "subsidio"])
+    has_target = any(w in text for w in ["calificacion", "calificación", "estudiante", "pago inicial", "enganche", "promedio"])
+    
+    if has_action and has_target:
+        return True
+
+    return False
 
 def is_devolucion_query(text: str) -> bool:
     if not text:
@@ -165,6 +178,25 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     current_state = ChatState(session.state)
     previous_state = session.previous_state
+
+    # ==========================================
+    # NORMALIZACIÓN DE ESTADOS DE RECORDATORIO
+    # ==========================================
+    # Si el usuario escribe algo (no importa qué) mientras hay un recordatorio pendiente,
+    # lo tratamos como si ya hubiera reanudado el flujo original.
+    REMINDER_STATES = [
+        ChatState.RECORDATORIO, 
+        ChatState.RECORDATORIO_1H, 
+        ChatState.RECORDATORIO_2H, 
+        ChatState.RECORDATORIO_24H, 
+        ChatState.RECORDATORIO_48H
+    ]
+    if current_state in REMINDER_STATES and previous_state:
+        # Solo normalizamos si el usuario no presionó explícitamente el botón "Continuar"
+        if intent != "REANUDACION":
+            current_state = ChatState(previous_state)
+            # Sincronizamos con el modelo de sesión para que el resto del motor use el estado real
+            session.state = current_state.value
 
     # Calcular el nuevo state_previous para preservar el punto de retorno
     if is_persistent_state(current_state):
@@ -931,8 +963,10 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # --------------------------------------
     if action == "greeting" and not (intent and intent.isupper()):
         
+        # Como ya normalizamos al inicio, current_state ya tiene la pregunta correcta
         current_state = ChatState(session.state)
-        # Capturamos el estado original ANTES de cualquier reasignación
+        
+        # Capturamos el estado original ANTES de cualquier reasignación a MENU_AYUDA o FINALIZADO
         original_state_for_previous = current_state
         reply_state, buttons, image_id = render_state(current_state, session, db)
 
@@ -955,7 +989,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         if original_state_for_previous in [ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.ESPERA, ChatState.FUERA_DE_FLUJO]:
             saved_previous = session.previous_state
         else:
-            saved_previous = session.state
+            saved_previous = original_state_for_previous.value
 
         return FlowResult(
             reply=reply,
@@ -1143,6 +1177,6 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         reply=reply,
         next_state=next_state,
         buttons=buttons,
-        previous_state=session.state,
+        previous_state=new_previous_state,
         image_id=image_id
     )

@@ -130,9 +130,9 @@ def handle_menu(context):
             
             if len(pendientes) == 0:
                 return {
-                    "reply": "Actualmente no tienes ninguna verificación pendiente. 😊\n\n¿Hay algo más en lo que te pueda ayudar?",
-                    "state": ChatState.FINALIZADO if context.state == ChatState.FINALIZADO else ChatState.MENU_AYUDA,
-                    "buttons": FLOW.get(ChatState.FINALIZADO if context.state == ChatState.FINALIZADO else ChatState.MENU_AYUDA, {}).get("buttons", [])
+                    "reply": msg.PEDIR_FOLIO,
+                    "state": ChatState.CAMBIAR_FOLIO,
+                    "buttons": FLOW.get(ChatState.CAMBIAR_FOLIO, {}).get("buttons", [])
                 }
             elif len(pendientes) == 1:
                 context.session.folio = pendientes[0]

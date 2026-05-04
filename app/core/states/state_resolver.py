@@ -39,7 +39,7 @@ def resolve_next_state(current_state, action, detected_intent=None, previous_sta
         if detected_intent == "REANUDACION":
             return current_state
 
-        return None
+        return current_state
 
     # --------------------------------------
     # INCONSISTENCIA
