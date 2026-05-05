@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.db.models import Reminder, ChatSessions
+from app.utils.timezone import mexico_now_naive
 
 TYPE_1H = "INACTIVITY_1H"
 TYPE_2H = "INACTIVITY_2H"
@@ -9,7 +10,7 @@ TYPE_24H = "INACTIVITY_24H"
 
 
 def utcnow_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return mexico_now_naive()
 
 
 def cancel_pending_inactivity_reminders(db: Session, phone: str) -> None:

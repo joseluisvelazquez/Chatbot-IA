@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,7 @@ from app.services.reminder_service import TYPE_1H, TYPE_2H, TYPE_24H
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.core.flow.flow import FLOW
 from app.core.states.states import ChatState
+from app.utils.timezone import mexico_now_naive
 
 
 # 🔒 Opcional: limitar a un número durante pruebas
@@ -16,7 +17,7 @@ TEST_PHONE_ONLY = []
 
 
 def utcnow_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return mexico_now_naive()
 
 
 # ------------------------------------------------------------

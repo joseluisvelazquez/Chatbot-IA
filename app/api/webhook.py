@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
@@ -32,6 +32,7 @@ from app.services.session_service import get_or_create_session, update_session
 from app.services.siga_bridge_integration import lookup_customer_for_incoming_phone
 from app.services.verification_panel_service import build_verification_snapshot
 from app.services.verification_tracker import STEP_MAP
+from app.utils.timezone import mexico_now_naive
 from app.websockets.manager import manager
 
 router = APIRouter()
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 def utcnow_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return mexico_now_naive()
 
 
 def verify_meta_signature(raw_body: bytes, signature_header: str | None) -> bool:

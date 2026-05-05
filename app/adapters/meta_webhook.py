@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional, Dict, Any
+
+from app.utils.timezone import mexico_from_unix_timestamp
 
 
 def _clean_text(value: Any) -> str | None:
@@ -23,7 +25,7 @@ def _parse_timestamp(value: Any) -> datetime | None:
         if value is None:
             return None
 
-        return datetime.fromtimestamp(int(value), tz=timezone.utc).replace(tzinfo=None)
+        return mexico_from_unix_timestamp(value)
     except (TypeError, ValueError, OSError):
         return None
 

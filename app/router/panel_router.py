@@ -35,6 +35,7 @@ from app.services.verification_panel_service import (
     has_open_inconsistencia,
     resolve_panel_current_step,
 )
+from app.utils.timezone import mexico_now_naive
 from app.services.inconsistencias_service import mark_panel_resolution
 from app.services.siga_bridge_integration import enrich_verification_with_bridge
 from app.db.models import BitacoraVentas
@@ -171,7 +172,7 @@ def dashboard_state_times(
     # --------------------------------------
     # 🧠 FILTRO DE TIEMPO
     # --------------------------------------
-    date_from = datetime.utcnow() - timedelta(days=days)
+    date_from = mexico_now_naive() - timedelta(days=days)
 
     # --------------------------------------
     #  SUBQUERY: ordenar eventos por sesión
@@ -264,7 +265,7 @@ def dashboard_funnel(
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),
 ):
-    date_from = datetime.utcnow() - timedelta(days=days)
+    date_from = mexico_now_naive() - timedelta(days=days)
 
     events = (
         db.query(
@@ -981,22 +982,23 @@ async def send_agent_message(
     phone = session.phone
     was_active = bool(
         session.last_message_at
-        and session.last_message_at >= datetime.utcnow() - timedelta(days=1)
+        and session.last_message_at >= mexico_now_naive() - timedelta(days=1)
     )
 
     try:
         await send_whatsapp_message(phone, content)
 
+        now = mexico_now_naive()
         message = Message(
             session_id=session.id,
             phone=phone,
             direction="agent",
-            content=content
+            content=content,
+            created_at=now,
         )
 
         db.add(message)
 
-        now = datetime.utcnow()
         session.last_message_at = now
         session.last_message = content
 
@@ -1082,7 +1084,7 @@ async def send_agent_file(
     phone = session.phone
     was_active = bool(
         session.last_message_at
-        and session.last_message_at >= datetime.utcnow() - timedelta(days=1)
+        and session.last_message_at >= mexico_now_naive() - timedelta(days=1)
     )
 
     # =========================
@@ -1095,7 +1097,7 @@ async def send_agent_file(
         content = " "
 
     last_message = content.strip() if content and content.strip() else "Archivo adjunto"
-    now = datetime.utcnow()
+    now = mexico_now_naive()
 
     try:
         message = Message(
@@ -1105,7 +1107,8 @@ async def send_agent_file(
             content=content,
             type=media_type,
             media_url=media_url,
-            file_name=file_name
+            file_name=file_name,
+            created_at=now,
         )
 
         db.add(message)

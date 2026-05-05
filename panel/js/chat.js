@@ -394,9 +394,15 @@ function escapeHtml(value) {
 function formatTime(dateString) {
     if (!dateString) return ""
 
-    // FIX: forzar parse correcto como UTC
-    const iso = dateString.replace(" ", "T") + "Z"
-    const date = new Date(iso)
+    const raw = String(dateString)
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+
+    if (!hasTimezone) {
+        const match = raw.match(/(?:T|\s)(\d{2}):(\d{2})/)
+        return match ? `${match[1]}:${match[2]}` : ""
+    }
+
+    const date = new Date(raw.replace(" ", "T"))
 
     return date.toLocaleTimeString("es-MX", {
         timeZone: "America/Mexico_City",
@@ -408,17 +414,25 @@ function formatTime(dateString) {
 function formatDateSeparator(dateString) {
     if (!dateString) return ""
 
-    const iso = dateString.replace(" ", "T") + "Z"
-    const date = new Date(iso)
-
     const today = new Date()
     const mexicoNow = new Date(today.toLocaleString("en-US", {
         timeZone: "America/Mexico_City"
     }))
 
-    const mexicoDate = new Date(date.toLocaleString("en-US", {
-        timeZone: "America/Mexico_City"
-    }))
+    const raw = String(dateString)
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+    let mexicoDate
+
+    if (hasTimezone) {
+        const date = new Date(raw.replace(" ", "T"))
+        mexicoDate = new Date(date.toLocaleString("en-US", {
+            timeZone: "America/Mexico_City"
+        }))
+    } else {
+        const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
+        if (!match) return ""
+        mexicoDate = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+    }
 
     const isToday = mexicoDate.toDateString() === mexicoNow.toDateString()
 

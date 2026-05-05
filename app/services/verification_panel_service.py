@@ -17,6 +17,7 @@ from app.utils.inconsistencias_serializer import (
     serialize_inconsistencias,
     summarize_inconsistencias,
 )
+from app.utils.timezone import mexico_now_naive
 
 INACTIVITY_MINUTES = 30
 
@@ -212,7 +213,7 @@ def classify_panel_status(
 
     # 🟡 inactivo
     if last_activity is not None:
-        now = datetime.utcnow()
+        now = mexico_now_naive()
         if now - last_activity > timedelta(minutes=INACTIVITY_MINUTES):
             return "stalled"
 

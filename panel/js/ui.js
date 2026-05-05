@@ -244,9 +244,12 @@ function bindHeaderNavigation() {
 // =========================
 function formatDateTime(value) {
     if (!value) return "-";
-    const date = new Date(value);
+    const raw = String(value);
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    const date = new Date(hasTimezone ? raw.replace(" ", "T") : raw.replace(" ", "T"));
     if (Number.isNaN(date.getTime())) return "-";
-    return date.toLocaleString("es-MX");
+    if (!hasTimezone) return raw.replace("T", " ").slice(0, 16);
+    return date.toLocaleString("es-MX", { timeZone: "America/Mexico_City" });
 }
 
 function statusLabel(status) {

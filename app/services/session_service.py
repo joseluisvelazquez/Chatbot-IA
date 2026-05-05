@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.db.models import ChatSessions
 from app.core.states.states import ChatState
+from app.utils.timezone import mexico_now_naive
 
 def attach_folio_to_session(db, session, folio):
     
@@ -36,9 +37,9 @@ def attach_folio_to_session(db, session, folio):
 
 def utcnow_naive() -> datetime:
     """
-    MySQL DATETIME no almacena TZ; guardamos naive UTC consistentemente.
+    MySQL DATETIME no almacena TZ; guardamos hora local de Mexico.
     """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return mexico_now_naive()
 
 
 def get_or_create_session(db: Session, phone: str, folio: str | None = None, text: str = "", intent: str = "") -> ChatSessions:
