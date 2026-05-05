@@ -392,28 +392,59 @@ function escapeHtml(value) {
 }
 
 function formatTime(dateString) {
-    const date = new Date(dateString)
+    if (!dateString) return ""
+
+    const raw = String(dateString)
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+
+    if (!hasTimezone) {
+        const match = raw.match(/(?:T|\s)(\d{2}):(\d{2})/)
+        return match ? `${match[1]}:${match[2]}` : ""
+    }
+
+    const date = new Date(raw.replace(" ", "T"))
+
     return date.toLocaleTimeString("es-MX", {
+        timeZone: "America/Mexico_City",
         hour: "2-digit",
         minute: "2-digit"
     })
 }
 
 function formatDateSeparator(dateString) {
-    const date = new Date(dateString)
+    if (!dateString) return ""
+
     const today = new Date()
+    const mexicoNow = new Date(today.toLocaleString("en-US", {
+        timeZone: "America/Mexico_City"
+    }))
 
-    const isToday = date.toDateString() === today.toDateString()
+    const raw = String(dateString)
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+    let mexicoDate
 
-    const yesterday = new Date()
-    yesterday.setDate(today.getDate() - 1)
+    if (hasTimezone) {
+        const date = new Date(raw.replace(" ", "T"))
+        mexicoDate = new Date(date.toLocaleString("en-US", {
+            timeZone: "America/Mexico_City"
+        }))
+    } else {
+        const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
+        if (!match) return ""
+        mexicoDate = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+    }
 
-    const isYesterday = date.toDateString() === yesterday.toDateString()
+    const isToday = mexicoDate.toDateString() === mexicoNow.toDateString()
+
+    const yesterday = new Date(mexicoNow)
+    yesterday.setDate(mexicoNow.getDate() - 1)
+
+    const isYesterday = mexicoDate.toDateString() === yesterday.toDateString()
 
     if (isToday) return "Hoy"
     if (isYesterday) return "Ayer"
 
-    return date.toLocaleDateString("es-MX", {
+    return mexicoDate.toLocaleDateString("es-MX", {
         weekday: "long",
         day: "numeric",
         month: "long"
@@ -686,7 +717,7 @@ function updateSidebarNode(node, s) {
         }
 
             <div class="text-xs text-gray-500">
-                ${escapeHtml(s.last_message_at ?? "")}
+                ${formatTime(s.last_message_at)}
             </div>
         </div>
 

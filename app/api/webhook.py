@@ -38,6 +38,7 @@ from app.services.siga_bridge_integration import (
 from app.services.verification_panel_service import build_verification_snapshot
 from app.services.verification_tracker import STEP_MAP
 from app.utils.folio_parser import extraer_folio
+from app.utils.timezone import mexico_now_naive
 from app.websockets.manager import manager
 
 router = APIRouter()
@@ -47,7 +48,7 @@ _SIGA_DETAIL_ROLES = {"admin", "jefe_operativo"}
 
 
 def utcnow_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return mexico_now_naive()
 
 
 def _phone_lock(phone: str) -> asyncio.Lock:

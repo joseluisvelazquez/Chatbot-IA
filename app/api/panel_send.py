@@ -13,7 +13,7 @@ from app.websockets import manager
 from pydantic import BaseModel
 from app.adapters.whatsapp_client import send_whatsapp_media
 from app.db.models import Message
-from datetime import datetime
+from app.utils.timezone import mexico_now_naive
 
 router = APIRouter(prefix="/api/panel", tags=["panel"])
 class SendFileRequest(BaseModel):
@@ -76,6 +76,7 @@ async def send_file_message(
     # -----------------------
     content = payload.content if payload.content and payload.content != "[MEDIA]" else None
 
+    now = mexico_now_naive()
     msg = Message(
         session_id=chat.id,
         phone=phone,
@@ -83,13 +84,14 @@ async def send_file_message(
         content=content,
         type=payload.type,
         media_url=payload.media_url,
-        file_name=payload.file_name
+        file_name=payload.file_name,
+        created_at=now,
     )
 
     db.add(msg)
 
     chat.last_message = payload.content if payload.content else "📎 Archivo"
-    chat.last_message_at = datetime.utcnow()
+    chat.last_message_at = now
     chat.unread_count = 0
 
     db.commit()
@@ -107,7 +109,8 @@ async def send_file_message(
             "direction": "agent",
             "type": payload.type,
             "media_url": payload.media_url,
-            "file_name": payload.file_name
+            "file_name": payload.file_name,
+            "created_at": msg.created_at.isoformat() if msg.created_at else now.isoformat(),
         },
         "unread_count": chat.unread_count
     })

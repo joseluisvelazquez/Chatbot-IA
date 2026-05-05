@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from app.db.models import Message
+from app.utils.timezone import mexico_now_naive
 
 
 def save_message(
@@ -26,8 +27,7 @@ def save_message(
         "file_name": file_name,
     }
 
-    if created_at is not None:
-        values["created_at"] = created_at
+    values["created_at"] = created_at or mexico_now_naive()
 
     msg = Message(**values)
 
