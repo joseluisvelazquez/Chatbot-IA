@@ -392,28 +392,45 @@ function escapeHtml(value) {
 }
 
 function formatTime(dateString) {
-    const date = new Date(dateString)
+    if (!dateString) return ""
+
+    // FIX: forzar parse correcto como UTC
+    const iso = dateString.replace(" ", "T") + "Z"
+    const date = new Date(iso)
+
     return date.toLocaleTimeString("es-MX", {
+        timeZone: "America/Mexico_City",
         hour: "2-digit",
         minute: "2-digit"
     })
 }
 
 function formatDateSeparator(dateString) {
-    const date = new Date(dateString)
+    if (!dateString) return ""
+
+    const iso = dateString.replace(" ", "T") + "Z"
+    const date = new Date(iso)
+
     const today = new Date()
+    const mexicoNow = new Date(today.toLocaleString("en-US", {
+        timeZone: "America/Mexico_City"
+    }))
 
-    const isToday = date.toDateString() === today.toDateString()
+    const mexicoDate = new Date(date.toLocaleString("en-US", {
+        timeZone: "America/Mexico_City"
+    }))
 
-    const yesterday = new Date()
-    yesterday.setDate(today.getDate() - 1)
+    const isToday = mexicoDate.toDateString() === mexicoNow.toDateString()
 
-    const isYesterday = date.toDateString() === yesterday.toDateString()
+    const yesterday = new Date(mexicoNow)
+    yesterday.setDate(mexicoNow.getDate() - 1)
+
+    const isYesterday = mexicoDate.toDateString() === yesterday.toDateString()
 
     if (isToday) return "Hoy"
     if (isYesterday) return "Ayer"
 
-    return date.toLocaleDateString("es-MX", {
+    return mexicoDate.toLocaleDateString("es-MX", {
         weekday: "long",
         day: "numeric",
         month: "long"
@@ -686,7 +703,7 @@ function updateSidebarNode(node, s) {
         }
 
             <div class="text-xs text-gray-500">
-                ${escapeHtml(s.last_message_at ?? "")}
+                ${formatTime(s.last_message_at)}
             </div>
         </div>
 
