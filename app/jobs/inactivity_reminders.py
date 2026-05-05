@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.db.models import Reminder, ChatSessions
-from app.services.reminder_service import TYPE_1H, TYPE_2H, TYPE_24H, TYPE_48H
+from app.services.reminder_service import TYPE_1H, TYPE_2H, TYPE_24H
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.core.flow.flow import FLOW
 from app.core.states.states import ChatState
@@ -33,8 +33,6 @@ async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
         state = ChatState.RECORDATORIO_2H
     elif reminder_type == TYPE_24H:
         state = ChatState.RECORDATORIO_24H
-    elif reminder_type == TYPE_48H:
-        state = ChatState.RECORDATORIO_48H
     else:
         return
 
@@ -68,7 +66,7 @@ async def _send_due_reminders(db: Session) -> None:
         .filter(Reminder.scheduled_at <= now)
         .filter(Reminder.sent_at.is_(None))
         .filter(Reminder.cancelled_at.is_(None))
-        .filter(Reminder.type.in_([TYPE_1H, TYPE_2H, TYPE_24H, TYPE_48H]))
+        .filter(Reminder.type.in_([TYPE_1H, TYPE_2H, TYPE_24H]))
         .order_by(Reminder.scheduled_at.asc())
         .limit(200)
         .all()

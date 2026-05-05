@@ -188,8 +188,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         ChatState.RECORDATORIO, 
         ChatState.RECORDATORIO_1H, 
         ChatState.RECORDATORIO_2H, 
-        ChatState.RECORDATORIO_24H, 
-        ChatState.RECORDATORIO_48H
+        ChatState.RECORDATORIO_24H
     ]
     if current_state in REMINDER_STATES and previous_state:
         # Solo normalizamos si el usuario no presionó explícitamente el botón "Continuar"

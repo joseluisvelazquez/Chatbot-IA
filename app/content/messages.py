@@ -132,11 +132,6 @@ RECORDATORIO_24H = (
     "Solo te tomará un par de minutos terminar."
 )
 
-RECORDATORIO_48H = (
-    "👋 Hola, Alonso de nuevo. Seguimos aquí para ayudarte a terminar tu verificación.\n\n"
-    "Es muy importante para que puedas disfrutar de tus beneficios al 100%."
-)
-
 RECORDATORIO_CONFIRMACION = "Entendido. Pondré la verificación en pausa. Te enviaré un recordatorio más tarde para que podamos continuar."
 
 PREGUNTA_DUDA = "¡Claro que sí! Platícame, ¿qué duda tienes? Estoy aquí para apoyarte."
