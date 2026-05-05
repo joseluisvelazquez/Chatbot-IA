@@ -10,12 +10,25 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import httpx
 
 from app.config.settings import settings
+from app.services.siga_bridge_sale import bridge_sale_summary
 
 logger = logging.getLogger(__name__)
 
 _BODY_PREVIEW_LIMIT = 500
 _SENSITIVE_QUERY_KEYS = {"phone", "folio", "cuenta", "token", "bridge_token", "x-bridge-token"}
 _SENSITIVE_HEADER_MARKERS = ("authorization", "cookie", "token")
+_FLAT_VERIFICATION_KEYS = {
+    "found",
+    "folio",
+    "sale",
+    "sales",
+    "customer",
+    "account",
+    "components",
+    "payment_summary",
+    "recent_payments",
+    "source_table",
+}
 _CACHE_TTLS_SECONDS = {
     "customer": 300.0,
     "account": 60.0,
@@ -69,6 +82,19 @@ def _sanitize_headers(headers: httpx.Headers) -> dict[str, str]:
     for key, value in headers.items():
         key_lower = key.lower()
         if any(marker in key_lower for marker in _SENSITIVE_HEADER_MARKERS):
+            sanitized[key] = "[redacted]"
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+def _debug_request_params(action: str, params: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in params.items():
+        key_lower = str(key).lower()
+        if action == "verification" and key_lower == "folio":
+            sanitized[key] = value
+        elif key_lower in _SENSITIVE_QUERY_KEYS or "token" in key_lower:
             sanitized[key] = "[redacted]"
         else:
             sanitized[key] = value
@@ -241,6 +267,7 @@ class SigaBridgeClient:
         enabled: bool | None = None,
         timeout_connect: float | None = None,
         timeout_read: float | None = None,
+        max_attempts: int | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = (base_url if base_url is not None else settings.SIGA_BRIDGE_BASE_URL).strip()
@@ -256,6 +283,7 @@ class SigaBridgeClient:
             if timeout_read is None
             else timeout_read
         )
+        self.max_attempts = max(1, int(max_attempts or 2))
         self.transport = transport
 
     async def ping(self) -> dict[str, Any] | list[Any] | None:
@@ -378,13 +406,22 @@ class SigaBridgeClient:
             if cached is not _CACHE_MISS:
                 return cached
 
-        attempts = 2
+        attempts = self.max_attempts
         last_error: Exception | None = None
 
         for attempt in range(1, attempts + 1):
             started_at = time.perf_counter()
             try:
                 _metrics["requests"] += 1
+                logger.info(
+                    "siga_bridge_request_outgoing",
+                    extra={
+                        "action": action,
+                        "base_url": _sanitize_url(self.base_url),
+                        "params": _debug_request_params(action, request_params),
+                        "attempt": attempt,
+                    },
+                )
                 async with httpx.AsyncClient(
                     timeout=self._timeout(),
                     transport=self.transport,
@@ -459,11 +496,13 @@ class SigaBridgeClient:
             self._raise_non_json_response(response, action)
 
         payload = self._decode_json(response, action)
+        self._log_parsed_json_debug(payload, action, response.status_code)
 
         if response.status_code >= 400:
             self._raise_for_status(response.status_code, payload, action)
 
         ok, data, error, meta = self._validate_contract(payload, action)
+        self._log_contract_decision_debug(action, ok, data, error, meta)
         if not ok:
             raise SigaBridgeContractError(
                 "SIGA Bridge returned ok=false with HTTP 2xx",
@@ -496,7 +535,11 @@ class SigaBridgeClient:
         except RuntimeError:
             request_url = response.url
 
-        should_log_body = response.status_code >= 400 or not self._is_json_response(response)
+        should_log_body = (
+            response.status_code >= 400
+            or not self._is_json_response(response)
+            or bool(settings.SIGA_BRIDGE_LOG_RAW_SUCCESS)
+        )
         logger.info(
             "siga_bridge_response_debug",
             extra={
@@ -514,6 +557,53 @@ class SigaBridgeClient:
                 "latency_ms": round(latency_ms, 2),
                 "redirect_count": len(response.history),
                 "redirect_chain": redirect_chain,
+            },
+        )
+
+    def _log_parsed_json_debug(
+        self,
+        payload: dict[str, Any],
+        action: str,
+        status_code: int,
+    ) -> None:
+        logger.info(
+            "siga_bridge_parsed_json",
+            extra={
+                "action": action,
+                "status_code": status_code,
+                "top_level_keys": sorted(str(key) for key in payload.keys()),
+                "has_v1_wrapper": {"ok", "data", "error", "meta"}.issubset(payload.keys()),
+                "flat_summary": bridge_sale_summary(payload)
+                if action == "verification"
+                else None,
+            },
+        )
+
+    def _log_contract_decision_debug(
+        self,
+        action: str,
+        ok: bool,
+        data: dict[str, Any] | list[Any] | None,
+        error: str | None,
+        meta: dict[str, Any],
+    ) -> None:
+        logger.info(
+            "siga_bridge_contract_decision",
+            extra={
+                "action": action,
+                "ok": ok,
+                "error": error,
+                "meta_action": meta.get("action"),
+                "contract_shape": meta.get("contract_shape", "v1"),
+                "data_summary": bridge_sale_summary(data)
+                if action == "verification"
+                else {
+                    "payload_type": type(data).__name__,
+                    "keys": sorted(str(key) for key in data.keys())
+                    if isinstance(data, dict)
+                    else None,
+                    "items_count": len(data) if isinstance(data, list) else None,
+                },
             },
         )
 
@@ -609,7 +699,29 @@ class SigaBridgeClient:
         action: str,
     ) -> tuple[bool, dict[str, Any] | list[Any] | None, str | None, dict[str, Any]]:
         required = {"ok", "data", "error", "meta"}
-        if set(payload.keys()) != required:
+        if required.issubset(payload.keys()):
+            ok, data, error, meta = self._validate_v1_contract(payload, action)
+            has_flat_verification_data = any(key in payload for key in _FLAT_VERIFICATION_KEYS)
+            if action == "verification" and has_flat_verification_data and data in (None, {}):
+                _flat_ok, flat_data, _flat_error, _flat_meta = self._validate_flat_contract(
+                    payload,
+                    action,
+                )
+                return ok, flat_data, error, {
+                    **meta,
+                    "contract_shape": "v1_flat",
+                }
+            return ok, data, error, meta
+
+        return self._validate_flat_contract(payload, action)
+
+    def _validate_v1_contract(
+        self,
+        payload: dict[str, Any],
+        action: str,
+    ) -> tuple[bool, dict[str, Any] | list[Any] | None, str | None, dict[str, Any]]:
+        required = {"ok", "data", "error", "meta"}
+        if not required.issubset(payload.keys()):
             raise SigaBridgeContractError(
                 "SIGA Bridge response contract mismatch",
                 action=action,
@@ -636,6 +748,44 @@ class SigaBridgeClient:
             raise SigaBridgeContractError("SIGA Bridge action mismatch", action=action)
 
         return ok, data, error, meta
+
+    def _validate_flat_contract(
+        self,
+        payload: dict[str, Any],
+        action: str,
+    ) -> tuple[bool, dict[str, Any] | list[Any] | None, str | None, dict[str, Any]]:
+        if "ok" not in payload:
+            raise SigaBridgeContractError(
+                "SIGA Bridge response contract mismatch",
+                action=action,
+            )
+
+        ok = payload["ok"]
+        error = payload.get("error")
+        payload_action = payload.get("action") or action
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+
+        if not isinstance(ok, bool):
+            raise SigaBridgeContractError("SIGA Bridge ok must be boolean", action=action)
+        if error is not None and not isinstance(error, str):
+            raise SigaBridgeContractError("SIGA Bridge error must be string or null", action=action)
+        if payload_action != action:
+            raise SigaBridgeContractError("SIGA Bridge action mismatch", action=action)
+
+        data = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"ok", "error", "meta"}
+        }
+        if not data:
+            data = None
+
+        return ok, data, error, {
+            "version": meta.get("version") or "flat",
+            "timestamp": meta.get("timestamp"),
+            "action": payload_action,
+            "contract_shape": "flat",
+        }
 
     def _raise_for_status(
         self,

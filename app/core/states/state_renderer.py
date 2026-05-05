@@ -20,8 +20,22 @@ from app.utils import address_formatter
 from app.config.settings import settings
 from app.services.inconsistencias_service import get_open_inconsistencia
 from app.core.states.state_handlers import COMPONENTES_MAP, _get_componentes_ya_reportados
+from app.services.siga_bridge_sale import (
+    bridge_address_from_session,
+    bridge_sale_from_session,
+    is_bridge_sale,
+)
 
 from app.utils.product_mapping import get_product_info
+
+
+def _bridge_payment_snapshot(venta):
+    payload = getattr(venta, "_bridge_payload", None)
+    if not isinstance(payload, dict):
+        return {}
+    payment = payload.get("payment")
+    return payment if isinstance(payment, dict) else {}
+
 
 def render_state(next_state, session, db):
     """
@@ -43,22 +57,17 @@ def render_state(next_state, session, db):
     # Obtener datos de SIGA si hay folio
     # --------------------------------------
     if session.folio:
-        venta = obtener_venta_por_folio(db, session.folio)
+        venta = obtener_venta_por_folio(db, session.folio) if db else None
+        if not venta:
+            venta = bridge_sale_from_session(session, session.folio)
 
     # --------------------------------------
     # Render dinámico por estado
     # --------------------------------------
 
-    if not venta:
-        return reply, buttons, image_id
-
     if next_state in [ChatState.CONFIRMAR_FOLIO_DEVOLUCION, ChatState.CONFIRMAR_FOLIO_DESCUENTO]:
         from app.content import messages as msg
         reply = msg.CONFIRMAR_FOLIO_DETECTADO.format(folio=session.folio)
-
-    elif next_state == ChatState.RETO_SEGURIDAD:
-        from app.content import messages as msg
-        reply = msg.RETO_SEGURIDAD_SOLICITUD.format(folio=session.folio)
 
     elif next_state == ChatState.INICIO:
         reply = reply.format(folio=session.folio)
@@ -67,24 +76,40 @@ def render_state(next_state, session, db):
         from app.content import messages as msg
         reply = msg.INICIO2.format(folio=session.folio)
 
+    if not venta:
+        return reply, buttons, image_id
+
+    if next_state == ChatState.RETO_SEGURIDAD:
+        from app.content import messages as msg
+        reply = msg.RETO_SEGURIDAD_SOLICITUD.format(folio=session.folio)
+
     elif next_state == ChatState.CONFIRMAR_NOMBRE:
         reply = MessageBuilder.confirmar_nombre(
             construir_nombre(venta)
         )
 
     elif next_state == ChatState.CONFIRMAR_PAGO_INICIAL:
-        reply = MessageBuilder.confirmar_pago(
-            construir_pago_inicial(venta)
-        )
+        pago_inicial = construir_pago_inicial(venta)
+        if is_bridge_sale(venta) and not pago_inicial:
+            reply = (
+                "Por ahora no tengo registrado el importe de tu pago inicial. "
+                "Para evitar darte un dato incorrecto, lo puede validar un asesor."
+            )
+        else:
+            reply = MessageBuilder.confirmar_pago(pago_inicial)
 
     elif next_state == ChatState.CONFIRMAR_DOMICILIO:
-        domicilio = obtener_domicilio_por_movimiento(
-            db,
-            venta.id_movimiento_bv
-        )
+        if is_bridge_sale(venta):
+            domicilio_texto = bridge_address_from_session(session, session.folio)
+        else:
+            domicilio = obtener_domicilio_por_movimiento(
+                db,
+                venta.id_movimiento_bv
+            )
+            domicilio_texto = address_formatter.construir_domicilio(domicilio)
 
         reply = MessageBuilder.confirmar_domicilio(
-            address_formatter.construir_domicilio(domicilio)
+            domicilio_texto
         )
 
     elif next_state == ChatState.CONFIRMAR_FECHA:
@@ -104,7 +129,30 @@ def render_state(next_state, session, db):
         reply = MessageBuilder.confirmar_estado_producto(info["nombre_amigable"])
 
     elif next_state == ChatState.INFO_PAGOS:
-        calculos = calcular_info_pagos(venta)
+        if is_bridge_sale(venta):
+            payment = _bridge_payment_snapshot(venta)
+            has_amounts = all(
+                payment.get(key)
+                for key in ("pago_minimo", "importe_quincenal", "importe_mensual")
+            )
+            if not payment.get("available") or not has_amounts:
+                reply = (
+                    "Por ahora no tengo disponible el detalle de tu plan de pagos. "
+                    "Para evitar darte montos incorrectos, lo puede revisar un asesor."
+                )
+                return reply, buttons, image_id
+
+            calculos = calcular_info_pagos(venta)
+            if calculos:
+                calculos.update(
+                    {
+                        "pago_minimo": payment["pago_minimo"],
+                        "importe_quincenal": payment["importe_quincenal"],
+                        "importe_mensual": payment["importe_mensual"],
+                    }
+                )
+        else:
+            calculos = calcular_info_pagos(venta)
 
         if calculos:
             reply = MessageBuilder.info_pagos(
@@ -121,6 +169,13 @@ def render_state(next_state, session, db):
         image_id = settings.METODOS_PAGO_IMAGE_ID
 
     elif next_state == ChatState.INFO_PLAN_3_MESES:
+        if is_bridge_sale(venta):
+            reply = (
+                "Por ahora no tengo datos suficientes para calcular un plan de 3 meses. "
+                "Para evitar darte montos incorrectos, lo puede revisar un asesor."
+            )
+            return reply, buttons, image_id
+
         calculos_3m = calcular_info_plan_3_meses(venta)
 
         if calculos_3m:

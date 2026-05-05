@@ -31,6 +31,7 @@ class ConversationContext:
 
     # Datos externos (SIGA)
     venta: Optional[Any] = None
+    bridge_verification: Optional[Any] = None
 
     session: Optional[Any] = None
     db: Optional[Any] = None

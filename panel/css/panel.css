@@ -28,6 +28,68 @@ body {
     -webkit-overflow-scrolling: touch;
 }
 
+#drawer {
+    width: min(100vw, clamp(420px, 38vw, 620px));
+    height: 100dvh;
+}
+
+#drawerBody {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.drawer-scroll {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.drawer-section {
+    min-width: 0;
+    border: 1px solid rgb(226 232 240);
+    border-radius: 0.5rem;
+    background: #ffffff;
+    padding: 1rem;
+}
+
+.dark .drawer-section {
+    border-color: rgb(51 65 85);
+    background: rgb(30 41 59);
+}
+
+.drawer-section-warning {
+    border-color: rgb(253 230 138);
+    background: rgb(255 251 235);
+}
+
+.dark .drawer-section-warning {
+    border-color: rgb(120 53 15);
+    background: rgba(69, 26, 3, 0.3);
+}
+
+.drawer-clamp-3 {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+}
+
+.drawer-inconsistencias-list {
+    max-height: min(40vh, 420px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+    #drawer {
+        width: 100vw;
+        border-left-width: 0;
+    }
+}
+
 button,
 input,
 textarea {

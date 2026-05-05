@@ -201,6 +201,8 @@ function buildRowSignature(item) {
         counts.unknown,
         getHighestSeverity(item) || "",
         item.last_activity || "",
+        item.siga?.available ?? "",
+        item.siga?.fetched_at || "",
     ]);
 }
 
@@ -233,6 +235,7 @@ function buildDrawerSignature(item) {
                 ? entry.elementos_faltantes
                 : [],
         })),
+        siga: item.siga || null,
         siga_bridge: item.siga_bridge || null,
     });
 }
@@ -312,100 +315,186 @@ function sigaBridgeStatusClass(bridgeStatus) {
     return map[bridgeStatus] || map.fallback_local;
 }
 
-function renderSigaBridgeSummary(item = {}) {
-    const bridge = item.siga_bridge;
-    if (!canUseSigaBridgeOps() || !bridge || typeof bridge !== "object" || !bridge.enabled) {
+function getSigaBridgeData(item = {}) {
+    const bridge = ui.isPlainObject(item.siga_bridge) ? item.siga_bridge : {};
+    const siga = ui.isPlainObject(item.siga)
+        ? item.siga
+        : (ui.isPlainObject(bridge.normalized) ? bridge.normalized : {});
+
+    return { bridge, siga };
+}
+
+function renderPaymentLabel(payment = {}) {
+    if (!ui.isPlainObject(payment) || !payment.available) {
+        return "No disponible";
+    }
+
+    const parts = [];
+    const planLabel = ui.safeText(payment.plan_label, "");
+    const paymentsCount = Number(payment.payments_count || 0);
+
+    if (planLabel) {
+        parts.push(planLabel);
+    }
+    if (Number.isFinite(paymentsCount) && paymentsCount > 0) {
+        parts.push(`${paymentsCount} pagos`);
+    }
+
+    return parts.join(" / ") || "Disponible";
+}
+
+function renderObjectGrid(record = {}, columns = "sm:grid-cols-2") {
+    if (!ui.isPlainObject(record)) {
         return "";
     }
 
-    const bridgeHealthStatus = bridge.status || (bridge.available ? "ok" : "fallback_local");
-    const bridgeStatusLabel = sigaBridgeStatusLabel(bridgeHealthStatus);
-    const bridgeStatusClass = sigaBridgeStatusClass(bridgeHealthStatus);
-    const updatedAt = bridge.updated_at ? ui.formatDateTime(bridge.updated_at) : "-";
-    const sourceLabel = bridge.source === "siga_bridge" && bridge.available
-        ? "Datos desde SIGA"
-        : "Datos locales";
-    const isRefreshing = isVerificationDetailRequestActive(item.session_id);
+    const items = Object.entries(record)
+        .map(([key, value]) => ({
+            label: key.replace(/_/g, " "),
+            value: ui.safeText(value, ""),
+        }))
+        .filter((item) => item.value);
 
-    if (!bridge.available) {
+    return items.length
+        ? ui.renderKeyValueGrid(items, columns)
+        : `<p class="text-sm text-gray-500 dark:text-slate-400">No disponible</p>`;
+}
+
+function renderComponentItem(component, index) {
+    if (ui.isPlainObject(component)) {
         return `
-            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-                <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                        <div class="text-xs font-medium uppercase tracking-wide">SIGA</div>
-                        <div class="mt-1">${ui.escapeHtml(sourceLabel)}</div>
-                    </div>
-                    <span class="rounded-full px-2.5 py-1 text-xs font-medium ${bridgeStatusClass}">
-                        ${ui.escapeHtml(bridgeStatusLabel)}
-                    </span>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-slate-700 dark:bg-slate-900/60">
+                <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">
+                    Componente ${index + 1}
                 </div>
-                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <span class="text-xs">Actualizado: ${ui.escapeHtml(updatedAt)}</span>
-                    <button
-                        id="refreshSigaBridgeButton"
-                        type="button"
-                        class="inline-flex items-center justify-center rounded-lg bg-amber-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
-                        ${isRefreshing ? "disabled" : ""}
-                    >
-                        ${isRefreshing ? "Actualizando..." : "Actualizar datos SIGA"}
-                    </button>
-                </div>
+                ${renderObjectGrid(component)}
             </div>
         `;
     }
 
-    const customer = firstBridgeRecord(bridge.customer, ["customers", "customer", "clientes", "cliente"]);
-    const account = firstBridgeRecord(bridge.account, ["accounts", "account", "cuentas", "cuenta"]);
-
-    const customerName = firstBridgeValue(customer, ["name", "nombre", "nombre_completo", "cliente"]) || item.name || "-";
-    const accountStatus = firstBridgeValue(account, ["estatus", "estado", "status"]) || "-";
-    const balance = firstBridgeValue(account, ["saldo", "balance", "saldo_actual"]) || "-";
-    const plan = firstBridgeValue(account, ["plan", "periodicidad", "frecuencia_pago"]) || "-";
-    const paymentsCount = bridgePaymentsCount(bridge.payments);
+    const text = ui.safeText(component, "");
+    if (!text) {
+        return "";
+    }
 
     return `
-        <div class="rounded-xl border border-blue-100 bg-blue-50 p-4 dark:border-blue-950 dark:bg-blue-950/25">
-            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h4 class="text-xs font-medium uppercase tracking-wide text-blue-700 dark:text-blue-300">SIGA</h4>
-                    <div class="mt-1 text-xs text-blue-700/70 dark:text-blue-300/70">
-                        ${ui.escapeHtml(sourceLabel)} | Actualizado: ${ui.escapeHtml(updatedAt)}
+        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200">
+            ${ui.escapeHtml(text)}
+        </div>
+    `;
+}
+
+function renderSigaBridgeSummary(item = {}) {
+    const { bridge, siga } = getSigaBridgeData(item);
+    if (!canUseSigaBridgeOps() && !siga.available) {
+        return "";
+    }
+
+    const available = Boolean(siga.available ?? bridge.available);
+    const bridgeHealthStatus = bridge.status || (available ? "ok" : "fallback_local");
+    const bridgeStatusLabel = sigaBridgeStatusLabel(bridgeHealthStatus);
+    const bridgeStatusClass = sigaBridgeStatusClass(bridgeHealthStatus);
+    const updatedAt = ui.formatDateTime(siga.fetched_at || bridge.updated_at);
+    const sourceLabel = bridge.source === "siga_bridge" && available
+        ? "Datos desde SIGA"
+        : "Datos locales";
+    const customer = ui.isPlainObject(siga.customer) ? siga.customer : {};
+    const sale = ui.isPlainObject(siga.sale) ? siga.sale : {};
+    const payment = ui.isPlainObject(siga.payment) ? siga.payment : {};
+    const sourceTable = ui.safeText(siga.source_table, "SIGA");
+    const customerName = ui.safeText(customer.name, ui.safeText(item.name));
+    const product = ui.safeText(sale.product, "No disponible");
+    const balance = payment.available ? ui.formatMoney(payment.saldo, "No disponible") : "No disponible";
+    const plan = renderPaymentLabel(payment);
+    const cacheBadge = siga.cache_valid === false ? ui.renderBadge("Snapshot vencido", "warning") : "";
+
+    return `
+        <section class="drawer-section ${available ? "" : "drawer-section-warning"}">
+            <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">SIGA</h4>
+                    <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-slate-400">
+                        <span>${ui.escapeHtml(ui.safeText(sourceLabel))}</span>
+                        ${cacheBadge}
                     </div>
                 </div>
                 <span class="rounded-full px-2.5 py-1 text-xs font-medium ${bridgeStatusClass}">
-                    ${ui.escapeHtml(bridgeStatusLabel)}
+                    ${ui.escapeHtml(ui.safeText(bridgeStatusLabel))}
                 </span>
             </div>
-            <div class="grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
-                <div>
-                    <p class="text-blue-700/70 dark:text-blue-300/70">Cliente</p>
-                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(customerName)}</p>
-                </div>
-                <div>
-                    <p class="text-blue-700/70 dark:text-blue-300/70">Estado</p>
-                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(accountStatus)}</p>
-                </div>
-                <div>
-                    <p class="text-blue-700/70 dark:text-blue-300/70">Saldo</p>
-                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(balance)}</p>
-                </div>
-                <div>
-                    <p class="text-blue-700/70 dark:text-blue-300/70">Plan / pagos</p>
-                    <p class="font-medium text-gray-900 dark:text-white">${ui.escapeHtml(plan)}${paymentsCount == null ? "" : ` / ${paymentsCount}`}</p>
-                </div>
+            ${ui.renderKeyValueGrid([
+                { label: "Cliente", value: customerName },
+                { label: "Cuenta", value: item.no_cuenta },
+                { label: "Telefono", value: item.phone },
+                { label: "Saldo", value: balance },
+                { label: "Plan / pagos", value: plan },
+                { label: "Fuente", value: sourceTable },
+                { label: "Actualizado", value: updatedAt },
+            ])}
+            <div class="mt-4">
+                <p class="text-xs text-gray-500 dark:text-slate-400">Producto</p>
+                <p class="drawer-clamp-3 mt-1 break-words text-sm font-medium text-gray-900 dark:text-white">
+                    ${ui.escapeHtml(product)}
+                </p>
             </div>
-            <div class="mt-4 flex justify-end">
-                <button
-                    id="refreshSigaBridgeButton"
-                    type="button"
-                    class="inline-flex items-center justify-center rounded-lg bg-blue-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
-                    ${isRefreshing ? "disabled" : ""}
-                >
-                    ${isRefreshing ? "Actualizando..." : "Actualizar datos SIGA"}
-                </button>
-            </div>
-        </div>
+        </section>
     `;
+}
+
+function renderSigaDetails(item = {}) {
+    if (!canUseSigaBridgeOps()) {
+        return "";
+    }
+
+    const { siga } = getSigaBridgeData(item);
+    if (!siga.available) {
+        return "";
+    }
+
+    const sale = ui.isPlainObject(siga.sale) ? siga.sale : {};
+    const payment = ui.isPlainObject(siga.payment) ? siga.payment : {};
+    const components = ui.isPlainObject(siga.components) ? siga.components : {};
+    const componentItems = Array.isArray(components.items) ? components.items : [];
+    const product = ui.safeText(sale.product, "");
+    const sections = [];
+
+    if (product && product.length > 120) {
+        sections.push(ui.renderAccordionSection({
+            id: `siga-product-${item.session_id}`,
+            title: "Producto completo",
+            body: `<p class="whitespace-pre-wrap break-words text-sm text-gray-700 dark:text-slate-200">${ui.escapeHtml(product)}</p>`,
+        }));
+    }
+
+    if (componentItems.length) {
+        sections.push(ui.renderAccordionSection({
+            id: `siga-components-${item.session_id}`,
+            title: "Componentes",
+            count: componentItems.length,
+            body: `
+                <div class="space-y-3">
+                    ${componentItems.map(renderComponentItem).filter(Boolean).join("")}
+                </div>
+            `,
+        }));
+    }
+
+    if (payment.available) {
+        sections.push(ui.renderAccordionSection({
+            id: `siga-payment-${item.session_id}`,
+            title: "Pago y plan",
+            body: ui.renderKeyValueGrid([
+                { label: "Saldo", value: ui.formatMoney(payment.saldo, "No disponible") },
+                { label: "Pago inicial", value: ui.formatMoney(payment.pago_inicial, "No disponible") },
+                { label: "Pago minimo", value: ui.formatMoney(payment.pago_minimo, "No disponible") },
+                { label: "Importe quincenal", value: ui.formatMoney(payment.importe_quincenal, "No disponible") },
+                { label: "Importe mensual", value: ui.formatMoney(payment.importe_mensual, "No disponible") },
+                { label: "Pagos registrados", value: payment.payments_count },
+            ]),
+        }));
+    }
+
+    return sections.join("");
 }
 
 function updateVerificationKpis(items) {
@@ -504,7 +593,7 @@ function getInconsistenciaCardTone(item) {
 
 function renderMissingElements(item) {
     const elements = Array.isArray(item.elementos_faltantes)
-        ? item.elementos_faltantes.filter(Boolean)
+        ? item.elementos_faltantes.map((entry) => ui.safeText(entry, "")).filter(Boolean)
         : [];
 
     if (!elements.length) {
@@ -578,33 +667,38 @@ function renderDrawerBase(item) {
 
     try {
         body.innerHTML = `
-            <div class="flex h-full flex-col text-gray-900 dark:text-white">
-                <div id="drawerHeader"></div>
+            <div class="flex h-full min-h-0 flex-col text-gray-900 dark:text-white">
+                <div id="drawerHeader" class="flex-none border-b border-gray-200 bg-gray-50 px-4 py-4 dark:border-slate-700 dark:bg-slate-900 md:px-5"></div>
 
-                <div class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-                    <h4 class="mb-2 text-xs text-gray-500 dark:text-slate-400">CLIENTE</h4>
-                    <div id="drawerCliente" class="grid grid-cols-1 gap-3 text-sm md:grid-cols-3"></div>
-                </div>
+                <div class="drawer-scroll space-y-4 px-4 py-4 md:px-5">
+                    <section class="drawer-section">
+                        <h4 class="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Cliente</h4>
+                        <div id="drawerCliente"></div>
+                    </section>
 
-                <div id="drawerSigaBridge" class="mt-4 hidden"></div>
+                    <div id="drawerSigaBridge" class="hidden"></div>
 
-                <div class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-                    <h4 class="mb-2 text-xs text-gray-500 dark:text-slate-400">PROGRESO</h4>
-                    <div id="drawerProgressBar"></div>
-                    <div id="drawerProgressMeta" class="mt-3 flex justify-between text-xs text-gray-500 dark:text-slate-400"></div>
-                </div>
+                    <section class="drawer-section">
+                        <h4 class="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Progreso</h4>
+                        <div id="drawerProgressBar"></div>
+                        <div id="drawerProgressMeta" class="mt-3 flex justify-between gap-3 text-xs text-gray-500 dark:text-slate-400"></div>
+                    </section>
 
-                <div class="mt-4 flex-1 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-                    <div class="flex flex-col gap-3 border-b border-gray-200 pb-3 dark:border-slate-700">
-                        <div class="flex items-center justify-between gap-3">
-                            <h4 class="text-xs text-gray-500 dark:text-slate-400">INCONSISTENCIAS</h4>
+                    <section class="drawer-section">
+                        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 pb-3 dark:border-slate-700">
+                            <div>
+                                <h4 class="text-sm font-semibold text-gray-900 dark:text-white">Inconsistencias</h4>
+                                <p id="drawerInconsistenciasMeta" class="mt-1 text-xs text-gray-500 dark:text-slate-400"></p>
+                            </div>
                             <div id="drawerSeveritySummary" class="flex flex-wrap justify-end gap-2"></div>
                         </div>
-                    </div>
-                    <div id="drawerInconsistencias" class="mt-4"></div>
+                        <div id="drawerInconsistencias" class="mt-4"></div>
+                    </section>
+
+                    <div id="drawerSigaDetails" class="space-y-3"></div>
                 </div>
 
-                <div id="drawerFooter" class="mt-4"></div>
+                <div id="drawerFooter" class="flex-none border-t border-gray-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900 md:p-5"></div>
             </div>
         `;
 
@@ -621,139 +715,161 @@ function renderDrawerBase(item) {
 
 function updateDrawer(item) {
     try {
-    const severityHeader = getSeverityCounts(item).total
-        ? renderSeverityBadge(getHighestSeverity(item))
-        : `<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">Sin inconsistencias</span>`;
+        const { siga } = getSigaBridgeData(item);
+        const customer = ui.isPlainObject(siga.customer) ? siga.customer : {};
+        const counts = getSeverityCounts(item);
+        const severityHeader = counts.total
+            ? renderSeverityBadge(getHighestSeverity(item), counts.total)
+            : `<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">Sin inconsistencias</span>`;
 
-    const header = document.getElementById("drawerHeader");
-    if (header) {
-        header.innerHTML = `
-            <div class="flex items-start justify-between gap-4 border-b border-gray-200 pb-4 dark:border-slate-700">
-                <div class="min-w-0">
-                    <h2 class="text-2xl font-semibold">
-                        Folio ${ui.escapeHtml(item.folio || "-")}
-                    </h2>
-                    <div class="mt-2 flex flex-wrap items-center gap-2">
-                        <span class="${ui.statusClass(item.status)}">
-                            ${ui.statusLabel(item.status)}
-                        </span>
-                        ${severityHeader}
-                    </div>
-                    <div class="mt-2 text-xs text-gray-500 dark:text-slate-400">
-                        Ultima actividad: ${ui.formatDateTime(item.last_activity)}
-                    </div>
-                </div>
-                <button
-                    id="drawerCloseButton"
-                    type="button"
-                    class="h-10 w-10 rounded-lg bg-gray-100 text-gray-700 transition hover:bg-gray-200 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600"
-                >
-                    X
-                </button>
-            </div>
-        `;
-
-        const closeButton = document.getElementById("drawerCloseButton");
-        if (closeButton) {
-            closeButton.onclick = closeVerificationDrawer;
-        }
-    }
-
-    const cliente = document.getElementById("drawerCliente");
-    if (cliente) {
-        cliente.innerHTML = `
-            <div>
-                <p class="text-gray-500 dark:text-slate-400">Nombre</p>
-                <p>${ui.escapeHtml(item.name || "-")}</p>
-            </div>
-            <div>
-                <p class="text-gray-500 dark:text-slate-400">Telefono</p>
-                <p>${ui.escapeHtml(item.phone || "-")}</p>
-            </div>
-            <div>
-                <p class="text-gray-500 dark:text-slate-400">Cuenta</p>
-                <p>${ui.escapeHtml(item.no_cuenta || "-")}</p>
-            </div>
-        `;
-    }
-
-    const sigaBridgeEl = document.getElementById("drawerSigaBridge");
-    if (sigaBridgeEl) {
-        const bridgeHtml = renderSigaBridgeSummary(item);
-        sigaBridgeEl.innerHTML = bridgeHtml;
-        sigaBridgeEl.classList.toggle("hidden", !bridgeHtml);
-
-        const refreshButton = document.getElementById("refreshSigaBridgeButton");
-        if (refreshButton) {
-            refreshButton.onclick = () => {
-                void refreshVerificationDetail(item, { force: true });
-            };
-        }
-    }
-
-    const progressBar = document.getElementById("drawerProgressBar");
-    if (progressBar) {
-        progressBar.innerHTML = ui.renderProgressBar(item.progress_pct);
-    }
-
-    const progressMeta = document.getElementById("drawerProgressMeta");
-    if (progressMeta) {
-        progressMeta.innerHTML = `
-            <span>${Number(item.progress_pct || 0)}%</span>
-            <span>${ui.escapeHtml(item.current_step || "-")}</span>
-        `;
-    }
-
-    const severitySummary = document.getElementById("drawerSeveritySummary");
-    if (severitySummary) {
-        severitySummary.innerHTML = renderSeveritySummary(item);
-    }
-
-    const inconsistenciasEl = document.getElementById("drawerInconsistencias");
-    if (inconsistenciasEl) {
-        const inconsistencias = Array.isArray(item.inconsistencias)
-            ? item.inconsistencias
-            : [];
-
-        inconsistenciasEl.innerHTML = inconsistencias.length
-            ? inconsistencias.map((entry) => {
-                const isOpen = String(entry.estado || "").toUpperCase() === "ABIERTA";
-
-                return `
-                    <div class="mb-3 rounded-xl border p-4 ${getInconsistenciaCardTone(entry)}">
-                        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div class="min-w-0">
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <div class="text-sm font-semibold text-gray-900 dark:text-white">
-                                        ${ui.escapeHtml(entry.campo || entry.estado_origen || "General")}
-                                    </div>
-                                    ${renderSeverityBadge(entry.severidad)}
-                                    <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${isOpen ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}">
-                                        ${ui.escapeHtml(isOpen ? "Abierta" : "Cerrada")}
-                                    </span>
-                                </div>
-                                <div class="mt-2 text-sm text-gray-700 dark:text-slate-200">
-                                    ${ui.escapeHtml(entry.mensaje || "Sin detalle")}
-                                </div>
-                                ${renderMissingElements(entry)}
-                            </div>
-                            ${renderResolutionActions(entry, item)}
+        const header = document.getElementById("drawerHeader");
+        if (header) {
+            header.innerHTML = `
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <h2 class="truncate text-lg font-semibold md:text-xl">
+                            Folio ${ui.escapeHtml(ui.safeText(item.folio))}
+                        </h2>
+                        <div class="mt-2 flex flex-wrap items-center gap-2">
+                            <span class="${ui.statusClass(item.status)}">
+                                ${ui.escapeHtml(ui.statusLabel(item.status))}
+                            </span>
+                            ${severityHeader}
+                        </div>
+                        <div class="mt-2 text-xs text-gray-500 dark:text-slate-400">
+                            Ultima actividad: ${ui.escapeHtml(ui.safeText(ui.formatDateTime(item.last_activity)))}
                         </div>
                     </div>
+                    <button
+                        id="drawerCloseButton"
+                        type="button"
+                        class="h-10 w-10 shrink-0 rounded-lg bg-gray-100 text-gray-700 transition hover:bg-gray-200 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600"
+                        aria-label="Cerrar"
+                    >
+                        X
+                    </button>
+                </div>
+            `;
+
+            const closeButton = document.getElementById("drawerCloseButton");
+            if (closeButton) {
+                closeButton.onclick = closeVerificationDrawer;
+            }
+        }
+
+        const cliente = document.getElementById("drawerCliente");
+        if (cliente) {
+            const addressText = ui.safeText(customer.address_text, "");
+            const rows = [
+                { label: "Nombre", value: item.name || customer.name },
+                { label: "Telefono", value: item.phone },
+                { label: "Cuenta", value: item.no_cuenta },
+                { label: "Folio", value: item.folio },
+            ];
+            if (addressText) {
+                rows.push({ label: "Domicilio", value: addressText });
+            }
+            cliente.innerHTML = ui.renderKeyValueGrid(rows);
+        }
+
+        const sigaBridgeEl = document.getElementById("drawerSigaBridge");
+        if (sigaBridgeEl) {
+            const bridgeHtml = renderSigaBridgeSummary(item);
+            sigaBridgeEl.innerHTML = bridgeHtml;
+            sigaBridgeEl.classList.toggle("hidden", !bridgeHtml);
+        }
+
+        const sigaDetailsEl = document.getElementById("drawerSigaDetails");
+        if (sigaDetailsEl) {
+            const detailsHtml = renderSigaDetails(item);
+            sigaDetailsEl.innerHTML = detailsHtml;
+            sigaDetailsEl.classList.toggle("hidden", !detailsHtml);
+        }
+
+        const progressBar = document.getElementById("drawerProgressBar");
+        if (progressBar) {
+            progressBar.innerHTML = ui.renderProgressBar(item.progress_pct);
+        }
+
+        const progressMeta = document.getElementById("drawerProgressMeta");
+        if (progressMeta) {
+            progressMeta.innerHTML = `
+                <span>${Number(item.progress_pct || 0)}%</span>
+                <span class="text-right">${ui.escapeHtml(ui.safeText(item.current_step))}</span>
+            `;
+        }
+
+        const inconsistenciasMeta = document.getElementById("drawerInconsistenciasMeta");
+        if (inconsistenciasMeta) {
+            inconsistenciasMeta.textContent = counts.total
+                ? `${counts.total} registradas`
+                : "Validacion sin inconsistencias abiertas";
+        }
+
+        const severitySummary = document.getElementById("drawerSeveritySummary");
+        if (severitySummary) {
+            severitySummary.innerHTML = renderSeveritySummary(item);
+        }
+
+        const inconsistenciasEl = document.getElementById("drawerInconsistencias");
+        if (inconsistenciasEl) {
+            const inconsistencias = Array.isArray(item.inconsistencias)
+                ? item.inconsistencias
+                : [];
+
+            inconsistenciasEl.className = inconsistencias.length > 4
+                ? "drawer-inconsistencias-list mt-4 space-y-3 pr-1"
+                : "mt-4 space-y-3";
+
+            inconsistenciasEl.innerHTML = inconsistencias.length
+                ? inconsistencias.map((entry) => {
+                    const isOpen = String(entry.estado || "").toUpperCase() === "ABIERTA";
+                    const origin = ui.safeText(entry.estado_origen, "");
+
+                    return `
+                        <div class="rounded-lg border p-4 ${getInconsistenciaCardTone(entry)}">
+                            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                <div class="min-w-0">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <div class="text-sm font-semibold text-gray-900 dark:text-white">
+                                            ${ui.escapeHtml(ui.safeText(entry.campo || entry.estado_origen, "General"))}
+                                        </div>
+                                        ${renderSeverityBadge(entry.severidad)}
+                                        <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${isOpen ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}">
+                                            ${ui.escapeHtml(isOpen ? "Abierta" : "Cerrada")}
+                                        </span>
+                                    </div>
+                                    <div class="mt-2 whitespace-pre-wrap break-words text-sm text-gray-700 dark:text-slate-200">
+                                        ${ui.escapeHtml(ui.safeText(entry.mensaje, "Sin detalle"))}
+                                    </div>
+                                    ${origin ? `
+                                        <div class="mt-2 text-xs text-gray-500 dark:text-slate-400">
+                                            Origen: ${ui.escapeHtml(origin)}
+                                        </div>
+                                    ` : ""}
+                                    ${renderMissingElements(entry)}
+                                </div>
+                                ${renderResolutionActions(entry, item)}
+                            </div>
+                        </div>
+                    `;
+                }).join("")
+                : `
+                    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-300">
+                        Sin inconsistencias
+                    </div>
                 `;
-            }).join("")
-            : `<p class="text-sm font-medium text-green-600 dark:text-green-400">Sin inconsistencias</p>`;
 
-        inconsistenciasEl.querySelectorAll("[data-siga-url]").forEach((button) => {
-            button.onclick = () => {
-                window.goToSiga(button.dataset.sigaUrl || "");
-            };
-        });
+            inconsistenciasEl.querySelectorAll("[data-siga-url]").forEach((button) => {
+                button.onclick = () => {
+                    window.goToSiga(button.dataset.sigaUrl || "");
+                };
+            });
 
-        inconsistenciasEl.querySelectorAll("[data-inconsistencia-id]").forEach((button) => {
+            inconsistenciasEl.querySelectorAll("[data-inconsistencia-id]").forEach((button) => {
                 button.onclick = async () => {
-                    const inconsistenciaId = Number(button.dataset.inconsistenciaId); 
-                    const uiId = button.dataset.uiId; 
+                    const inconsistenciaId = Number(button.dataset.inconsistenciaId);
+                    const uiId = button.dataset.uiId;
 
                     if (!Number.isFinite(inconsistenciaId) || !uiId) return;
 
@@ -833,39 +949,83 @@ function updateDrawer(item) {
                     }
                 };
             });
-    }
-
-    const footer = document.getElementById("drawerFooter");
-    if (footer) {
-        footer.innerHTML = `
-            <button
-                id="goToChat"
-                type="button"
-                class="w-full rounded-lg bg-blue-500 py-3 text-white transition hover:bg-blue-600"
-            >
-                Abrir conversacion
-            </button>
-        `;
-
-        const goToChatBtn = document.getElementById("goToChat");
-        if (goToChatBtn) {
-            goToChatBtn.onclick = async () => {
-                try {
-                    closeVerificationDrawer();
-
-                    setSelectedSession({
-                        sessionId: item.session_id,
-                        phone: item.phone,
-                        name: item.name,
-                    });
-
-                    await navigateTo("conversations");
-                } catch (error) {
-                    reportVerificationError("go_to_chat_failed", error);
-                }
-            };
         }
-    }
+
+        const footer = document.getElementById("drawerFooter");
+        if (footer) {
+            const isRefreshing = isVerificationDetailRequestActive(item.session_id);
+            const sigaUrl = ui.safeText(item.siga_url, "");
+            const refreshButton = canUseSigaBridgeOps()
+                ? `
+                    <button
+                        id="refreshSigaBridgeFooterButton"
+                        type="button"
+                        class="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                        ${isRefreshing ? "disabled" : ""}
+                    >
+                        ${isRefreshing ? "Actualizando..." : "Actualizar SIGA"}
+                    </button>
+                `
+                : "";
+            const sigaButton = sigaUrl
+                ? `
+                    <button
+                        id="goToSigaFooter"
+                        type="button"
+                        class="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                    >
+                        Ir a SIGA
+                    </button>
+                `
+                : "";
+
+            footer.innerHTML = `
+                <div class="flex flex-col gap-2 sm:flex-row">
+                    <button
+                        id="goToChat"
+                        type="button"
+                        class="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+                    >
+                        Abrir conversacion
+                    </button>
+                    ${refreshButton}
+                    ${sigaButton}
+                </div>
+            `;
+
+            const goToChatBtn = document.getElementById("goToChat");
+            if (goToChatBtn) {
+                goToChatBtn.onclick = async () => {
+                    try {
+                        closeVerificationDrawer();
+
+                        setSelectedSession({
+                            sessionId: item.session_id,
+                            phone: item.phone,
+                            name: item.name,
+                        });
+
+                        await navigateTo("conversations");
+                    } catch (error) {
+                        reportVerificationError("go_to_chat_failed", error);
+                    }
+                };
+            }
+
+            const refreshBtn = document.getElementById("refreshSigaBridgeFooterButton");
+            if (refreshBtn) {
+                refreshBtn.onclick = () => {
+                    void refreshVerificationDetail(item, { force: true });
+                };
+            }
+
+            const sigaBtn = document.getElementById("goToSigaFooter");
+            if (sigaBtn) {
+                sigaBtn.onclick = () => {
+                    window.goToSiga(sigaUrl);
+                };
+            }
+        }
     } catch (error) {
         reportVerificationError("update_drawer_failed", error);
     }
@@ -961,14 +1121,14 @@ async function refreshVerificationDetail(item, options = {}) {
 function updateVerificationRow(row, item) {
     row.className = "cursor-pointer border-b border-gray-100 transition hover:bg-gray-50 dark:border-slate-700 dark:hover:bg-slate-700/40";
     row.innerHTML = `
-        <td data-label="No. cuenta" class="px-4 py-4">${ui.escapeHtml(item.no_cuenta || "-")}</td>
-        <td data-label="Folio" class="px-4 py-4">${ui.escapeHtml(item.folio || "-")}</td>
-        <td data-label="Telefono" class="px-4 py-4">${ui.escapeHtml(item.phone || "-")}</td>
+        <td data-label="No. cuenta" class="px-4 py-4">${ui.escapeHtml(ui.safeText(item.no_cuenta))}</td>
+        <td data-label="Folio" class="px-4 py-4">${ui.escapeHtml(ui.safeText(item.folio))}</td>
+        <td data-label="Telefono" class="px-4 py-4">${ui.escapeHtml(ui.safeText(item.phone))}</td>
         <td data-label="Estado" class="px-4 py-4">
-            <span class="${ui.statusClass(item.status)}">${ui.statusLabel(item.status)}</span>
+            <span class="${ui.statusClass(item.status)}">${ui.escapeHtml(ui.statusLabel(item.status))}</span>
         </td>
         <td data-label="Progreso" class="px-4 py-4">${ui.renderProgressBar(item.progress_pct)}</td>
-        <td data-label="Paso actual" class="px-4 py-4">${ui.escapeHtml(item.current_step || "-")}</td>
+        <td data-label="Paso actual" class="px-4 py-4">${ui.escapeHtml(ui.safeText(item.current_step))}</td>
         <td data-label="Inconsistencias" class="px-4 py-4">${renderInconsistenciasCell(item)}</td>
         <td data-label="Ultima actividad" class="px-4 py-4 whitespace-nowrap">${ui.formatDateTime(item.last_activity)}</td>
     `;
