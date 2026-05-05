@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any
 
 from sqlalchemy.orm.attributes import flag_modified
@@ -26,6 +27,49 @@ class BridgeSale:
     def __init__(self, **values: Any) -> None:
         self.__dict__.update(values)
         self._source = "siga_bridge"
+
+
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized == "" or normalized.lower() in {"-", "null", "none", "undefined"}
+    return False
+
+
+def _safe_text(value: Any) -> str | None:
+    if _is_missing(value) or isinstance(value, (dict, list, tuple, set)):
+        return None
+    text = str(value).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text if text else None
+
+
+def _safe_money(value: Any) -> str | None:
+    decimal_value = _decimal_or_none(value)
+    return f"{decimal_value:.2f}" if decimal_value is not None else None
+
+
+def _first_safe_text(records: tuple[dict[str, Any] | None, ...], keys: tuple[str, ...]) -> str | None:
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for key in keys:
+            text = _safe_text(record.get(key))
+            if text:
+                return text
+    return None
+
+
+def _normalize_phone(value: Any) -> str | None:
+    text = _safe_text(value)
+    if not text:
+        return None
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 10:
+        return digits[-10:]
+    return digits or text
 
 
 def normalize_bridge_verification_payload(payload: Any) -> dict[str, Any] | None:
@@ -94,6 +138,10 @@ def _first_value(records: tuple[dict[str, Any] | None, ...], keys: tuple[str, ..
     return None
 
 
+def _value_from_path(record: dict[str, Any] | None, keys: tuple[str, ...]) -> Any | None:
+    return _dict_value(record, keys)
+
+
 def _decimal_or_none(value: Any) -> Decimal | None:
     if value in (None, ""):
         return None
@@ -130,68 +178,265 @@ def _datetime_or_none(value: Any) -> datetime | None:
     return None
 
 
-def bridge_sale_from_payload(payload: Any) -> BridgeSale | None:
-    data = normalize_bridge_verification_payload(payload)
-    if not data or not bridge_verification_found(data):
-        return None
+def _date_text(value: Any) -> str | None:
+    parsed = _datetime_or_none(value)
+    if parsed:
+        return parsed.date().isoformat()
+    return _safe_text(value)
 
+
+def _as_dict(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _build_records(data: dict[str, Any]) -> tuple[dict[str, Any] | None, ...]:
     sale = _first_sale(data)
-    if not sale:
+    customer = _as_dict(data.get("customer"))
+    account = _as_dict(data.get("account"))
+    payment_summary = _as_dict(data.get("payment_summary")) or _as_dict(data.get("payment"))
+    return (sale, customer, account, payment_summary, data)
+
+
+def _format_address_from_record(record: dict[str, Any] | None) -> str | None:
+    if not isinstance(record, dict):
         return None
 
-    customer = data.get("customer") if isinstance(data.get("customer"), dict) else None
-    account = data.get("account") if isinstance(data.get("account"), dict) else None
-    payment_summary = (
-        data.get("payment_summary")
-        if isinstance(data.get("payment_summary"), dict)
-        else None
+    direct = _safe_text(
+        _value_from_path(record, ("full", "domicilio", "domicilio_completo", "direccion", "address"))
     )
-    records = (sale, customer, account, payment_summary, data)
+    if direct:
+        return capitalizar_texto(direct)
 
-    no_cuenta = _first_value(
+    street = _safe_text(
+        _value_from_path(record, ("street", "calle", "nombre_vialidad", "vialidad"))
+    )
+    external = _safe_text(
+        _value_from_path(record, ("external_number", "no_exterior", "no_ext", "numero_exterior", "num_ext"))
+    )
+    internal = _safe_text(
+        _value_from_path(record, ("internal_number", "no_interior", "no_int", "numero_interior", "num_int"))
+    )
+    neighborhood = _safe_text(_value_from_path(record, ("neighborhood", "colonia")))
+    postal_code = _safe_text(_value_from_path(record, ("postal_code", "codigo_postal", "cp")))
+    city = _safe_text(_value_from_path(record, ("city", "ciudad_municipio", "ciudad", "municipio", "localidad")))
+    state = (
+        _safe_text(_value_from_path(record, ("state_name", "estado_nombre")))
+        or _safe_text(_value_from_path(record, ("state", "estado")))
+    )
+    if state and state.isdigit():
+        state = None
+
+    parts: list[str] = []
+    line1 = " ".join(part for part in (street, external) if part)
+    if internal:
+        line1 = f"{line1} Int. {internal}".strip()
+    if line1:
+        parts.append(capitalizar_texto(line1))
+
+    if neighborhood:
+        parts.append(f"Col. {capitalizar_texto(neighborhood)}")
+    if postal_code:
+        parts.append(f"C.P. {postal_code}")
+
+    city_state = ", ".join(
+        capitalizar_texto(part)
+        for part in (city, state)
+        if part
+    )
+    if city_state:
+        parts.insert(0, city_state)
+
+    return ", ".join(parts) if parts else None
+
+
+def format_bridge_address(*records: dict[str, Any] | None) -> str | None:
+    for record in records:
+        formatted = _format_address_from_record(record)
+        if formatted:
+            return formatted
+    return None
+
+
+def _normalize_payment_snapshot(
+    data: dict[str, Any],
+    records: tuple[dict[str, Any] | None, ...],
+) -> dict[str, Any]:
+    payment_summary = _as_dict(data.get("payment_summary")) or _as_dict(data.get("payment"))
+    account = _as_dict(data.get("account"))
+    payment_records = (payment_summary, account, *records)
+
+    saldo = _safe_money(_first_value(payment_records, ("saldo", "balance", "saldo_actual", "saldo_restante")))
+    plan_label = _first_safe_text(payment_records, ("plan_label", "plan", "periodicidad", "frecuencia_pago"))
+    pago_inicial = _safe_money(
+        _first_value(payment_records, ("pago_inicial", "pago", "enganche", "initial_payment", "down_payment"))
+    )
+    pago_minimo = _safe_money(_first_value(payment_records, ("pago_minimo", "minimum_payment", "pago_semanal")))
+    importe_quincenal = _safe_money(_first_value(payment_records, ("importe_quincenal", "pago_quincenal")))
+    importe_mensual = _safe_money(_first_value(payment_records, ("importe_mensual", "pago_mensual")))
+
+    recent_payments = data.get("recent_payments")
+    payments_count = len(recent_payments) if isinstance(recent_payments, list) else 0
+    available = any([saldo, plan_label, pago_inicial, pago_minimo, importe_quincenal, importe_mensual, payments_count])
+
+    return {
+        "available": bool(available),
+        "saldo": saldo,
+        "plan_label": plan_label,
+        "pago_inicial": pago_inicial,
+        "pago_minimo": pago_minimo,
+        "importe_quincenal": importe_quincenal,
+        "importe_mensual": importe_mensual,
+        "payments_count": payments_count,
+        "reason": None if available else "payment_data_unavailable",
+    }
+
+
+def _normalize_components_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    components = data.get("components")
+    items: list[Any] = []
+    if isinstance(components, dict) and isinstance(components.get("items"), list):
+        components = components.get("items")
+
+    if isinstance(components, list):
+        for item in components:
+            if isinstance(item, dict):
+                sanitized = {
+                    str(key): text
+                    for key, value in item.items()
+                    if (text := _safe_text(value)) is not None
+                }
+                if sanitized:
+                    items.append(sanitized)
+            else:
+                text = _safe_text(item)
+                if text:
+                    items.append(text)
+    elif isinstance(components, dict):
+        for key, value in components.items():
+            text = _safe_text(value)
+            if text:
+                items.append({"name": str(key), "value": text})
+
+    return {
+        "available": bool(items),
+        "items": items,
+    }
+
+
+def normalize_siga_verification_snapshot(
+    payload: Any,
+    *,
+    fetched_at: str | None = None,
+) -> dict[str, Any]:
+    data = normalize_bridge_verification_payload(payload)
+    source = _as_dict(data.get("source")) if isinstance(data, dict) else None
+    fetched_at = (
+        fetched_at
+        or _safe_text(source.get("fetched_at") if source else None)
+        or datetime.now(timezone.utc).isoformat()
+    )
+    if not data:
+        return {
+            "found": False,
+            "folio": None,
+            "no_cuenta": None,
+            "phone": None,
+            "customer": {"name": None, "address_text": None, "address_raw": None},
+            "sale": {"product": None, "sale_date": None},
+            "payment": {
+                "available": False,
+                "saldo": None,
+                "plan_label": None,
+                "pago_inicial": None,
+                "pago_minimo": None,
+                "importe_quincenal": None,
+                "importe_mensual": None,
+                "payments_count": 0,
+                "reason": "payload_unavailable",
+            },
+            "components": {"available": False, "items": []},
+            "source": {"table": None, "fetched_at": fetched_at},
+        }
+
+    records = _build_records(data)
+    sale, customer, account, payment_summary, _data = records
+    address_raw = (
+        _as_dict(_dict_value(customer, ("address", "domicilio", "direccion")))
+        or _as_dict(_dict_value(sale, ("address", "domicilio", "direccion")))
+        or customer
+        or sale
+    )
+    address_text = (
+        _safe_text(_dict_value(customer, ("address_text", "domicilio_texto")))
+        or format_bridge_address(address_raw, customer, sale, account, data)
+    )
+    product = _first_safe_text(
         records,
-        ("no_cuenta", "cuenta", "account", "account_number", "numero_cuenta"),
+        ("product", "producto", "nombre_producto", "descripcion", "description", "sku_bitacora_v", "sku"),
     )
-    nombre = _first_value(
-        records,
-        ("nombre_completo", "name", "nombre", "cliente", "customer_name"),
-    )
-    sku = _first_value(
-        records,
-        ("sku_bitacora_v", "sku", "codigo", "codigo_barras_bv", "producto_sku"),
-    )
-    descripcion = _first_value(
-        records,
-        ("descripcion", "description", "producto", "product", "nombre_producto"),
-    )
-    fecha_venta = _datetime_or_none(
-        _first_value(records, ("fecha_venta", "fecha", "sale_date", "created_at"))
-    )
-    pago = _decimal_or_none(
-        _first_value(
+
+    return {
+        "found": bridge_verification_found(data),
+        "folio": _first_safe_text(records, ("folio",)),
+        "no_cuenta": _first_safe_text(
             records,
-            ("pago", "pago_inicial", "enganche", "initial_payment", "down_payment"),
-        )
-    )
-    subsidio = _decimal_or_none(_first_value(records, ("subsidio", "descuento")))
+            ("no_cuenta", "cuenta", "account", "account_number", "numero_cuenta"),
+        ),
+        "phone": _normalize_phone(
+            _first_value(records, ("phone", "telefono", "tel_1", "tel1", "celular"))
+        ),
+        "customer": {
+            "name": _first_safe_text(
+                records,
+                ("name", "nombre", "nombre_completo", "cliente", "customer_name"),
+            ),
+            "address_text": address_text,
+            "address_raw": address_raw if isinstance(address_raw, dict) else None,
+        },
+        "sale": {
+            "product": product,
+            "sale_date": _date_text(
+                _first_value(records, ("sale_date", "fecha_venta", "fecha", "created_at"))
+            ),
+        },
+        "payment": _normalize_payment_snapshot(data, records),
+        "components": _normalize_components_snapshot(data),
+        "source": {
+            "table": _safe_text(data.get("source_table"))
+            or _safe_text(source.get("table") if source else None),
+            "fetched_at": fetched_at,
+        },
+    }
+
+
+def bridge_sale_from_payload(payload: Any) -> BridgeSale | None:
+    snapshot = normalize_siga_verification_snapshot(payload)
+    if not snapshot.get("found"):
+        return None
+
+    folio = _safe_text(snapshot.get("folio"))
+    no_cuenta = _safe_text(snapshot.get("no_cuenta"))
+    if not folio and not no_cuenta:
+        return None
+
+    payment = snapshot.get("payment") if isinstance(snapshot.get("payment"), dict) else {}
+    customer = snapshot.get("customer") if isinstance(snapshot.get("customer"), dict) else {}
+    sale = snapshot.get("sale") if isinstance(snapshot.get("sale"), dict) else {}
 
     return BridgeSale(
-        id_venta_b=_first_value(records, ("id_venta_b", "id_venta", "id")),
-        id_emp_bv=_first_value(records, ("id_emp_bv", "id_emp", "company_id")),
-        id_movimiento_bv=_first_value(
-            records,
-            ("id_movimiento_bv", "id_movimiento", "movimiento"),
-        ),
-        folio=str(_first_value(records, ("folio",)) or ""),
-        no_cuenta=str(no_cuenta or ""),
-        nombre_completo=str(nombre or ""),
-        sku_bitacora_v=str(sku or descripcion or ""),
-        descripcion=str(descripcion or sku or ""),
-        fecha_venta=fecha_venta,
-        pago=pago,
-        subsidio=subsidio,
-        source_table=data.get("source_table"),
-        _bridge_payload=data,
+        id_venta_b=None,
+        id_emp_bv=None,
+        id_movimiento_bv=None,
+        folio=folio or "",
+        no_cuenta=no_cuenta or "",
+        nombre_completo=customer.get("name") or "",
+        sku_bitacora_v=sale.get("product") or "",
+        descripcion=sale.get("product") or "",
+        fecha_venta=_datetime_or_none(sale.get("sale_date")),
+        pago=_decimal_or_none(payment.get("pago_inicial")),
+        subsidio=None,
+        source_table=(snapshot.get("source") or {}).get("table"),
+        _bridge_payload=snapshot,
     )
 
 
@@ -205,11 +450,12 @@ def bridge_sale_summary(payload: Any) -> dict[str, Any]:
 
     sale = data.get("sale")
     sales = data.get("sales")
+    source = data.get("source") if isinstance(data.get("source"), dict) else {}
     return {
         "payload_type": type(payload).__name__,
         "keys": sorted(str(key) for key in data.keys()),
         "found": bridge_verification_found(data),
-        "source_table": data.get("source_table"),
+        "source_table": data.get("source_table") or source.get("table"),
         "has_sale": isinstance(sale, dict) and bool(sale),
         "sales_count": len(sales) if isinstance(sales, list) else None,
         "has_customer": isinstance(data.get("customer"), dict),
@@ -241,6 +487,7 @@ def cache_bridge_verification_on_session(
     current = getattr(session, "extra_json", None)
     current_payload = dict(current) if isinstance(current, dict) else {}
     siga_payload = dict(current_payload.get("siga_bridge") or {})
+    snapshot = normalize_siga_verification_snapshot(payload, fetched_at=updated_at)
 
     siga_payload["verification_lookup"] = {
         "source": "siga_bridge_v1",
@@ -249,8 +496,8 @@ def cache_bridge_verification_on_session(
         "updated_at": updated_at,
         "folio": str(folio or ""),
         "found": bool(found),
-        "data": payload,
-        "summary": bridge_sale_summary(payload),
+        "data": snapshot,
+        "summary": bridge_sale_summary(snapshot),
     }
     current_payload["siga_bridge"] = siga_payload
     session.extra_json = current_payload
@@ -272,6 +519,14 @@ def get_cached_bridge_verification_payload(
     siga_payload = extra.get("siga_bridge")
     if not isinstance(siga_payload, dict):
         return None
+
+    cache_row = siga_payload.get("verification_cache")
+    if isinstance(cache_row, dict):
+        if folio and str(cache_row.get("folio") or "") != str(folio):
+            return None
+        snapshot = cache_row.get("snapshot")
+        if isinstance(snapshot, dict):
+            return snapshot
 
     lookup = siga_payload.get("verification_lookup")
     if not isinstance(lookup, dict):
@@ -295,46 +550,15 @@ def bridge_address_from_payload(payload: Any) -> str:
     sale = _first_sale(data)
     customer = data.get("customer") if isinstance(data.get("customer"), dict) else None
     account = data.get("account") if isinstance(data.get("account"), dict) else None
-    records = (sale, customer, account, data)
-
-    direct = _first_value(
-        records,
-        ("domicilio", "domicilio_completo", "direccion", "address"),
-    )
+    direct = _safe_text(_dict_value(customer, ("address_text", "domicilio_texto")))
     if direct:
-        return capitalizar_texto(str(direct))
+        return direct
 
-    calle = _first_value(records, ("calle", "nombre_vialidad", "vialidad"))
-    no_ext = _first_value(records, ("no_ext", "numero_exterior", "num_ext"))
-    no_int = _first_value(records, ("no_int", "numero_interior", "num_int"))
-    colonia = _first_value(records, ("colonia", "colony"))
-    cp = _first_value(records, ("codigo_postal", "cp", "postal_code"))
-    ciudad = _first_value(records, ("ciudad", "municipio", "localidad", "city"))
-    estado = _first_value(records, ("estado", "state"))
-
-    parts: list[str] = []
-    line1 = " ".join(str(item).strip() for item in (calle, no_ext) if item)
-    if no_int:
-        line1 = f"{line1} Int. {str(no_int).strip()}".strip()
-    if line1:
-        parts.append(capitalizar_texto(line1))
-
-    if colonia and cp:
-        parts.append(f"Col. {capitalizar_texto(str(colonia))} C.P. {str(cp).strip()}")
-    elif colonia:
-        parts.append(f"Col. {capitalizar_texto(str(colonia))}")
-    elif cp:
-        parts.append(f"C.P. {str(cp).strip()}")
-
-    city_state = ", ".join(
-        capitalizar_texto(str(item))
-        for item in (ciudad, estado)
-        if item not in (None, "")
+    address_raw = (
+        _as_dict(_dict_value(customer, ("address", "domicilio", "direccion")))
+        or _as_dict(_dict_value(sale, ("address", "domicilio", "direccion")))
     )
-    if city_state:
-        parts.append(city_state)
-
-    return ", ".join(parts) if parts else "No disponible"
+    return format_bridge_address(address_raw, customer, sale, account, data) or "No disponible"
 
 
 def bridge_address_from_session(session: Any, folio: str | None = None) -> str:

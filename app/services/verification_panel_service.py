@@ -12,6 +12,12 @@ from app.core.verification.verification_schema import normalize_progress_payload
 from app.siga.siga_repository import obtener_venta_por_folio
 from app.services.verification_service import VerificationService
 from app.services.verification_tracker import STEP_MAP
+from app.services.siga_bridge_cache import (
+    apply_siga_snapshot_to_panel_item,
+    get_cached_verification,
+    get_cached_verification_row,
+    is_cache_valid,
+)
 from app.db.models import ChatSessions, VerificacionCuenta, Inconsistencias
 from app.utils.inconsistencias_serializer import (
     serialize_inconsistencias,
@@ -88,32 +94,39 @@ def build_verification_snapshot(
     session: ChatSessions,
 ) -> Optional[dict]:
     service = VerificationService(db)
+    folio = str(session.folio) if session.folio else ""
+    cached_siga = get_cached_verification(session, folio, allow_stale=True) if folio else None
+    cached_row = get_cached_verification_row(session, folio, allow_stale=True) if folio else None
 
     no_cuenta = (
-        service.resolve_no_cuenta_from_folio(str(session.folio))
-        if session.folio
+        service.resolve_no_cuenta_from_folio(folio)
+        if folio
         else None
     )
+    if not no_cuenta and cached_siga:
+        no_cuenta = cached_siga.get("no_cuenta")
 
-    if not no_cuenta:
+    if not no_cuenta and not cached_siga:
         return None
 
-    verif = (
-        db.query(VerificacionCuenta)
-        .filter(VerificacionCuenta.no_cuenta == no_cuenta)
-        .first()
-    )
+    verif = None
+    if no_cuenta:
+        verif = (
+            db.query(VerificacionCuenta)
+            .filter(VerificacionCuenta.no_cuenta == no_cuenta)
+            .first()
+        )
 
-    if not verif:
+    if not verif and not cached_siga:
         return None
 
-    progress_json = verif.json or {}
+    progress_json = verif.json if verif and isinstance(verif.json, dict) else {}
     verification_data = compute_verification(progress_json)
 
     inconsistencias = (
         db.query(Inconsistencias)
-        .filter(Inconsistencias.folio == str(session.folio))
-        .all()
+            .filter(Inconsistencias.folio == folio)
+            .all()
     )
 
     serialized_inconsistencias = serialize_inconsistencias(inconsistencias)
@@ -127,12 +140,16 @@ def build_verification_snapshot(
         requires_human=False,
     )
 
-    return {
+    item = {
         "session_id": session.id,
-        "folio": str(session.folio) if session.folio else "",
+        "folio": folio,
         "phone": session.phone,
         "no_cuenta": no_cuenta,
-        "siga_url": f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}",
+        "siga_url": (
+            f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}"
+            if no_cuenta
+            else f"https://siga.mxcomp.com.mx/ventas/{folio}"
+        ),
         "status": status,
         "progress_pct": verification_data["progress_pct"],
         "current_step": resolve_panel_current_step(
@@ -149,6 +166,11 @@ def build_verification_snapshot(
         if session.last_message_at
         else "",
     }
+    return apply_siga_snapshot_to_panel_item(
+        item,
+        cached_siga,
+        cache_valid=is_cache_valid(cached_row, session=session) if cached_row else None,
+    )
 def compute_verification(progress: Optional[Dict[str, int]]) -> Dict[str, Any]:
     normalized = normalize_progress_payload(progress or {})
 

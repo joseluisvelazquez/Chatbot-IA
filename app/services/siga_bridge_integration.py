@@ -20,7 +20,11 @@ from app.services.siga_bridge import (
 from app.services.siga_bridge_sale import (
     bridge_sale_summary,
     bridge_verification_found,
-    cache_bridge_verification_on_session,
+    normalize_siga_verification_snapshot,
+)
+from app.services.siga_bridge_cache import (
+    apply_siga_snapshot_to_panel_item,
+    get_or_fetch_verification,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,27 +179,8 @@ async def enrich_verification_with_bridge(
 
     enriched = dict(item)
     folio = str(enriched.get("folio") or "").strip()
-    phone = str(enriched.get("phone") or "").strip()
-    cuenta = str(enriched.get("no_cuenta") or "").strip()
     client = get_siga_bridge_client()
     errors: list[str] = []
-
-    bridge: dict[str, Any] = {
-        "enabled": True,
-        "available": False,
-        "verification": None,
-        "customer": None,
-        "phone_customer": None,
-        "account": None,
-        "payments": None,
-        "error": None,
-        "status": "fallback_local",
-        "source": "local_fallback",
-        "updated_at": _utc_timestamp(),
-        "bypassed_cache": bool(bypass_cache),
-        "lookup_strategy": "folio_or_account_authoritative",
-        "phone_lookup_authoritative": False,
-    }
 
     if folio:
         verification, error = await _safe_bridge_call(
@@ -203,100 +188,22 @@ async def enrich_verification_with_bridge(
             lambda: client.get_verification(folio, company_id),
             company_id=company_id,
         )
-        bridge["verification"] = verification
-        if error:
-            errors.append(error)
-        elif _verification_payload_found(verification):
-            if isinstance(verification.get("customer"), dict):
-                bridge["customer"] = verification["customer"]
-            if isinstance(verification.get("account"), dict):
-                bridge["account"] = verification["account"]
-            if verification.get("recent_payments") is not None:
-                bridge["payments"] = verification.get("recent_payments")
-        else:
-            logger.info(
-                "siga_bridge_verification_not_found_or_invalid",
-                extra={
-                    "company_id": company_id,
-                    "folio": folio,
-                    "payload_type": type(verification).__name__,
-                },
-            )
-
-    if cuenta and bridge["account"] is None:
-        account, error = await _safe_bridge_call(
-            "verification_account",
-            lambda: client.get_account(
-                cuenta,
-                company_id,
-                bypass_cache=bypass_cache,
-            ),
-            company_id=company_id,
-        )
-        bridge["account"] = account
-        if error:
-            errors.append(error)
-
-    if cuenta and bridge["payments"] is None:
-        payments, error = await _safe_bridge_call(
-            "verification_payments",
-            lambda: client.get_payments(
-                cuenta,
-                company_id,
-                limit=20,
-                bypass_cache=bypass_cache,
-            ),
-            company_id=company_id,
-        )
-        bridge["payments"] = payments
-        if error:
-            errors.append(error)
-
-    if phone and bridge["customer"] is None:
-        phone_customer, error = await _safe_bridge_call(
-            "verification_phone_customer_auxiliary",
-            lambda: client.get_customer_by_phone(
-                phone,
-                company_id,
-                bypass_cache=bypass_cache,
-            ),
-            company_id=company_id,
-        )
-        bridge["phone_customer"] = phone_customer
         if error:
             errors.append(error)
         else:
-            phone_customer_record = _first_record(
-                phone_customer,
-                ("customers", "customer", "clientes", "cliente"),
+            snapshot = normalize_siga_verification_snapshot(verification)
+            enriched = apply_siga_snapshot_to_panel_item(
+                enriched,
+                snapshot,
+                refreshed=bool(bypass_cache),
             )
-            if phone_customer_record:
-                bridge["customer"] = phone_customer
-                bridge["phone_lookup_used"] = True
 
-    customer_record = _first_record(bridge["customer"], ("customers", "customer", "clientes", "cliente"))
-    customer_name = _first_non_empty(
-        customer_record,
-        ("name", "nombre", "nombre_completo", "cliente"),
-    )
-    if not enriched.get("name") and customer_name:
-        enriched["name"] = str(customer_name)
-
-    account_record = _first_record(bridge["account"], ("accounts", "account", "cuentas", "cuenta"))
-    bridge_cuenta = _first_non_empty(
-        account_record,
-        ("no_cuenta", "cuenta", "account", "account_number"),
-    )
-    if not enriched.get("no_cuenta") and bridge_cuenta:
-        enriched["no_cuenta"] = str(bridge_cuenta)
-
-    bridge["available"] = _verification_payload_found(bridge["verification"]) or any(
-        bridge.get(key) is not None
-        for key in ("customer", "account", "payments")
-    )
-    bridge["status"] = _bridge_status(errors, bridge["available"])
-    bridge["source"] = "siga_bridge" if bridge["available"] else "local_fallback"
-    bridge["error"] = "partial_failure" if errors and bridge["available"] else ("bridge_failed" if errors else None)
+    bridge = enriched.get("siga_bridge") if isinstance(enriched.get("siga_bridge"), dict) else {}
+    bridge["enabled"] = True
+    bridge["bypassed_cache"] = bool(bypass_cache)
+    bridge["error"] = "bridge_failed" if errors and not bridge.get("available") else None
+    bridge["status"] = _bridge_status(errors, bool(bridge.get("available")))
+    bridge["updated_at"] = bridge.get("updated_at") or _utc_timestamp()
     enriched["siga_bridge"] = bridge
 
     logger.info(
@@ -304,13 +211,9 @@ async def enrich_verification_with_bridge(
         extra={
             "company_id": company_id,
             "folio_lookup": bool(folio),
-            "available": bridge["available"],
-            "has_customer": bridge["customer"] is not None,
-            "has_phone_customer": bridge["phone_customer"] is not None,
-            "has_account": bridge["account"] is not None,
-            "has_payments": bridge["payments"] is not None,
-            "status": bridge["status"],
-            "error": bridge["error"],
+            "available": bridge.get("available"),
+            "status": bridge.get("status"),
+            "error": bridge.get("error"),
         },
     )
 
@@ -339,34 +242,23 @@ async def lookup_verification_for_folio(
         },
     )
 
-    client = get_siga_bridge_client()
-    data, error = await _safe_bridge_call(
-        "chatbot_verification_lookup",
-        lambda: client.get_verification(normalized_folio, company_id),
+    data = await get_or_fetch_verification(
+        session,
+        normalized_folio,
         company_id=company_id,
     )
-    if error:
+    if data is None:
         logger.warning(
             "siga_bridge_chatbot_verification_lookup_failed",
             extra={
                 "company_id": company_id,
                 "folio": normalized_folio,
                 "session_id": getattr(session, "id", None),
-                "error_type": error,
             },
         )
         return None
 
     found = bridge_verification_found(data)
-    updated_at = _utc_timestamp()
-    if session is not None:
-        cache_bridge_verification_on_session(
-            session,
-            folio=normalized_folio,
-            payload=data,
-            found=found,
-            updated_at=updated_at,
-        )
 
     logger.info(
         "siga_bridge_chatbot_verification_lookup_done",

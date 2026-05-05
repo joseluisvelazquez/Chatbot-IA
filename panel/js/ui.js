@@ -4,7 +4,7 @@ import { navigateTo } from "./app.js";
 // UTILIDADES
 // =========================
 function escapeHtml(str) {
-    if (!str) return "";
+    if (str === null || str === undefined) return "";
     return String(str)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -242,6 +242,83 @@ function bindHeaderNavigation() {
 // =========================
 // UTILIDADES UI
 // =========================
+function isMissingValue(value) {
+    if (value === null || value === undefined) return true;
+    if (typeof value !== "string") return false;
+    const text = value.trim();
+    return !text || ["-", "null", "none", "undefined", "[object object]"].includes(text.toLowerCase());
+}
+
+function isPlainObject(value) {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function safeText(value, fallback = "-") {
+    if (isMissingValue(value)) return fallback;
+    if (Array.isArray(value) || typeof value === "object") return fallback;
+    const text = String(value).replace(/\s+/g, " ").trim();
+    return isMissingValue(text) ? fallback : text;
+}
+
+function renderBadge(label, tone = "neutral") {
+    const tones = {
+        neutral: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+        success: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+        warning: "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
+        danger: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+        info: "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300",
+    };
+
+    return `<span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${tones[tone] || tones.neutral}">${escapeHtml(safeText(label))}</span>`;
+}
+
+function renderKeyValueGrid(items = [], columns = "md:grid-cols-2") {
+    const safeItems = Array.isArray(items) ? items : [];
+    return `
+        <div class="grid grid-cols-1 gap-3 ${columns}">
+            ${safeItems.map((item) => `
+                <div class="min-w-0">
+                    <p class="text-xs text-gray-500 dark:text-slate-400">${escapeHtml(safeText(item.label))}</p>
+                    <p class="mt-1 break-words text-sm font-medium text-gray-900 dark:text-white">${escapeHtml(safeText(item.value))}</p>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+function renderAccordionSection({ id, title, count = null, open = false, body = "" } = {}) {
+    const safeId = safeText(id, `acc-${Math.random().toString(36).slice(2)}`);
+    const countHtml = count == null ? "" : renderBadge(count, "neutral");
+    return `
+        <details id="${escapeHtml(safeId)}" class="drawer-section group" ${open ? "open" : ""}>
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3">
+                <span class="text-sm font-semibold text-gray-900 dark:text-white">${escapeHtml(safeText(title))}</span>
+                <span class="flex items-center gap-2">
+                    ${countHtml}
+                    <span class="text-lg leading-none text-gray-400 group-open:rotate-180">v</span>
+                </span>
+            </summary>
+            <div class="mt-4">${body}</div>
+        </details>
+    `;
+}
+
+function formatMoney(value, fallback = "-") {
+    if (isMissingValue(value) || Array.isArray(value) || typeof value === "object") {
+        return fallback;
+    }
+
+    const numeric = Number(String(value).replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(numeric)) {
+        return safeText(value, fallback);
+    }
+
+    return new Intl.NumberFormat("es-MX", {
+        style: "currency",
+        currency: "MXN",
+    }).format(numeric);
+}
+
 function formatDateTime(value) {
     if (!value) return "-";
     const date = new Date(value);
@@ -297,10 +374,16 @@ function renderProgressBar(percent) {
 
 window.ui = {
     escapeHtml,
+    isPlainObject,
+    safeText,
+    formatMoney,
     formatDateTime,
     statusLabel,
     statusClass,
-    renderProgressBar
+    renderProgressBar,
+    renderBadge,
+    renderKeyValueGrid,
+    renderAccordionSection
 };
 
 window.ui.kpiCard = kpiCard;

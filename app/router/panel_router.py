@@ -36,7 +36,13 @@ from app.services.verification_panel_service import (
     resolve_panel_current_step,
 )
 from app.services.inconsistencias_service import mark_panel_resolution
-from app.services.siga_bridge_integration import enrich_verification_with_bridge
+from app.services.siga_bridge_cache import (
+    apply_siga_snapshot_to_panel_item,
+    get_cached_verification,
+    get_cached_verification_row,
+    get_or_fetch_verification,
+    is_cache_valid,
+)
 from app.db.models import BitacoraVentas
 
 # ORDEN REAL DEL FLOW 
@@ -46,6 +52,40 @@ router = APIRouter(
     tags=["panel"]
 )
 logger = logging.getLogger(__name__)
+
+
+def build_siga_url(no_cuenta: str | None, folio: str | None) -> str | None:
+    if no_cuenta:
+        return f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}"
+    if folio:
+        return f"https://siga.mxcomp.com.mx/ventas/{folio}"
+    return None
+
+
+def redact_siga_details_for_role(item: dict, role: str | None) -> dict:
+    if role in ("admin", "jefe_operativo"):
+        return item
+
+    siga = item.get("siga") if isinstance(item.get("siga"), dict) else None
+    if siga:
+        item["siga"] = {
+            "available": bool(siga.get("available")),
+            "fetched_at": siga.get("fetched_at"),
+            "source_table": siga.get("source_table"),
+            "cache_valid": siga.get("cache_valid"),
+        }
+
+    bridge = item.get("siga_bridge") if isinstance(item.get("siga_bridge"), dict) else None
+    if bridge:
+        item["siga_bridge"] = {
+            "enabled": bool(bridge.get("enabled")),
+            "available": bool(bridge.get("available")),
+            "status": bridge.get("status"),
+            "source": bridge.get("source"),
+            "updated_at": bridge.get("updated_at"),
+        }
+
+    return item
 
 
 # =========================================
@@ -461,15 +501,6 @@ def get_verifications(
             phone = phone[2:]
         return phone[-10:]
     
-    def build_siga_url(no_cuenta: str | None, folio: str | None) -> str | None:
-        if no_cuenta:
-            return f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}"
-
-        if folio:
-            return f"https://siga.mxcomp.com.mx/ventas/{folio}"
-
-        return None
-
     # =========================
     # 📞 RESOLVER NOMBRES (BATCH)
     # =========================
@@ -502,6 +533,20 @@ def get_verifications(
     # =========================
     folios = [str(s.folio) for s in sessions if s.folio]
     folio_to_no_cuenta = resolve_cuentas_from_folios(folios, db, user)
+    siga_snapshot_by_session: dict[int, dict | None] = {}
+    siga_cache_row_by_session: dict[int, dict | None] = {}
+
+    for session in sessions:
+        folio_key = str(session.folio) if session.folio else None
+        if not folio_key:
+            continue
+        cache_row = get_cached_verification_row(session, folio_key, allow_stale=True)
+        snapshot_siga = cache_row.get("snapshot") if isinstance(cache_row, dict) else None
+        if isinstance(snapshot_siga, dict):
+            siga_snapshot_by_session[session.id] = snapshot_siga
+            siga_cache_row_by_session[session.id] = cache_row
+            if not folio_to_no_cuenta.get(folio_key) and snapshot_siga.get("no_cuenta"):
+                folio_to_no_cuenta[folio_key] = str(snapshot_siga["no_cuenta"])
 
     no_cuentas = [
         nc for nc in folio_to_no_cuenta.values() if nc is not None
@@ -540,6 +585,10 @@ def get_verifications(
     for session in sessions:
         folio = str(session.folio)
         no_cuenta = folio_to_no_cuenta.get(folio)
+        siga_snapshot = siga_snapshot_by_session.get(session.id)
+        siga_cache_row = siga_cache_row_by_session.get(session.id)
+        if not no_cuenta and isinstance(siga_snapshot, dict) and siga_snapshot.get("no_cuenta"):
+            no_cuenta = str(siga_snapshot["no_cuenta"])
 
         verification = verification_map.get(no_cuenta) if no_cuenta else None
         progress = verification.json if verification else {}
@@ -583,6 +632,13 @@ def get_verifications(
             "last_activity": session.last_message_at,
             "siga_url": build_siga_url(no_cuenta, folio),
         }
+        apply_siga_snapshot_to_panel_item(
+            item,
+            siga_snapshot,
+            cache_valid=is_cache_valid(siga_cache_row, session=session) if siga_cache_row else None,
+        )
+        item["siga_url"] = build_siga_url(item.get("no_cuenta"), folio)
+        redact_siga_details_for_role(item, getattr(user, "role", None))
 
         if status and item["status"] != status:
             continue
@@ -627,6 +683,8 @@ async def get_verification_by_session(
         raise HTTPException(404, "Verificación no encontrada")
 
     folio = str(session.folio)
+    cached_siga_row = get_cached_verification_row(session, folio, allow_stale=True)
+    cached_siga = cached_siga_row.get("snapshot") if isinstance(cached_siga_row, dict) else None
 
     # =========================
     # 🧠 RESOLVER no_cuenta
@@ -634,6 +692,8 @@ async def get_verification_by_session(
     service = VerificationService(db)
 
     no_cuenta = service.resolve_no_cuenta_from_folio(str(session.folio)) if session.folio else None
+    if not no_cuenta and isinstance(cached_siga, dict) and cached_siga.get("no_cuenta"):
+        no_cuenta = str(cached_siga["no_cuenta"])
 
 
     # =========================
@@ -694,7 +754,11 @@ async def get_verification_by_session(
     item = {
         "session_id": session.id,
         "folio": folio,
-        "name": None,  # opcional: puedes resolverlo igual que conversations
+        "name": (
+            cached_siga.get("customer", {}).get("name")
+            if isinstance(cached_siga, dict) and isinstance(cached_siga.get("customer"), dict)
+            else None
+        ),
         "no_cuenta": no_cuenta,
         "phone": session.phone,
 
@@ -711,20 +775,108 @@ async def get_verification_by_session(
         "total_steps": verification_data["total_steps"],
 
         "last_activity": session.last_message_at,
-        "siga_url": (
-            f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}"
-            if no_cuenta
-            else f"https://siga.mxcomp.com.mx/ventas/{folio}"
-        ),
+        "siga_url": build_siga_url(no_cuenta, folio),
     }
     if user.role in ("admin", "jefe_operativo"):
-        return await enrich_verification_with_bridge(
-            item,
-            company_id=user.empresa_id,
-            bypass_cache=refresh_siga,
-        )
+        fetched = False
+        siga_snapshot = cached_siga
+        siga_cache_row = cached_siga_row
+        if refresh_siga or not isinstance(siga_snapshot, dict):
+            siga_snapshot = await get_or_fetch_verification(
+                session,
+                folio,
+                company_id=user.empresa_id,
+                force_refresh=refresh_siga,
+            )
+            fetched = isinstance(siga_snapshot, dict)
+            if fetched:
+                db.commit()
+                db.refresh(session)
+                siga_cache_row = get_cached_verification_row(session, folio, allow_stale=True)
 
-    return item
+        apply_siga_snapshot_to_panel_item(
+            item,
+            siga_snapshot if isinstance(siga_snapshot, dict) else None,
+            cache_valid=is_cache_valid(siga_cache_row, session=session) if siga_cache_row else None,
+            refreshed=bool(refresh_siga and fetched),
+        )
+        if fetched and item.get("no_cuenta") and verification is None:
+            refreshed_verification = (
+                db.query(VerificacionCuenta)
+                .filter(VerificacionCuenta.no_cuenta == item["no_cuenta"])
+                .first()
+            )
+            if refreshed_verification:
+                refreshed_data = compute_verification(refreshed_verification.json or {})
+                item.update(
+                    {
+                        "progress_pct": refreshed_data["progress_pct"],
+                        "current_step": resolve_panel_current_step(
+                            session,
+                            refreshed_data["current_step"],
+                        ),
+                        "status": classify_panel_status(
+                            verification_data=refreshed_data,
+                            has_open_inconsistencia=open_inconsistencia,
+                            last_activity=session.last_message_at,
+                            requires_human=False,
+                        ),
+                        "confirmed_count": refreshed_data["progress_count"],
+                        "total_steps": refreshed_data["total_steps"],
+                    }
+                )
+        item["siga_url"] = build_siga_url(item.get("no_cuenta"), folio)
+        logger.info(
+            "panel_siga_refresh_done" if refresh_siga else "panel_siga_snapshot_used",
+            extra={
+                "session_id": session.id,
+                "folio": folio,
+                "refresh_siga": refresh_siga,
+                "available": (
+                    bool(item.get("siga", {}).get("available"))
+                    if isinstance(item.get("siga"), dict)
+                    else False
+                ),
+            },
+        )
+        if fetched:
+            public_item = redact_siga_details_for_role(dict(item), None)
+            await manager.send_to_all({
+                "type": "verification_updated",
+                "session_id": session.id,
+                "folio": folio,
+                "no_cuenta": item.get("no_cuenta"),
+                "status": item.get("status"),
+                "updated_at": item.get("last_activity"),
+                "source": "siga_refresh",
+                "payload": public_item,
+            })
+            await manager.send_to_all(
+                {
+                    "type": "siga_snapshot_updated",
+                    "session_id": session.id,
+                    "folio": folio,
+                    "no_cuenta": item.get("no_cuenta"),
+                    "status": item.get("status"),
+                    "updated_at": (
+                        item.get("siga", {}).get("fetched_at")
+                        if isinstance(item.get("siga"), dict)
+                        else None
+                    ),
+                    "source": "siga_refresh",
+                    "payload": item,
+                },
+                roles={"admin", "jefe_operativo"},
+            )
+        return item
+
+    apply_siga_snapshot_to_panel_item(
+        item,
+        cached_siga if isinstance(cached_siga, dict) else None,
+        cache_valid=is_cache_valid(cached_siga_row, session=session) if cached_siga_row else None,
+    )
+    item["siga_url"] = build_siga_url(item.get("no_cuenta"), folio)
+    return redact_siga_details_for_role(item, getattr(user, "role", None))
 
 
 @router.patch("/inconsistencias/{inconsistencia_id}/resolution")
@@ -775,20 +927,38 @@ async def update_inconsistencia_panel_resolution(
         if session:
             verification_snapshot = build_verification_snapshot(db, session)
             if verification_snapshot:
+                public_snapshot = redact_siga_details_for_role(dict(verification_snapshot), None)
                 await manager.send_to_all({
                     "type": "verification_update",
-                    "payload": verification_snapshot,
+                    "payload": public_snapshot,
+                })
+                await manager.send_to_all({
+                    "type": "verification_updated",
+                    "session_id": session.id,
+                    "folio": public_snapshot.get("folio"),
+                    "no_cuenta": public_snapshot.get("no_cuenta"),
+                    "status": public_snapshot.get("status"),
+                    "updated_at": public_snapshot.get("last_activity"),
+                    "source": "panel",
+                    "payload": public_snapshot,
                 })
 
+            inconsistency_payload = {
+                "id": inc.id,
+                "ui_id": ui_id,
+                "session_id": inc.session_id,
+                "resolved_by_panel": panel_resolved,
+                "resolved_by_siga": bool(inc.resolved_by_siga),
+            }
             await manager.send_to_all({
                 "type": "inconsistencia_updated",
-                "payload": {
-                    "id": inc.id,
-                    "ui_id": ui_id,
-                    "session_id": inc.session_id,
-                    "resolved_by_panel": panel_resolved,
-                    "resolved_by_siga": bool(inc.resolved_by_siga),
-                }
+                "payload": inconsistency_payload,
+            })
+            await manager.send_to_all({
+                "type": "inconsistency_updated",
+                "session_id": inc.session_id,
+                "source": "panel",
+                "payload": inconsistency_payload,
             })
 
     if issues_open_delta:
@@ -870,19 +1040,28 @@ def get_conversations(
         if db_phone and v.nombre_completo:
             phone_to_name[db_phone] = v.nombre_completo.strip()
 
-    return [
-        ConversationResponse(
-            id=s.id,
-            phone=s.phone,
-            name=phone_to_name.get(normalize_phone(s.phone)),
-            last_message=s.last_message,
-            last_message_at=s.last_message_at,
-            unread_count=s.unread_count,
-            no_cuenta=folio_to_no_cuenta.get(str(s.folio)) if s.folio else None,
-            folio=str(s.folio) if s.folio else None
+    response = []
+    for s in sessions:
+        folio = str(s.folio) if s.folio else None
+        cached_siga = get_cached_verification(s, folio, allow_stale=True) if folio else None
+        no_cuenta = folio_to_no_cuenta.get(folio) if folio else None
+        if not no_cuenta and isinstance(cached_siga, dict) and cached_siga.get("no_cuenta"):
+            no_cuenta = str(cached_siga["no_cuenta"])
+
+        response.append(
+            ConversationResponse(
+                id=s.id,
+                phone=s.phone,
+                name=phone_to_name.get(normalize_phone(s.phone)),
+                last_message=s.last_message,
+                last_message_at=s.last_message_at,
+                unread_count=s.unread_count,
+                no_cuenta=no_cuenta,
+                folio=folio,
+            )
         )
-        for s in sessions
-    ]
+
+    return response
 
 
 # =========================================

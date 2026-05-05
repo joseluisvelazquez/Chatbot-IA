@@ -267,6 +267,7 @@ class SigaBridgeClient:
         enabled: bool | None = None,
         timeout_connect: float | None = None,
         timeout_read: float | None = None,
+        max_attempts: int | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = (base_url if base_url is not None else settings.SIGA_BRIDGE_BASE_URL).strip()
@@ -282,6 +283,7 @@ class SigaBridgeClient:
             if timeout_read is None
             else timeout_read
         )
+        self.max_attempts = max(1, int(max_attempts or 2))
         self.transport = transport
 
     async def ping(self) -> dict[str, Any] | list[Any] | None:
@@ -404,7 +406,7 @@ class SigaBridgeClient:
             if cached is not _CACHE_MISS:
                 return cached
 
-        attempts = 2
+        attempts = self.max_attempts
         last_error: Exception | None = None
 
         for attempt in range(1, attempts + 1):
