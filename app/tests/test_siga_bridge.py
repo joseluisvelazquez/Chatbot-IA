@@ -252,6 +252,60 @@ def test_params_are_sent_correctly_without_logging_token():
     }
 
 
+def test_flat_verification_contract_returns_bridge_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        assert params["action"] == "verification"
+        assert params["folio"] == "16809"
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "action": "verification",
+                "folio": "16809",
+                "found": True,
+                "source_table": "bitacora_ventas",
+                "sale": {
+                    "folio": "16809",
+                    "no_cuenta": "60436",
+                    "nombre_completo": "CLIENTE DEMO",
+                },
+                "sales": [],
+                "customer": {"nombre": "CLIENTE DEMO"},
+                "account": {"no_cuenta": "60436"},
+                "payment_summary": {},
+                "recent_payments": [],
+            },
+        )
+
+    client = make_client(handler)
+
+    assert run(client.get_verification("16809"))["found"] is True
+
+
+def test_v1_wrapper_with_flat_verification_fields_prefers_sale_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "data": None,
+                "error": None,
+                "meta": {
+                    "version": "v1",
+                    "timestamp": "2026-04-27T12:00:00-06:00",
+                    "action": "verification",
+                },
+                "found": True,
+                "sale": {"folio": "16809", "no_cuenta": "60436"},
+            },
+        )
+
+    client = make_client(handler)
+
+    assert run(client.get_verification("16809"))["sale"]["no_cuenta"] == "60436"
+
+
 def test_customer_cache_records_hit_ratio_without_second_request():
     calls = {"count": 0}
 

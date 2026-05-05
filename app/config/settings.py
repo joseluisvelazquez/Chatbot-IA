@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     SIGA_BRIDGE_ENABLED: bool = False
     SIGA_BRIDGE_TIMEOUT_CONNECT: float = 2.0
     SIGA_BRIDGE_TIMEOUT_READ: float = 5.0
+    SIGA_BRIDGE_LOG_RAW_SUCCESS: bool = False
 
     @property
     def DATABASE_URL(self) -> str:

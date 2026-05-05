@@ -10,6 +10,11 @@ from app.services.inconsistencias_service import (
     close_open_inconsistencia,
 )
 from app.config.settings import settings
+from app.services.siga_bridge_sale import (
+    bridge_sale_from_payload,
+    bridge_sale_from_session,
+    bridge_verification_found,
+)
 
 # -----------------------------
 # MAPS
@@ -45,6 +50,14 @@ def handle_cambiar_folio(context):
     nuevo_folio = extraer_folio(context.text)
     
     venta = obtener_venta_por_folio(context.db, nuevo_folio) if nuevo_folio else None
+    if not venta and nuevo_folio:
+        bridge_payload = getattr(context, "bridge_verification", None)
+        if not bridge_verification_found(bridge_payload):
+            bridge_payload = None
+        venta = (
+            bridge_sale_from_payload(bridge_payload)
+            or bridge_sale_from_session(context.session, nuevo_folio)
+        )
 
     if not nuevo_folio or not venta:
         # Flujo Reactivo: El folio es válido pero aún no existe en DB (Solo para verificación normal)

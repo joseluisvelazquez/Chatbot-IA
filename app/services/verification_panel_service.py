@@ -227,7 +227,7 @@ def resolve_no_cuenta(db: Session, folio: str) -> Optional[str]:
     if not venta:
         return None
 
-    no_cuenta = venta.get("no_cuenta")
+    no_cuenta = getattr(venta, "no_cuenta", None)
     if not no_cuenta:
         return None
 

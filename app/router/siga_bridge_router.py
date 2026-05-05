@@ -69,6 +69,15 @@ async def siga_bridge_account(
     return await _call_bridge("get_account", cuenta, company_id)
 
 
+@router.get("/verification")
+async def siga_bridge_verification(
+    folio: str = Query(..., min_length=1, max_length=50),
+    company_id: int | None = Query(default=None, ge=1),
+    _user=Depends(require_roles("admin", "jefe_operativo")),
+):
+    return await _call_bridge("get_verification", folio, company_id)
+
+
 @router.get("/metrics")
 async def siga_bridge_metrics(
     _user=Depends(require_roles("admin", "jefe_operativo")),

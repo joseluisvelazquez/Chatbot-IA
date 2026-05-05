@@ -17,6 +17,11 @@ from app.services.siga_bridge import (
     SigaBridgeUnavailableError,
     get_siga_bridge_client,
 )
+from app.services.siga_bridge_sale import (
+    bridge_sale_summary,
+    bridge_verification_found,
+    cache_bridge_verification_on_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +56,7 @@ def _first_non_empty(record: dict[str, Any] | None, keys: tuple[str, ...]) -> An
 
 
 def _verification_payload_found(payload: Any) -> bool:
-    if not isinstance(payload, dict):
-        return False
-
-    if payload.get("found") is False:
-        return False
-
-    sale = payload.get("sale")
-    if isinstance(sale, dict) and sale:
-        return True
-
-    sales = payload.get("sales")
-    return isinstance(sales, list) and any(isinstance(item, dict) and item for item in sales)
+    return bridge_verification_found(payload)
 
 
 def _utc_timestamp() -> str:
@@ -321,6 +315,70 @@ async def enrich_verification_with_bridge(
     )
 
     return enriched
+
+
+async def lookup_verification_for_folio(
+    folio: str,
+    *,
+    company_id: int | None = None,
+    session: Any | None = None,
+) -> dict[str, Any] | list[Any] | None:
+    if not settings.SIGA_BRIDGE_ENABLED:
+        return None
+
+    normalized_folio = str(folio or "").strip()
+    if not normalized_folio:
+        return None
+
+    logger.info(
+        "siga_bridge_chatbot_verification_lookup_start",
+        extra={
+            "company_id": company_id,
+            "folio": normalized_folio,
+            "session_id": getattr(session, "id", None),
+        },
+    )
+
+    client = get_siga_bridge_client()
+    data, error = await _safe_bridge_call(
+        "chatbot_verification_lookup",
+        lambda: client.get_verification(normalized_folio, company_id),
+        company_id=company_id,
+    )
+    if error:
+        logger.warning(
+            "siga_bridge_chatbot_verification_lookup_failed",
+            extra={
+                "company_id": company_id,
+                "folio": normalized_folio,
+                "session_id": getattr(session, "id", None),
+                "error_type": error,
+            },
+        )
+        return None
+
+    found = bridge_verification_found(data)
+    updated_at = _utc_timestamp()
+    if session is not None:
+        cache_bridge_verification_on_session(
+            session,
+            folio=normalized_folio,
+            payload=data,
+            found=found,
+            updated_at=updated_at,
+        )
+
+    logger.info(
+        "siga_bridge_chatbot_verification_lookup_done",
+        extra={
+            "company_id": company_id,
+            "folio": normalized_folio,
+            "session_id": getattr(session, "id", None),
+            "found": found,
+            "summary": bridge_sale_summary(data),
+        },
+    )
+    return data
 
 
 async def lookup_customer_for_incoming_phone(

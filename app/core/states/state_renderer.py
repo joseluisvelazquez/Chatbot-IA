@@ -20,6 +20,11 @@ from app.utils import address_formatter
 from app.config.settings import settings
 from app.services.inconsistencias_service import get_open_inconsistencia
 from app.core.states.state_handlers import COMPONENTES_MAP, _get_componentes_ya_reportados
+from app.services.siga_bridge_sale import (
+    bridge_address_from_session,
+    bridge_sale_from_session,
+    is_bridge_sale,
+)
 
 from app.utils.product_mapping import get_product_info
 
@@ -43,22 +48,17 @@ def render_state(next_state, session, db):
     # Obtener datos de SIGA si hay folio
     # --------------------------------------
     if session.folio:
-        venta = obtener_venta_por_folio(db, session.folio)
+        venta = obtener_venta_por_folio(db, session.folio) if db else None
+        if not venta:
+            venta = bridge_sale_from_session(session, session.folio)
 
     # --------------------------------------
     # Render dinámico por estado
     # --------------------------------------
 
-    if not venta:
-        return reply, buttons, image_id
-
     if next_state in [ChatState.CONFIRMAR_FOLIO_DEVOLUCION, ChatState.CONFIRMAR_FOLIO_DESCUENTO]:
         from app.content import messages as msg
         reply = msg.CONFIRMAR_FOLIO_DETECTADO.format(folio=session.folio)
-
-    elif next_state == ChatState.RETO_SEGURIDAD:
-        from app.content import messages as msg
-        reply = msg.RETO_SEGURIDAD_SOLICITUD.format(folio=session.folio)
 
     elif next_state == ChatState.INICIO:
         reply = reply.format(folio=session.folio)
@@ -66,6 +66,13 @@ def render_state(next_state, session, db):
     elif next_state == ChatState.INICIO2:
         from app.content import messages as msg
         reply = msg.INICIO2.format(folio=session.folio)
+
+    if not venta:
+        return reply, buttons, image_id
+
+    if next_state == ChatState.RETO_SEGURIDAD:
+        from app.content import messages as msg
+        reply = msg.RETO_SEGURIDAD_SOLICITUD.format(folio=session.folio)
 
     elif next_state == ChatState.CONFIRMAR_NOMBRE:
         reply = MessageBuilder.confirmar_nombre(
@@ -78,13 +85,17 @@ def render_state(next_state, session, db):
         )
 
     elif next_state == ChatState.CONFIRMAR_DOMICILIO:
-        domicilio = obtener_domicilio_por_movimiento(
-            db,
-            venta.id_movimiento_bv
-        )
+        if is_bridge_sale(venta):
+            domicilio_texto = bridge_address_from_session(session, session.folio)
+        else:
+            domicilio = obtener_domicilio_por_movimiento(
+                db,
+                venta.id_movimiento_bv
+            )
+            domicilio_texto = address_formatter.construir_domicilio(domicilio)
 
         reply = MessageBuilder.confirmar_domicilio(
-            address_formatter.construir_domicilio(domicilio)
+            domicilio_texto
         )
 
     elif next_state == ChatState.CONFIRMAR_FECHA:

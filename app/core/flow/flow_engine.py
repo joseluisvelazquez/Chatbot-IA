@@ -26,6 +26,12 @@ from app.services.ai.ai_service import analyze_inconsistency, generate_ai_respon
 from app.services.inconsistencias_service import open_or_patch_inconsistencia
 from app.services.ai.intent_interpreter import interpret_intent_with_ai, should_use_ai, is_doubt, detect_frustration
 from app.services.faq.faq_service import find_faq_answer
+from app.services.siga_bridge_sale import (
+    bridge_sale_from_payload,
+    bridge_sale_summary,
+    bridge_verification_found,
+    get_cached_bridge_verification_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +54,7 @@ class FlowResult:
 # HELPERS
 # --------------------------------------
 
-def _try_mark_step(db, session, step_key: str):
+def _try_mark_step(db, session, step_key: str, bridge_verification=None):
     if not db:
         return
 
@@ -57,12 +63,22 @@ def _try_mark_step(db, session, step_key: str):
         return
 
     try:
-        VerificationService(db).mark_step_from_folio(
+        service = VerificationService(db)
+        result = service.mark_step_from_folio(
             str(folio),
             step_key,
             1,
             phone=session.phone,
         )
+        if result is None:
+            no_cuenta = _no_cuenta_from_bridge(session, str(folio), bridge_verification)
+            if no_cuenta:
+                service.update_step_atomic(
+                    no_cuenta=no_cuenta,
+                    step=step_key,
+                    value=1,
+                    phone=session.phone,
+                )
     except Exception:
         logger.exception("Error guardando progreso")
 
@@ -116,23 +132,88 @@ def is_devolucion_query(text: str) -> bool:
     return any(k in text for k in keywords)
 
 
+def _bridge_payload_for_folio(session, folio: str | None, bridge_verification=None):
+    if bridge_verification_found(bridge_verification):
+        return bridge_verification
+
+    if not folio:
+        return None
+
+    cached_payload = get_cached_bridge_verification_payload(session, str(folio))
+    if bridge_verification_found(cached_payload):
+        return cached_payload
+
+    return None
+
+
+def _venta_or_bridge_for_folio(db, session, folio: str | None, bridge_verification=None):
+    if not folio:
+        return None
+
+    venta = obtener_venta_por_folio(db, str(folio)) if db else None
+    if venta:
+        logger.info(
+            "chatbot_folio_resolution_decision",
+            extra={
+                "folio": str(folio),
+                "found": True,
+                "source": "local_db",
+            },
+        )
+        return venta
+
+    bridge_payload = _bridge_payload_for_folio(session, str(folio), bridge_verification)
+    bridge_sale = bridge_sale_from_payload(bridge_payload)
+    logger.info(
+        "chatbot_folio_resolution_decision",
+        extra={
+            "folio": str(folio),
+            "found": bool(bridge_sale),
+            "source": "siga_bridge" if bridge_sale else "not_found",
+            "bridge_summary": bridge_sale_summary(bridge_payload) if bridge_payload else None,
+        },
+    )
+    return bridge_sale
+
+
+def _no_cuenta_from_bridge(session, folio: str | None, bridge_verification=None) -> str | None:
+    bridge_payload = _bridge_payload_for_folio(session, folio, bridge_verification)
+    bridge_sale = bridge_sale_from_payload(bridge_payload)
+    no_cuenta = getattr(bridge_sale, "no_cuenta", None) if bridge_sale else None
+    return str(no_cuenta) if no_cuenta else None
+
+
 # --------------------------------------
 # MAIN
 # --------------------------------------
 
-def process_message(session, text: str, intent: str | None = None, db=None) -> FlowResult:
+def process_message(
+    session,
+    text: str,
+    intent: str | None = None,
+    db=None,
+    bridge_verification=None,
+) -> FlowResult:
 
     # --------------------------------------
     # Si mandó folio para iniciar
     # --------------------------------------
     def _check_verification_complete(folio: str) -> FlowResult | None:    
-        no_cuenta = VerificationService(db).resolve_no_cuenta_from_folio(folio)
+        no_cuenta = (
+            VerificationService(db).resolve_no_cuenta_from_folio(folio)
+            or _no_cuenta_from_bridge(session, folio, bridge_verification)
+        )
         verificacion = obtener_verificacion_por_no_cuenta(db,no_cuenta)
-        print(f"DEBUG: Folio detectado {folio} con no_cuenta {no_cuenta}")
+        logger.info(
+            "chatbot_verification_complete_check",
+            extra={
+                "folio": folio,
+                "no_cuenta": no_cuenta,
+                "has_local_verification": verificacion is not None,
+            },
+        )
 
         if no_cuenta and verificacion and (session.phone not in settings.TEST_PHONE_ONLY):
-
-            print(verification_service.is_verification_complete(verificacion.json))
 
             if verification_service.is_verification_complete(verificacion.json):
                 return FlowResult(
@@ -463,6 +544,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
             phone=session.phone,
             folio=session.folio,
             venta=None,
+            bridge_verification=bridge_verification,
             session=session,
             db=db
         )
@@ -544,7 +626,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     }
 
     if folio_detectado and not session.folio and current_state in STATES_ALLOW_AUTO_FOLIO:
-        venta = obtener_venta_por_folio(db, folio_detectado)
+        venta = _venta_or_bridge_for_folio(db, session, folio_detectado, bridge_verification)
 
         if venta:
             target_state = ChatState.INICIO2
@@ -588,7 +670,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
     if detected_intent == "start_verification":
         folio_a_buscar = folio_detectado if folio_detectado else folio
-        venta = obtener_venta_por_folio(db, folio_a_buscar)
+        venta = _venta_or_bridge_for_folio(db, session, folio_a_buscar, bridge_verification)
 
         if not venta:
             # ==========================================
@@ -617,8 +699,8 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
 
         session.folio = folio_a_buscar
 
-        _try_mark_step(db, session, "inicio")
-        _try_mark_step(db, session, "folio")
+        _try_mark_step(db, session, "inicio", bridge_verification)
+        _try_mark_step(db, session, "folio", bridge_verification)
 
         _log()
 
@@ -634,7 +716,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
     # 5. Contexto
     # --------------------------------------
 
-    venta = obtener_venta_por_folio(db, session.folio) if session.folio else None
+    venta = _venta_or_bridge_for_folio(db, session, session.folio, bridge_verification) if session.folio else None
 
     context = ConversationContext(
         state=current_state,
@@ -644,6 +726,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         phone=session.phone,
         folio=session.folio,
         venta=venta,
+        bridge_verification=bridge_verification,
         session=session,
         db=db
     )
@@ -835,7 +918,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
                 previous_state=new_previous_state
             )
 
-        venta = obtener_venta_por_folio(db, session.folio)
+        venta = _venta_or_bridge_for_folio(db, session, session.folio, bridge_verification)
 
         if venta:
             desglose = MessageBuilder.build_descuento_desglose(venta)
@@ -1129,7 +1212,7 @@ def process_message(session, text: str, intent: str | None = None, db=None) -> F
         next_state = ChatState(previous_state) if previous_state else ChatState.INICIO
 
     if next_state == "__RESUME_DESCUENTO__":
-        venta = obtener_venta_por_folio(db, session.folio)
+        venta = _venta_or_bridge_for_folio(db, session, session.folio, bridge_verification)
         if venta:
             desglose = MessageBuilder.build_descuento_desglose(venta)
             return FlowResult(
