@@ -59,7 +59,8 @@ INFO_PAGOS = (
 INFO_METODOS_PAGO = (
     "🏦 Aquí te dejo las opciones para realizar tus pagos.\n\n"
     "💳 No olvides incluir este número *A{numero_cuenta}* como concepto o referencia.\n\n"
-    "Cada que hagas uno, deberás enviame tu comprobante por aquí 👇🏻 tan pronto como puedas para que lo aplique a tu estado de cuenta.\n\n"
+    "Cada que hagas uno, deberás enviar tu comprobante por el siguiente sitio 👇🏻\n"
+    "https://mxcomp.mx/\n\n"
     "¿Está claro o tienes alguna duda respecto a los métodos de pago?"
 )
 

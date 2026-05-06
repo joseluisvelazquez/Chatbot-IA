@@ -29,14 +29,6 @@ from app.services.siga_bridge_sale import (
 from app.utils.product_mapping import get_product_info_for_sale
 
 
-def _bridge_payment_snapshot(venta):
-    payload = getattr(venta, "_bridge_payload", None)
-    if not isinstance(payload, dict):
-        return {}
-    payment = payload.get("payment")
-    return payment if isinstance(payment, dict) else {}
-
-
 def render_state(next_state, session, db):
     """
     Construye el mensaje dinámico del estado.
@@ -129,30 +121,7 @@ def render_state(next_state, session, db):
         reply = MessageBuilder.confirmar_estado_producto(info["nombre_amigable"])
 
     elif next_state == ChatState.INFO_PAGOS:
-        if is_bridge_sale(venta):
-            payment = _bridge_payment_snapshot(venta)
-            has_amounts = all(
-                payment.get(key)
-                for key in ("pago_minimo", "importe_quincenal", "importe_mensual")
-            )
-            if not payment.get("available") or not has_amounts:
-                reply = (
-                    "Por ahora no tengo disponible el detalle de tu plan de pagos. "
-                    "Para evitar darte montos incorrectos, lo puede revisar un asesor."
-                )
-                return reply, buttons, image_id
-
-            calculos = calcular_info_pagos(venta)
-            if calculos:
-                calculos.update(
-                    {
-                        "pago_minimo": payment["pago_minimo"],
-                        "importe_quincenal": payment["importe_quincenal"],
-                        "importe_mensual": payment["importe_mensual"],
-                    }
-                )
-        else:
-            calculos = calcular_info_pagos(venta)
+        calculos = calcular_info_pagos(venta)
 
         if calculos:
             reply = MessageBuilder.info_pagos(
@@ -169,13 +138,6 @@ def render_state(next_state, session, db):
         image_id = settings.METODOS_PAGO_IMAGE_ID
 
     elif next_state == ChatState.INFO_PLAN_3_MESES:
-        if is_bridge_sale(venta):
-            reply = (
-                "Por ahora no tengo datos suficientes para calcular un plan de 3 meses. "
-                "Para evitar darte montos incorrectos, lo puede revisar un asesor."
-            )
-            return reply, buttons, image_id
-
         calculos_3m = calcular_info_plan_3_meses(venta)
 
         if calculos_3m:

@@ -274,19 +274,46 @@ def _normalize_payment_snapshot(
     pago_minimo = _safe_money(_first_value(payment_records, ("pago_minimo", "minimum_payment", "pago_semanal")))
     importe_quincenal = _safe_money(_first_value(payment_records, ("importe_quincenal", "pago_quincenal")))
     importe_mensual = _safe_money(_first_value(payment_records, ("importe_mensual", "pago_mensual")))
+    subsidio = _safe_money(_first_value(payment_records, ("subsidio", "descuento")))
+    saldo_3_meses = _safe_money(_first_value(payment_records, ("saldo_3_meses", "saldo_3m", "saldo_plan_3_meses")))
+    fecha_limite_3_meses = _date_text(
+        _first_value(payment_records, ("fecha_limite_3_meses", "fecha_limite_3m", "limite_3_meses"))
+    )
+    importe_semanal_3m = _safe_money(
+        _first_value(payment_records, ("importe_semanal_3m", "pago_semanal_3m", "semanal_3_meses"))
+    )
 
     recent_payments = data.get("recent_payments")
     payments_count = len(recent_payments) if isinstance(recent_payments, list) else 0
-    available = any([saldo, plan_label, pago_inicial, pago_minimo, importe_quincenal, importe_mensual, payments_count])
+    available = any(
+        [
+            saldo,
+            plan_label,
+            pago_inicial,
+            pago_minimo,
+            importe_quincenal,
+            importe_mensual,
+            subsidio,
+            saldo_3_meses,
+            fecha_limite_3_meses,
+            importe_semanal_3m,
+            payments_count,
+        ]
+    )
 
     return {
         "available": bool(available),
         "saldo": saldo,
         "plan_label": plan_label,
         "pago_inicial": pago_inicial,
+        "importe_pago_inicial": pago_inicial,
         "pago_minimo": pago_minimo,
         "importe_quincenal": importe_quincenal,
         "importe_mensual": importe_mensual,
+        "subsidio": subsidio,
+        "saldo_3_meses": saldo_3_meses,
+        "fecha_limite_3_meses": fecha_limite_3_meses,
+        "importe_semanal_3m": importe_semanal_3m,
         "payments_count": payments_count,
         "reason": None if available else "payment_data_unavailable",
     }
@@ -341,17 +368,23 @@ def normalize_siga_verification_snapshot(
             "found": False,
             "folio": None,
             "no_cuenta": None,
+            "fecha_venta": None,
             "phone": None,
             "customer": {"name": None, "address_text": None, "address_raw": None},
-            "sale": {"product": None, "sale_date": None},
+            "sale": {"product": None, "sale_date": None, "fecha_venta": None},
             "payment": {
                 "available": False,
                 "saldo": None,
                 "plan_label": None,
                 "pago_inicial": None,
+                "importe_pago_inicial": None,
                 "pago_minimo": None,
                 "importe_quincenal": None,
                 "importe_mensual": None,
+                "subsidio": None,
+                "saldo_3_meses": None,
+                "fecha_limite_3_meses": None,
+                "importe_semanal_3m": None,
                 "payments_count": 0,
                 "reason": "payload_unavailable",
             },
@@ -377,6 +410,9 @@ def normalize_siga_verification_snapshot(
         ("descripcion", "description"),
     )
     product = normalize_product_name(records)
+    sale_date = _date_text(
+        _first_value(records, ("sale_date", "fecha_venta", "fecha", "created_at"))
+    )
 
     return {
         "found": bridge_verification_found(data),
@@ -385,6 +421,7 @@ def normalize_siga_verification_snapshot(
             records,
             ("no_cuenta", "cuenta", "account", "account_number", "numero_cuenta"),
         ),
+        "fecha_venta": sale_date,
         "phone": _normalize_phone(
             _first_value(records, ("phone", "telefono", "tel_1", "tel1", "celular"))
         ),
@@ -400,9 +437,8 @@ def normalize_siga_verification_snapshot(
             "product": product,
             "product_sku": product_sku,
             "product_description": product_description,
-            "sale_date": _date_text(
-                _first_value(records, ("sale_date", "fecha_venta", "fecha", "created_at"))
-            ),
+            "sale_date": sale_date,
+            "fecha_venta": sale_date,
         },
         "payment": _normalize_payment_snapshot(data, records),
         "components": _normalize_components_snapshot(data),
@@ -440,9 +476,9 @@ def bridge_sale_from_payload(payload: Any) -> BridgeSale | None:
         sku_bitacora_v=product_sku or product_name or "",
         descripcion=sale.get("product_description") or product_name or "",
         nombre_producto=product_name or "",
-        fecha_venta=_datetime_or_none(sale.get("sale_date")),
+        fecha_venta=_datetime_or_none(sale.get("sale_date") or sale.get("fecha_venta") or snapshot.get("fecha_venta")),
         pago=_decimal_or_none(payment.get("pago_inicial")),
-        subsidio=None,
+        subsidio=_decimal_or_none(payment.get("subsidio")),
         source_table=(snapshot.get("source") or {}).get("table"),
         _bridge_payload=snapshot,
     )

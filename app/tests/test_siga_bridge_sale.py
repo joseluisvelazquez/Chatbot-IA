@@ -2,6 +2,7 @@ import asyncio
 
 from app.core.states.state_renderer import render_state
 from app.core.states.states import ChatState
+from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
 from app.services.siga_bridge_cache import (
     get_cached_verification,
     get_or_fetch_verification,
@@ -143,6 +144,16 @@ def test_normalizer_accepts_v1_wrapper_and_builds_snapshot():
     assert snapshot["source"]["table"] == "bitacora_ventas"
 
 
+def test_normalizer_preserves_fecha_venta_in_snapshot():
+    snapshot = normalize_siga_verification_snapshot(
+        verification_payload(sale={"folio": "16809", "fecha_venta": "2026-04-30"})
+    )
+
+    assert snapshot["fecha_venta"] == "2026-04-30"
+    assert snapshot["sale"]["fecha_venta"] == "2026-04-30"
+    assert snapshot["sale"]["sale_date"] == "2026-04-30"
+
+
 def test_normalizer_flat_found_false_is_safe_snapshot():
     snapshot = normalize_siga_verification_snapshot({"found": False, "folio": "999"})
 
@@ -253,3 +264,136 @@ def test_renderer_never_sends_raw_address_dict():
     assert "Cadereyta" in reply
     assert "{" not in reply
     assert "[object Object]" not in reply
+
+
+def test_renderer_bridge_pagos_uses_fecha_venta_for_first_payment():
+    session = DummySession()
+    session.extra_json = {}
+    payload = verification_payload(
+        sale={
+            "folio": "16809",
+            "no_cuenta": "60436",
+            "sku_bitacora_v": "PC-MAXICA",
+            "fecha_venta": "2026-04-30",
+        },
+        payment_summary={
+            "pago_minimo": "215",
+            "importe_quincenal": "466",
+            "importe_mensual": "932",
+        },
+    )
+    upsert_cached_verification(session, "16809", payload, raw=payload)
+
+    reply, _buttons, _image_id = render_state(ChatState.INFO_PAGOS, session, db=None)
+
+    assert "7 de mayo del 2026" in reply
+    assert "Por ahora no tengo disponible el detalle de tu plan de pagos" not in reply
+
+
+def test_renderer_bridge_plan_3_meses_uses_fecha_venta_base():
+    session = DummySession()
+    session.extra_json = {}
+    payload = verification_payload(
+        sale={
+            "folio": "16809",
+            "no_cuenta": "60436",
+            "sku_bitacora_v": "PC-MAXICA",
+            "fecha_venta": "2026-04-30",
+        },
+        payment_summary={
+            "saldo_3_meses": "7800",
+            "importe_semanal_3m": "600",
+        },
+    )
+    upsert_cached_verification(session, "16809", payload, raw=payload)
+
+    reply, _buttons, _image_id = render_state(ChatState.INFO_PLAN_3_MESES, session, db=None)
+
+    assert "30 de julio del 2026" in reply
+    assert "$7800.00" in reply
+    assert "$600.00" in reply
+
+
+def test_renderer_bridge_uses_payment_plans_when_bridge_omits_plan_amounts():
+    session = DummySession()
+    session.extra_json = {}
+    payload = verification_payload(
+        sale={
+            "folio": "16809",
+            "no_cuenta": "60436",
+            "sku_bitacora_v": "PC-MAXICA",
+            "fecha_venta": "2026-04-30",
+            "pago": "699",
+        },
+        payment_summary={},
+    )
+    upsert_cached_verification(session, "16809", payload, raw=payload)
+
+    pagos_reply, _buttons, _image_id = render_state(ChatState.INFO_PAGOS, session, db=None)
+    plan_reply, _buttons, _image_id = render_state(ChatState.INFO_PLAN_3_MESES, session, db=None)
+
+    assert "7 de mayo del 2026" in pagos_reply
+    assert "215.00" in pagos_reply
+    assert "$466.00" in pagos_reply
+    assert "$932.00" in pagos_reply
+    assert "No tengo disponible" not in pagos_reply
+    assert "30 de julio del 2026" in plan_reply
+    assert "$7800.00" in plan_reply
+    assert "$600.00" in plan_reply
+    assert "No tengo disponible" not in plan_reply
+
+
+def test_payment_plans_use_bridge_payment_snapshot_values():
+    venta = bridge_sale_from_payload(
+        verification_payload(
+            sale={
+                "folio": "16809",
+                "fecha_venta": "2026-04-30",
+                "pago": "699",
+            },
+            payment_summary={
+                "pago_minimo": "230",
+                "importe_quincenal": "500",
+                "importe_mensual": "1000",
+                "saldo_3_meses": "7800",
+                "importe_semanal_3m": "600",
+                "subsidio": "100",
+            },
+        )
+    )
+
+    pagos = calcular_info_pagos(venta)
+    plan_3m = calcular_info_plan_3_meses(venta)
+
+    assert pagos["fecha_limite"] == "7 de mayo del 2026"
+    assert pagos["pago_minimo"] == "230.00"
+    assert pagos["importe_quincenal"] == "500.00"
+    assert pagos["importe_mensual"] == "1000.00"
+    assert plan_3m["fecha_limite_3_meses"] == "30 de julio del 2026"
+    assert plan_3m["saldo_3_meses"] == "7800.00"
+    assert plan_3m["importe_semanal_3m"] == "600.00"
+    assert plan_3m["subsidio"] == "100.00"
+
+
+def test_payment_plans_calculate_bridge_amounts_when_snapshot_omits_them():
+    venta = bridge_sale_from_payload(
+        verification_payload(
+            sale={
+                "folio": "16809",
+                "fecha_venta": "2026-04-30",
+                "pago": "699",
+            },
+            payment_summary={},
+        )
+    )
+
+    pagos = calcular_info_pagos(venta)
+    plan_3m = calcular_info_plan_3_meses(venta)
+
+    assert pagos["fecha_limite"] == "7 de mayo del 2026"
+    assert pagos["pago_minimo"] == "215.00"
+    assert pagos["importe_quincenal"] == "466.00"
+    assert pagos["importe_mensual"] == "932.00"
+    assert plan_3m["fecha_limite_3_meses"] == "30 de julio del 2026"
+    assert plan_3m["saldo_3_meses"] == "7800.00"
+    assert plan_3m["importe_semanal_3m"] == "600.00"

@@ -58,11 +58,11 @@ def _build_faq_response(item: dict, venta=None) -> tuple[str, str | None]:
             
             response = item["response_dinamica"].format(
                 fecha_limite=calculos.get("fecha_limite", "la fecha indicada"),
-                importe_quincenal=calculos.get("importe_quincenal", "0"),
-                importe_mensual=calculos.get("importe_mensual", "0"),
+                importe_quincenal=calculos.get("importe_quincenal") or "no disponible",
+                importe_mensual=calculos.get("importe_mensual") or "no disponible",
                 numero_cuenta=numero_cuenta or "",
-                pago_minimo=calculos.get("pago_minimo", "215.00"),
-                importe_semanal_3m=calculos_3m.get("importe_semanal_3m", "0")
+                pago_minimo=calculos.get("pago_minimo") or "no disponible",
+                importe_semanal_3m=calculos_3m.get("importe_semanal_3m") or "no disponible"
             )
         except Exception:
             response = item["response"]
