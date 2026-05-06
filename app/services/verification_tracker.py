@@ -1,7 +1,9 @@
 import logging
 
 from app.core.states.states import ChatState
+from app.core.verification.verification_schema import VERIFICATION_STEP_ORDER
 from app.services.verification_service import VerificationService, VerificationTransitionError
+from app.services.siga_bridge_sale import bridge_sale_from_payload, bridge_sale_from_session, bridge_verification_found
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +62,54 @@ DOUBT_INTENTS = {
 }
 
 
+def _mark_bridge_step_with_backfill(
+    service: VerificationService,
+    *,
+    no_cuenta: str,
+    step: str,
+    value: int,
+    phone: str,
+    event_id: str | None,
+) -> None:
+    if step not in VERIFICATION_STEP_ORDER:
+        service.update_step_atomic(
+            no_cuenta=no_cuenta,
+            step=step,
+            value=value,
+            phone=phone,
+            event_id=event_id,
+        )
+        return
+
+    step_index = VERIFICATION_STEP_ORDER.index(step)
+    for previous_step in VERIFICATION_STEP_ORDER[:step_index]:
+        try:
+            service.update_step_atomic(
+                no_cuenta=no_cuenta,
+                step=previous_step,
+                value=1,
+                phone=phone,
+                event_id=event_id,
+            )
+        except VerificationTransitionError:
+            # Si ya estaba marcado como inconsistencia (2) o duda (3), no lo pisamos.
+            continue
+
+    service.update_step_atomic(
+        no_cuenta=no_cuenta,
+        step=step,
+        value=value,
+        phone=phone,
+        event_id=event_id,
+    )
+
+
 def track_verification(
     db,
     session,
     current_state,
     detected_intent,
+    bridge_verification=None,
 ):
     """
     Guarda el progreso de verificación.
@@ -98,13 +143,32 @@ def track_verification(
     
 
     try:
-        VerificationService(db).mark_step_from_folio(
+        service = VerificationService(db)
+        result = service.mark_step_from_folio(
             str(folio),
             step,
             value=value,
             phone=session.phone,
             event_id=getattr(session, "last_message_id", None),
         )
+        if result is not None:
+            return
+
+        bridge_payload = bridge_verification if bridge_verification_found(bridge_verification) else None
+        bridge_sale = (
+            bridge_sale_from_payload(bridge_payload)
+            or bridge_sale_from_session(session, str(folio))
+        )
+        no_cuenta = getattr(bridge_sale, "no_cuenta", None) if bridge_sale else None
+        if no_cuenta:
+            _mark_bridge_step_with_backfill(
+                service,
+                no_cuenta=str(no_cuenta),
+                step=step,
+                value=value,
+                phone=session.phone,
+                event_id=getattr(session, "last_message_id", None),
+            )
     except VerificationTransitionError as exc:
         logger.warning(
             "verification_transition_rejected",

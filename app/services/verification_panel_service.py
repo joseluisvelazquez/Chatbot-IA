@@ -19,7 +19,7 @@ from app.services.siga_bridge_cache import (
     get_cached_verification_row,
     is_cache_valid,
 )
-from app.db.models import ChatSessions, VerificacionCuenta, Inconsistencias
+from app.db.models import ChatSessions, FlowEvent, VerificacionCuenta, Inconsistencias
 from app.utils.inconsistencias_serializer import (
     serialize_inconsistencias,
     summarize_inconsistencias,
@@ -122,7 +122,11 @@ def build_verification_snapshot(
     if not verif and not cached_siga:
         return None
 
-    progress_json = verif.json if verif and isinstance(verif.json, dict) else {}
+    progress_json = merge_progress_from_flow_events(
+        db,
+        session.id,
+        verif.json if verif and isinstance(verif.json, dict) else {},
+    )
     verification_data = compute_verification(progress_json)
 
     inconsistencias = (
@@ -169,6 +173,38 @@ def build_verification_snapshot(
         cached_siga,
         cache_valid=is_cache_valid(cached_row, session=session) if cached_row else None,
     )
+
+
+def merge_progress_from_flow_events(
+    db: Session,
+    session_id: int,
+    progress: Optional[Dict[str, int]],
+) -> Dict[str, int]:
+    normalized = normalize_progress_payload(progress or {})
+
+    rows = (
+        db.query(FlowEvent.to_state)
+        .filter(
+            FlowEvent.session_id == session_id,
+            FlowEvent.to_state.isnot(None),
+        )
+        .order_by(FlowEvent.id.asc())
+        .all()
+    )
+
+    for (to_state,) in rows:
+        step = _step_from_state(to_state)
+        if step not in STEP_ORDER:
+            continue
+
+        max_index = STEP_ORDER.index(step)
+        for reached_step in STEP_ORDER[: max_index + 1]:
+            if normalized.get(reached_step, 0) == 0:
+                normalized[reached_step] = 1
+
+    return normalized
+
+
 def compute_verification(progress: Optional[Dict[str, int]]) -> Dict[str, Any]:
     normalized = normalize_progress_payload(progress or {})
 

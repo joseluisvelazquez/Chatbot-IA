@@ -3,6 +3,7 @@ import asyncio
 from app.core.states.state_renderer import render_state
 from app.core.states.states import ChatState
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
+from app.services.verification_tracker import track_verification
 from app.services.siga_bridge_cache import (
     get_cached_verification,
     get_or_fetch_verification,
@@ -397,3 +398,49 @@ def test_payment_plans_calculate_bridge_amounts_when_snapshot_omits_them():
     assert plan_3m["fecha_limite_3_meses"] == "30 de julio del 2026"
     assert plan_3m["saldo_3_meses"] == "7800.00"
     assert plan_3m["importe_semanal_3m"] == "600.00"
+
+
+def test_tracker_marks_bridge_verification_progress_from_cached_snapshot(monkeypatch):
+    session = DummySession()
+    session.extra_json = {}
+    upsert_cached_verification(session, "16809", verification_payload(), raw=verification_payload())
+    calls = []
+
+    class FakeVerificationService:
+        def __init__(self, db):
+            pass
+
+        def mark_step_from_folio(self, *args, **kwargs):
+            return None
+
+        def update_step_atomic(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.services.verification_tracker.VerificationService",
+        FakeVerificationService,
+    )
+
+    track_verification(
+        db=object(),
+        session=session,
+        current_state=ChatState.CONFIRMAR_NOMBRE,
+        detected_intent="affirmative",
+    )
+
+    assert calls == [
+        {
+            "no_cuenta": "60436",
+            "step": "folio",
+            "value": 1,
+            "phone": "524421234567",
+            "event_id": None,
+        },
+        {
+            "no_cuenta": "60436",
+            "step": "nombre",
+            "value": 1,
+            "phone": "524421234567",
+            "event_id": None,
+        },
+    ]

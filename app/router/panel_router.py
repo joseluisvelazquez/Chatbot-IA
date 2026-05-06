@@ -33,6 +33,7 @@ from app.services.verification_panel_service import (
     compute_verification,
     group_inconsistencias_by_folio,
     has_open_inconsistencia,
+    merge_progress_from_flow_events,
     resolve_panel_current_step,
 )
 from app.utils.timezone import mexico_now_naive
@@ -646,7 +647,11 @@ def get_verifications(
             no_cuenta = str(siga_snapshot["no_cuenta"])
 
         verification = verification_map.get(no_cuenta) if no_cuenta else None
-        progress = verification.json if verification else {}
+        progress = merge_progress_from_flow_events(
+            db,
+            session.id,
+            verification.json if verification else {},
+        )
 
         verification_data = compute_verification(progress)
 

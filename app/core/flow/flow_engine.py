@@ -1263,6 +1263,7 @@ def process_message(
         session=session,
         current_state=current_state,
         detected_intent=detected_intent,
+        bridge_verification=bridge_verification,
     )
 
     # --------------------------------------
