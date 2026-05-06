@@ -12,6 +12,7 @@ from app.core.verification.verification_schema import normalize_progress_payload
 from app.siga.siga_repository import obtener_venta_por_folio
 from app.services.verification_service import VerificationService
 from app.services.verification_tracker import STEP_MAP
+from app.services.siga_navigation import build_siga_account_url
 from app.services.siga_bridge_cache import (
     apply_siga_snapshot_to_panel_item,
     get_cached_verification,
@@ -146,11 +147,7 @@ def build_verification_snapshot(
         "folio": folio,
         "phone": session.phone,
         "no_cuenta": no_cuenta,
-        "siga_url": (
-            f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}"
-            if no_cuenta
-            else f"https://siga.mxcomp.com.mx/ventas/{folio}"
-        ),
+        "siga_url": build_siga_account_url(no_cuenta, folio),
         "status": status,
         "progress_pct": verification_data["progress_pct"],
         "current_step": resolve_panel_current_step(

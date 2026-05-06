@@ -21,6 +21,17 @@ from app.services.siga_bridge import (
 router = APIRouter(prefix="/api/panel/siga-bridge", tags=["panel"])
 
 
+def require_bridge_user(user=Depends(require_roles("admin", "jefe_operativo"))):
+    if user.empresa_id != 1:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
+    return user
+
+
+def require_query_company_scope(user, company_id: int | None) -> None:
+    if company_id is not None and company_id != user.empresa_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
+
+
 def _map_bridge_error(exc: SigaBridgeError) -> HTTPException:
     if isinstance(exc, SigaBridgeBadRequestError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -46,7 +57,7 @@ async def _call_bridge(method_name: str, *args: Any, **kwargs: Any) -> Any:
 
 @router.get("/ping")
 async def siga_bridge_ping(
-    _user=Depends(require_roles("admin", "jefe_operativo")),
+    _user=Depends(require_bridge_user),
 ):
     return await _call_bridge("ping")
 
@@ -55,8 +66,9 @@ async def siga_bridge_ping(
 async def siga_bridge_customer(
     phone: str = Query(..., min_length=10, max_length=15),
     company_id: int | None = Query(default=None, ge=1),
-    _user=Depends(require_roles("admin", "jefe_operativo")),
+    _user=Depends(require_bridge_user),
 ):
+    require_query_company_scope(_user, company_id)
     return await _call_bridge("get_customer_by_phone", phone, company_id)
 
 
@@ -64,8 +76,9 @@ async def siga_bridge_customer(
 async def siga_bridge_account(
     cuenta: str = Query(..., min_length=1, max_length=40),
     company_id: int | None = Query(default=None, ge=1),
-    _user=Depends(require_roles("admin", "jefe_operativo")),
+    _user=Depends(require_bridge_user),
 ):
+    require_query_company_scope(_user, company_id)
     return await _call_bridge("get_account", cuenta, company_id)
 
 
@@ -73,13 +86,14 @@ async def siga_bridge_account(
 async def siga_bridge_verification(
     folio: str = Query(..., min_length=1, max_length=50),
     company_id: int | None = Query(default=None, ge=1),
-    _user=Depends(require_roles("admin", "jefe_operativo")),
+    _user=Depends(require_bridge_user),
 ):
+    require_query_company_scope(_user, company_id)
     return await _call_bridge("get_verification", folio, company_id)
 
 
 @router.get("/metrics")
 async def siga_bridge_metrics(
-    _user=Depends(require_roles("admin", "jefe_operativo")),
+    _user=Depends(require_bridge_user),
 ):
     return get_siga_bridge_metrics()

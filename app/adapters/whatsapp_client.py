@@ -1,8 +1,9 @@
 import httpx
 from app.adapters.meta_parser import build_meta_buttons
 from app.config.settings import settings
-import requests
-import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 HEADERS = {
     "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
@@ -16,20 +17,27 @@ HEADERS = {
 # Esta función se encarga de enviar la petición a Meta, y loguear la respuesta. Si Meta devuelve un error, se loguea pero no se trunca el bot, para evitar que problemas temporales con Meta afecten la experiencia del usuario.
 async def _send(payload: dict):
 
-    print("\n================ META REQUEST ================")
-    print(payload)
     url = f"{settings.BASE_URL}/{settings.PHONE_NUMBER_ID}/messages"
+    logger.info(
+        "whatsapp_send_request",
+        extra={
+            "message_type": payload.get("type"),
+            "phone_last4": str(payload.get("to") or "")[-4:] if payload.get("to") else None,
+        },
+    )
 
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(url, headers=HEADERS, json=payload)
 
-    print("STATUS:", response.status_code)
-    print("RESPONSE:", response.text)
-    print("=============================================\n")
-
     # si Meta falla, no truenes el bot
     if response.status_code >= 400:
-        print("⚠️ ERROR ENVIANDO A WHATSAPP")
+        logger.warning(
+            "whatsapp_send_failed",
+            extra={
+                "status_code": response.status_code,
+                "message_type": payload.get("type"),
+            },
+        )
 
     return response
 
@@ -206,4 +214,8 @@ async def send_whatsapp_media(phone, media_url, media_type, filename=None, capti
         )
 
     if response.status_code >= 400:
-        raise Exception(response.text)
+        logger.warning(
+            "whatsapp_media_send_failed",
+            extra={"status_code": response.status_code, "media_type": media_type},
+        )
+        raise Exception(f"WhatsApp media send failed: {response.status_code}")

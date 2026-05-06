@@ -44,6 +44,7 @@ from app.services.siga_bridge_cache import (
     get_or_fetch_verification,
     is_cache_valid,
 )
+from app.services.siga_navigation import build_siga_account_url
 from app.db.models import BitacoraVentas
 
 # ORDEN REAL DEL FLOW 
@@ -56,11 +57,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_siga_url(no_cuenta: str | None, folio: str | None) -> str | None:
-    if no_cuenta:
-        return f"https://siga.mxcomp.com.mx/cuentas/{no_cuenta}"
-    if folio:
-        return f"https://siga.mxcomp.com.mx/ventas/{folio}"
-    return None
+    return build_siga_account_url(no_cuenta, folio)
 
 
 def redact_siga_details_for_role(item: dict, role: str | None) -> dict:
@@ -89,6 +86,41 @@ def redact_siga_details_for_role(item: dict, role: str | None) -> dict:
     return item
 
 
+def require_company_scope(user) -> None:
+    if user.empresa_id != 1:
+        raise HTTPException(403, "No autorizado")
+
+
+def require_reply_permission(user) -> None:
+    if user.role not in ("admin", "ventas", "cobranza", "jefe_operativo"):
+        raise HTTPException(403, "No autorizado")
+
+
+def scoped_session_query(db: Session, user):
+    return restrict_to_assigned(db.query(ChatSessions), user, db)
+
+
+def get_scoped_session_or_404(
+    db: Session,
+    user,
+    session_id: int,
+    *,
+    detail: str = "Sesion no encontrada",
+) -> ChatSessions:
+    session = (
+        scoped_session_query(db, user)
+        .filter(ChatSessions.id == session_id)
+        .first()
+    )
+    if not session:
+        raise HTTPException(404, detail)
+    return session
+
+
+def scoped_session_ids_subquery(db: Session, user):
+    return restrict_to_assigned(db.query(ChatSessions.id), user, db).subquery()
+
+
 # =========================================
 # Obtener Mensajes con el websocket
 # =========================================
@@ -112,6 +144,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
     await websocket.accept()
     websocket.state.user = user
+    if user.role in ("admin", "sistemas", "jefe_operativo"):
+        websocket.state.allowed_session_ids = None
+    else:
+        websocket.state.allowed_session_ids = {
+            int(row.id)
+            for row in restrict_to_assigned(db.query(ChatSessions.id), user, db).all()
+            if getattr(row, "id", None) is not None
+        }
 
     import json
 
@@ -149,13 +189,16 @@ async def mark_as_read(
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user)
 ):
-    session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
+    require_company_scope(user)
+    session = get_scoped_session_or_404(
+        db,
+        user,
+        session_id,
+        detail="Sesion no encontrada",
+    )
 
     if not session:
         raise HTTPException(404, "Sesión no encontrada")
-
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
 
     session.unread_count = 0
     db.commit()
@@ -209,6 +252,8 @@ def dashboard_state_times(
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),
 ):
+    require_company_scope(user)
+    scoped_session_ids = scoped_session_ids_subquery(db, user)
     # --------------------------------------
     # 🧠 FILTRO DE TIEMPO
     # --------------------------------------
@@ -226,6 +271,7 @@ def dashboard_state_times(
         )
         .filter(
             FlowEvent.created_at >= date_from,
+            FlowEvent.session_id.in_(db.query(scoped_session_ids.c.id)),
             FlowEvent.from_state.isnot(None),
             FlowEvent.to_state.isnot(None),
         )
@@ -305,7 +351,9 @@ def dashboard_funnel(
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),
 ):
+    require_company_scope(user)
     date_from = mexico_now_naive() - timedelta(days=days)
+    scoped_session_ids = scoped_session_ids_subquery(db, user)
 
     events = (
         db.query(
@@ -315,7 +363,8 @@ def dashboard_funnel(
         )
         .filter(
             FlowEvent.to_state.isnot(None),
-            FlowEvent.created_at >= date_from
+            FlowEvent.created_at >= date_from,
+            FlowEvent.session_id.in_(db.query(scoped_session_ids.c.id)),
         )
         .all()
     )
@@ -401,23 +450,32 @@ def dashboard_summary(
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),):
 
-    total_sessions = db.query(func.count(ChatSessions.id)).scalar()
+    require_company_scope(user)
+    scoped_session_ids = scoped_session_ids_subquery(db, user)
 
-    active_sessions = db.query(func.count(ChatSessions.id))\
+    total_sessions = scoped_session_query(db, user).count()
+
+    active_sessions = scoped_session_query(db, user)\
         .filter(ChatSessions.last_message_at >= func.now() - text("INTERVAL 1 DAY"))\
-        .scalar()
+        .count()
 
     total_messages_in = db.query(func.count(Message.id))\
-        .filter(Message.direction == "in")\
+        .filter(
+            Message.direction == "in",
+            Message.session_id.in_(db.query(scoped_session_ids.c.id)),
+        )\
         .scalar()
 
     total_messages_out = db.query(func.count(Message.id))\
-        .filter(Message.direction.in_(["out", "agent"]))\
+        .filter(
+            Message.direction.in_(["out", "agent"]),
+            Message.session_id.in_(db.query(scoped_session_ids.c.id)),
+        )\
         .scalar()
 
-    inconsistencias_abiertas = db.query(func.count(Inconsistencias.id))\
+    inconsistencias_abiertas = restrict_to_assigned(db.query(Inconsistencias), user, db)\
         .filter(func.lower(Inconsistencias.estatus) == "abierta")\
-        .scalar()
+        .count()
 
     return {
         "total_sessions": total_sessions or 0,
@@ -472,11 +530,7 @@ def get_verifications(
         .order_by(ChatSessions.last_message_at.desc())
     )
 
-    total = (
-        restrict_to_assigned(db.query(func.count(ChatSessions.id)), user, db)
-        .filter(ChatSessions.folio.isnot(None))
-        .scalar()
-    )
+    total = sessions_query.order_by(None).count()
 
     sessions = (
         sessions_query.all()
@@ -674,10 +728,11 @@ async def get_verification_by_session(
     if user.empresa_id != 1:
         raise HTTPException(403, "No autorizado")
 
-    session = (
-        db.query(ChatSessions)
-        .filter(ChatSessions.id == session_id)
-        .first()
+    session = get_scoped_session_or_404(
+        db,
+        user,
+        session_id,
+        detail="Verificacion no encontrada",
     )
 
     if not session or not session.folio:
@@ -897,10 +952,12 @@ async def update_inconsistencia_panel_resolution(
     ui_id = payload.get("ui_id")
     panel_resolved = bool(payload["resolved_by_panel"])
     existing_inc = (
-        db.query(Inconsistencias)
+        restrict_to_assigned(db.query(Inconsistencias), user, db)
         .filter(Inconsistencias.id == inconsistencia_id)
         .first()
     )
+    if not existing_inc:
+        raise HTTPException(404, "Inconsistencia no encontrada")
     was_open = bool(
         existing_inc
         and str(existing_inc.estatus or "").upper() == "ABIERTA"
@@ -924,7 +981,11 @@ async def update_inconsistencia_panel_resolution(
     verification_snapshot = None
 
     if inc.session_id:
-        session = db.query(ChatSessions).filter(ChatSessions.id == inc.session_id).first()
+        session = (
+            scoped_session_query(db, user)
+            .filter(ChatSessions.id == inc.session_id)
+            .first()
+        )
         if session:
             verification_snapshot = build_verification_snapshot(db, session)
             if verification_snapshot:
@@ -1081,10 +1142,11 @@ def get_messages(
     MAX_MESSAGES = 250
     limit = min(limit, MAX_MESSAGES)
 
-    session = (
-        db.query(ChatSessions)
-        .filter(ChatSessions.id == session_id)
-        .first()
+    session = get_scoped_session_or_404(
+        db,
+        user,
+        session_id,
+        detail="La sesion no existe",
     )
 
     if not session:
@@ -1138,8 +1200,6 @@ async def send_agent_message(
     user = Depends(get_current_panel_user)
 ):
     content = payload.content.strip()
-    print("🧨 TEXTO QUE VOY A ENVIAR:", repr(content))
-
     if not content:
         raise HTTPException(400, "Mensaje vacío")
 
@@ -1148,11 +1208,13 @@ async def send_agent_message(
 
     if user.empresa_id != 1:
         raise HTTPException(403, "No autorizado")
+    require_reply_permission(user)
 
-    session = (
-        db.query(ChatSessions)
-        .filter(ChatSessions.id == payload.session_id)
-        .first()
+    session = get_scoped_session_or_404(
+        db,
+        user,
+        payload.session_id,
+        detail="Sesion no encontrada",
     )
 
     if not session:
@@ -1242,8 +1304,6 @@ async def send_agent_file(
 ):
     payload = await request.json()
 
-    print("📦 PAYLOAD:", payload)
-
     session_id = payload.get("session_id")
     media_url = payload.get("media_url")
     file_name = payload.get("file_name")
@@ -1252,10 +1312,21 @@ async def send_agent_file(
     if not session_id or not media_url or not media_type:
         raise HTTPException(400, "Datos incompletos")
 
+    try:
+        session_id = int(session_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "session_id invalido")
+
     if user.empresa_id != 1:
         raise HTTPException(403, "No autorizado")
+    require_reply_permission(user)
 
-    session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
+    session = get_scoped_session_or_404(
+        db,
+        user,
+        session_id,
+        detail="Sesion no encontrada",
+    )
 
     if not session:
         raise HTTPException(404, "Sesión no encontrada")
@@ -1298,11 +1369,9 @@ async def send_agent_file(
         db.commit()
         db.refresh(message)
 
-        print("✅ GUARDADO EN DB:", message.id)
-
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print("❌ ERROR DB:", e)
+        logger.exception("panel_agent_file_save_failed", extra={"session_id": session_id})
         raise HTTPException(500, "Error guardando mensaje")
 
     # =========================
@@ -1363,8 +1432,6 @@ async def send_agent_file(
     # =========================
     async def send_media_safe():
         try:
-            print("📤 ENVIANDO MEDIA A WHATSAPP:", media_url)
-
             caption = message.content if message.content else None
 
             await send_whatsapp_media(
@@ -1375,8 +1442,8 @@ async def send_agent_file(
                 filename=file_name
             )
 
-        except Exception as e:
-            print("❌ ERROR WHATSAPP:", e)
+        except Exception:
+            logger.warning("panel_agent_file_whatsapp_send_failed", extra={"session_id": session.id})
 
     import asyncio
     asyncio.create_task(send_media_safe())

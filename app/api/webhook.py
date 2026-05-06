@@ -538,7 +538,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                     "siga_snapshot_updated_from_webhook",
                     extra={
                         "session_id": chat.id,
-                        "folio": candidate_folio,
+                        "folio_masked": _mask_last(candidate_folio),
                         "message_id": message_id,
                     },
                 )

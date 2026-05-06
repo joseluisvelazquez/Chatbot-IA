@@ -13,7 +13,7 @@ from app.utils.date_formatter import formatear_fecha_larga
 from app.services.ai.context_loader import load_business_context
 from app.core.states.state_types import get_state_type
 from app.services.faq.faq_data import FAQ_DATA
-from app.utils.product_mapping import get_product_info
+from app.utils.product_mapping import get_product_info_for_sale
 
 
 # --------------------------------------
@@ -256,7 +256,7 @@ def build_inconsistency_prompt(user_text: str, context: ConversationContext) -> 
                 valor_sistema = formatear_fecha_larga(venta.fecha_venta)
 
         elif campo == "producto" and venta:
-            info = get_product_info(venta.sku_bitacora_v)
+            info = get_product_info_for_sale(venta)
             valor_sistema = info["nombre_amigable"]
 
         elif campo == "estado_producto":

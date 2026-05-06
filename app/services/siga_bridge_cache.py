@@ -67,7 +67,7 @@ def _snapshot_log_meta(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     source = snapshot.get("source") if isinstance(snapshot.get("source"), dict) else {}
     return {
         "found": bool(snapshot.get("found")),
-        "folio": snapshot.get("folio"),
+        "folio_masked": _mask(snapshot.get("folio")),
         "no_cuenta_masked": _mask(snapshot.get("no_cuenta")),
         "phone_last4": _mask(snapshot.get("phone")),
         "source_table": source.get("table"),
@@ -244,7 +244,7 @@ def upsert_cached_verification(
         "siga_bridge_cache_upsert",
         extra={
             "session_id": getattr(session, "id", None),
-            "folio": normalized_folio,
+            "folio_masked": _mask(normalized_folio),
             "ttl_seconds": ttl,
             **_snapshot_log_meta(normalized_snapshot),
         },
@@ -288,7 +288,7 @@ async def get_or_fetch_verification(
                 "siga_bridge_cache_hit",
                 extra={
                     "session_id": getattr(session, "id", None),
-                    "folio": normalized_folio,
+                    "folio_masked": _mask(normalized_folio),
                     **_snapshot_log_meta(cached),
                 },
             )
@@ -298,7 +298,7 @@ async def get_or_fetch_verification(
         "siga_bridge_cache_miss",
         extra={
             "session_id": getattr(session, "id", None),
-            "folio": normalized_folio,
+            "folio_masked": _mask(normalized_folio),
             "force_refresh": force_refresh,
         },
     )
@@ -314,7 +314,7 @@ async def get_or_fetch_verification(
                     "siga_bridge_cache_hit",
                     extra={
                         "session_id": getattr(session, "id", None),
-                        "folio": normalized_folio,
+                        "folio_masked": _mask(normalized_folio),
                         "after_wait": True,
                         **_snapshot_log_meta(cached),
                     },
@@ -335,7 +335,7 @@ async def get_or_fetch_verification(
                 "chatbot_folio_resolution_decision",
                 extra={
                     "session_id": getattr(session, "id", None),
-                    "folio": normalized_folio,
+                    "folio_masked": _mask(normalized_folio),
                     "source": "bridge",
                     "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                     **_snapshot_log_meta(snapshot),
@@ -348,7 +348,7 @@ async def get_or_fetch_verification(
                 "siga_bridge_cache_fetch_failed",
                 extra={
                     "session_id": getattr(session, "id", None),
-                    "folio": normalized_folio,
+                    "folio_masked": _mask(normalized_folio),
                     "company_id": company_id,
                     "error_type": exc.__class__.__name__,
                     "status_code": exc.status_code,
@@ -361,7 +361,7 @@ async def get_or_fetch_verification(
                 "siga_bridge_cache_fetch_unexpected",
                 extra={
                     "session_id": getattr(session, "id", None),
-                    "folio": normalized_folio,
+                    "folio_masked": _mask(normalized_folio),
                     "company_id": company_id,
                     "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                 },
@@ -374,7 +374,7 @@ async def get_or_fetch_verification(
                 "siga_bridge_cache_stale_used",
                 extra={
                     "session_id": getattr(session, "id", None),
-                    "folio": normalized_folio,
+                    "folio_masked": _mask(normalized_folio),
                     **_snapshot_log_meta(stale),
                 },
             )

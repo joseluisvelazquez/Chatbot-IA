@@ -1,4 +1,6 @@
-from typing import Dict, TypedDict
+import re
+import unicodedata
+from typing import Any, Dict, Iterable, TypedDict
 
 class ProductInfo(TypedDict):
     nombre_amigable: str
@@ -70,6 +72,122 @@ SKU_PRODUCT_MAP: Dict[str, ProductInfo] = {
         "articulo": "una"
     }
 }
+
+
+def _safe_text(value: Any) -> str:
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    return re.sub(r"\s+", " ", str(value).strip())
+
+
+def _fold_token(value: Any) -> str:
+    text = _safe_text(value).upper()
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^A-Z0-9]+", "-", text).strip("-")
+
+
+def _candidate_records(product: Any) -> Iterable[Any]:
+    if isinstance(product, (list, tuple)):
+        return product
+    return (product,)
+
+
+def _candidate_value(record: Any, key: str) -> Any:
+    if isinstance(record, dict):
+        return record.get(key)
+    return getattr(record, key, None)
+
+
+def normalize_product_sku(value: Any) -> str | None:
+    token = _fold_token(value)
+    if not token:
+        return None
+
+    for sku in SKU_PRODUCT_MAP:
+        sku_token = _fold_token(sku)
+        if token == sku_token:
+            return sku
+        if re.search(rf"(^|[^A-Z0-9]){re.escape(sku_token)}([^A-Z0-9]|$)", token):
+            return sku
+
+    return None
+
+
+def product_sku_from_sale(sale: Any) -> str | None:
+    if not isinstance(sale, (dict, list, tuple)) and not hasattr(sale, "__dict__"):
+        return normalize_product_sku(sale)
+
+    identifier_keys = (
+        "sku_bitacora_v",
+        "sku",
+        "codigo_barras_bv",
+        "codigo_barras",
+        "identificador",
+        "product_sku",
+        "product_code",
+        "codigo",
+    )
+    descriptive_keys = (
+        "nombre_producto",
+        "product",
+        "producto",
+        "descripcion",
+        "description",
+    )
+
+    records = tuple(_candidate_records(sale))
+    for key in identifier_keys:
+        for record in records:
+            sku = normalize_product_sku(_candidate_value(record, key))
+            if sku:
+                return sku
+
+    for key in descriptive_keys:
+        for record in records:
+            sku = normalize_product_sku(_candidate_value(record, key))
+            if sku:
+                return sku
+
+    return None
+
+
+def normalize_product_name(sale: Any) -> str:
+    sku = product_sku_from_sale(sale)
+    if sku:
+        return get_product_info(sku)["nombre_amigable"]
+
+    fallback_keys = (
+        "nombre_producto",
+        "product",
+        "producto",
+        "sku_bitacora_v",
+        "sku",
+        "descripcion",
+        "description",
+    )
+    for key in fallback_keys:
+        for record in _candidate_records(sale):
+            text = _safe_text(_candidate_value(record, key))
+            if text:
+                return text
+
+    text = _safe_text(sale)
+    return text or "Producto"
+
+
+def get_product_info_for_sale(sale: Any) -> ProductInfo:
+    sku = product_sku_from_sale(sale)
+    if sku:
+        return get_product_info(sku)
+
+    return {"nombre_amigable": normalize_product_name(sale), "articulo": "un(a)"}
+
+
+def requires_components_check(product: Any) -> bool:
+    return product_sku_from_sale(product) == "PC-MAXICA"
+
 
 def get_product_info(sku: str) -> ProductInfo:
     """

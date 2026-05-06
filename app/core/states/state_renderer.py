@@ -26,7 +26,7 @@ from app.services.siga_bridge_sale import (
     is_bridge_sale,
 )
 
-from app.utils.product_mapping import get_product_info
+from app.utils.product_mapping import get_product_info_for_sale
 
 
 def _bridge_payment_snapshot(venta):
@@ -121,11 +121,11 @@ def render_state(next_state, session, db):
         reply = MessageBuilder.confirmar_fecha(fecha_natural)
 
     elif next_state == ChatState.CONFIRMAR_PRODUCTO:
-        info = get_product_info(venta.sku_bitacora_v)
+        info = get_product_info_for_sale(venta)
         reply = MessageBuilder.confirmar_producto(info["articulo"], info["nombre_amigable"])
 
     elif next_state == ChatState.CONFIRMAR_ESTADO_PRODUCTO:
-        info = get_product_info(venta.sku_bitacora_v)
+        info = get_product_info_for_sale(venta)
         reply = MessageBuilder.confirmar_estado_producto(info["nombre_amigable"])
 
     elif next_state == ChatState.INFO_PAGOS:
@@ -188,7 +188,7 @@ def render_state(next_state, session, db):
             )
 
     elif next_state == ChatState.INFO_BENEFICIOS2:
-        info = get_product_info(venta.sku_bitacora_v)
+        info = get_product_info_for_sale(venta)
         reply = MessageBuilder.info_beneficios2(info["nombre_amigable"])
 
     elif next_state == ChatState.DEVOLUCION_CONFIRMAR:

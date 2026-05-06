@@ -30,6 +30,15 @@ from app.services.siga_bridge_cache import (
 logger = logging.getLogger(__name__)
 
 
+def _mask(value: Any, *, visible: int = 4) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= visible:
+        return "***"
+    return f"***{text[-visible:]}"
+
+
 def _first_record(data: Any, collection_keys: tuple[str, ...]) -> dict[str, Any] | None:
     if isinstance(data, list):
         return data[0] if data and isinstance(data[0], dict) else None
@@ -237,7 +246,7 @@ async def lookup_verification_for_folio(
         "siga_bridge_chatbot_verification_lookup_start",
         extra={
             "company_id": company_id,
-            "folio": normalized_folio,
+            "folio_masked": _mask(normalized_folio),
             "session_id": getattr(session, "id", None),
         },
     )
@@ -252,7 +261,7 @@ async def lookup_verification_for_folio(
             "siga_bridge_chatbot_verification_lookup_failed",
             extra={
                 "company_id": company_id,
-                "folio": normalized_folio,
+                "folio_masked": _mask(normalized_folio),
                 "session_id": getattr(session, "id", None),
             },
         )
@@ -264,7 +273,7 @@ async def lookup_verification_for_folio(
         "siga_bridge_chatbot_verification_lookup_done",
         extra={
             "company_id": company_id,
-            "folio": normalized_folio,
+            "folio_masked": _mask(normalized_folio),
             "session_id": getattr(session, "id", None),
             "found": found,
             "summary": bridge_sale_summary(data),

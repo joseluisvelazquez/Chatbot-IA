@@ -79,14 +79,14 @@ INFO_OTROS_PLANES = (
 )
 
 INFO_BENEFICIOS = (
-    "🎉 ¡Felicidades! a partir de ahora puedes disfrutar de tu PC-Máxica y de: :\n\n"
+    "🎉 ¡Felicidades! a partir de ahora puedes disfrutar de tu PC-MAXICA y de: :\n\n"
     "• 🛠️ Asesoría y Soporte Técnico\n"
     "• 🛡️ Garantía de 3 años sobre defectos de fabricación\n"
     "• 🎓 Programas y aplicaciones gratuitos\n"
     "• 🖨️ Impresora multifuncional de obsequio\n\n"
     "Recibirás tu multifuncional en un plazo máximo de 3 meses.\n"
     "Es importante que mantengas tu cuenta al corriente para no perder tus beneficios.\n\n"
-    "¿Tienes alguna duda sobre tu contrato, póliza de garantía, o sobre el uso y funcionamiento de tu PC-Máxica?"
+    "¿Tienes alguna duda sobre tu contrato, póliza de garantía, o sobre el uso y funcionamiento de tu PC-MAXICA?"
 )
 
 INFO_BENEFICIOS2 = (

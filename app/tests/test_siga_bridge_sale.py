@@ -13,6 +13,7 @@ from app.services.siga_bridge_sale import (
     bridge_verification_found,
     normalize_siga_verification_snapshot,
 )
+from app.utils.product_mapping import requires_components_check
 
 
 class DummySession:
@@ -62,6 +63,13 @@ def verification_payload(**overrides):
     return payload
 
 
+LONG_PC_DESCRIPTION = (
+    "CPU INTEL COREI3+ / AMD A4+, SSD 120GB, HDD 500GB, RAM 6GB, "
+    "MONITOR PANORAMICO/CUADRADO 19+, TECLADO MULTIMEDIA, MOUSE OPTICO, "
+    "BOCINAS 2.0 Y ADAPTADOR WIFI"
+)
+
+
 def test_bridge_verification_payload_builds_sale_fallback():
     payload = verification_payload()
 
@@ -72,6 +80,46 @@ def test_bridge_verification_payload_builds_sale_fallback():
     assert venta.no_cuenta == "60436"
     assert venta.nombre_completo == "CLIENTE DEMO"
     assert str(venta.pago) == "699.00"
+
+
+def test_pc_maxica_sku_wins_over_long_description():
+    payload = verification_payload(
+        sale={
+            "folio": "16809",
+            "no_cuenta": "60436",
+            "sku_bitacora_v": "PC-MAXICA",
+            "descripcion": LONG_PC_DESCRIPTION,
+            "fecha_venta": "2026-05-05",
+        }
+    )
+
+    snapshot = normalize_siga_verification_snapshot(payload)
+    venta = bridge_sale_from_payload(payload)
+
+    assert snapshot["sale"]["product"] == "PC-MAXICA"
+    assert snapshot["sale"]["product_description"] == LONG_PC_DESCRIPTION
+    assert venta.sku_bitacora_v == "PC-MAXICA"
+    assert venta.descripcion == LONG_PC_DESCRIPTION
+    assert requires_components_check(venta) is True
+
+
+def test_renderer_uses_pc_maxica_commercial_name():
+    session = DummySession()
+    session.extra_json = {}
+    payload = verification_payload(
+        sale={
+            "folio": "16809",
+            "no_cuenta": "60436",
+            "sku_bitacora_v": "PC-MAXICA",
+            "descripcion": LONG_PC_DESCRIPTION,
+        }
+    )
+    upsert_cached_verification(session, "16809", payload, raw=payload)
+
+    reply, _buttons, _image_id = render_state(ChatState.CONFIRMAR_PRODUCTO, session, db=None)
+
+    assert "PC-MAXICA" in reply
+    assert LONG_PC_DESCRIPTION not in reply
 
 
 def test_normalizer_accepts_v1_wrapper_and_builds_snapshot():

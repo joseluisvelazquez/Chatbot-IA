@@ -15,6 +15,8 @@ from app.services.siga_bridge_sale import (
     bridge_sale_from_session,
     bridge_verification_found,
 )
+from app.services.session_context import reset_verification_context_for_folio
+from app.utils.product_mapping import requires_components_check
 
 # -----------------------------
 # MAPS
@@ -62,8 +64,7 @@ def handle_cambiar_folio(context):
     if not nuevo_folio or not venta:
         # Flujo Reactivo: El folio es válido pero aún no existe en DB (Solo para verificación normal)
         if context.state == ChatState.CAMBIAR_FOLIO and nuevo_folio and not venta:
-            context.session.invalid_folio_attempts = 0
-            context.session.folio = nuevo_folio
+            reset_verification_context_for_folio(context.session, nuevo_folio)
             return {
                 "reply": msg.SALA_ESPERA.format(folio=nuevo_folio),
                 "state": ChatState.ESPERANDO_REGISTRO,
@@ -88,8 +89,7 @@ def handle_cambiar_folio(context):
             "state": context.state
         }
 
-    context.session.invalid_folio_attempts = 0
-    context.session.folio = nuevo_folio
+    reset_verification_context_for_folio(context.session, nuevo_folio)
 
     target_state = ChatState.INICIO2
     if context.state == ChatState.CAMBIAR_FOLIO_DEVOLUCION:
@@ -134,7 +134,7 @@ def handle_menu(context):
 
         # si la sesión actual ya terminó (FINALIZADO), limpiamos el folio
         if context.session.folio and context.state == ChatState.FINALIZADO:
-            context.session.folio = None
+            reset_verification_context_for_folio(context.session, None)
 
         if not context.session.folio:
             from app.siga.siga_repository import obtener_folios_pendientes_por_telefono
@@ -148,7 +148,7 @@ def handle_menu(context):
                     "buttons": FLOW.get(ChatState.CAMBIAR_FOLIO, {}).get("buttons", [])
                 }
             elif len(pendientes) == 1:
-                context.session.folio = pendientes[0]
+                reset_verification_context_for_folio(context.session, pendientes[0])
                 target_state = ChatState.INICIO2
                 from app.core.states.state_renderer import render_state
                 reply_state, buttons, _ = render_state(target_state, context.session, context.db)
@@ -235,7 +235,7 @@ def handle_seleccionar_folio(context):
             
             # Convertimos ambos a string por seguridad
             if str(folio) in [str(f) for f in pendientes]:
-                context.session.folio = folio
+                reset_verification_context_for_folio(context.session, folio)
                 
                 target_state = ChatState.INICIO2
                 from app.core.states.state_renderer import render_state
@@ -577,11 +577,11 @@ def handle_flow_skips(context, next_state):
             return ChatState.CONFIRMAR_PAGO_INICIAL
 
     if next_state == ChatState.CONFIRMAR_COMPONENTES:
-        if venta.sku_bitacora_v != "PC-MAXICA":
+        if not requires_components_check(venta):
             return ChatState.CONFIRMAR_ESTADO_PRODUCTO
 
     if next_state == ChatState.INFO_BENEFICIOS:
-        if venta.sku_bitacora_v != "PC-MAXICA":
+        if not requires_components_check(venta):
             return ChatState.INFO_BENEFICIOS2
 
     return next_state

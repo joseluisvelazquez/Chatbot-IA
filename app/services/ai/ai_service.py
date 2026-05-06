@@ -1,12 +1,31 @@
 import re
 import time
 import json
-from google import genai
+import logging
+
+try:
+    from google import genai
+except ImportError:
+    genai = None
+
 from app.services.ai.prompt_builder import build_inconsistency_prompt
 from app.config.settings import settings
 from app.services.ai.prompt_builder import build_faq_identification_prompt, build_prompt
 from app.core.context.conversation_context import ConversationContext
 from app.services.ai.agent_messages import AGENT_MESSAGES
+
+logger = logging.getLogger(__name__)
+_client = None
+
+
+def _get_client():
+    global _client
+    if genai is None:
+        logger.warning("gemini_client_unavailable")
+        return None
+    if _client is None:
+        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    return _client
 
 def identify_faq_id(user_text: str) -> int | None:
     """
@@ -14,6 +33,9 @@ def identify_faq_id(user_text: str) -> int | None:
     Retorna el índice del item en FAQ_DATA o None si no hay match.
     """
     prompt = build_faq_identification_prompt(user_text)
+    client = _get_client()
+    if client is None:
+        return None
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -33,14 +55,12 @@ def identify_faq_id(user_text: str) -> int | None:
                 return int(match.group(1))
 
         except Exception as e:
-            print("❌ ERROR GEMINI (FAQ identity):", str(e))
+            logger.warning("gemini_faq_identification_failed", extra={"error_type": e.__class__.__name__})
             if attempt == MAX_RETRIES - 1:
                 return None
             time.sleep(RETRY_DELAY_SECONDS)
 
     return None
-
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 1
@@ -73,6 +93,9 @@ def generate_ai_response(
         return None
 
     prompt = build_prompt(user_text, context)
+    client = _get_client()
+    if client is None:
+        return None
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -166,7 +189,7 @@ def generate_ai_response(
             #print("⚠️ Gemini respondió vacío")
 
         except Exception as e:
-            print("❌ ERROR GEMINI:", str(e))
+            logger.warning("gemini_response_failed", extra={"error_type": e.__class__.__name__})
 
             if attempt == MAX_RETRIES - 1:
                 return AGENT_MESSAGES["escalation"]["default"]
@@ -190,6 +213,9 @@ def analyze_inconsistency(
     """
 
     prompt = build_inconsistency_prompt(user_text, context)
+    client = _get_client()
+    if client is None:
+        return _fallback_inconsistency(user_text, context)
 
     raw_response = None
 
@@ -210,7 +236,7 @@ def analyze_inconsistency(
                 break
 
         except Exception as e:
-            print("❌ ERROR GEMINI (inconsistencia):", str(e))
+            logger.warning("gemini_inconsistency_failed", extra={"error_type": e.__class__.__name__})
 
             if attempt == MAX_RETRIES - 1:
                 return _fallback_inconsistency(user_text, context)
@@ -227,10 +253,8 @@ def analyze_inconsistency(
     data = _extract_json(raw_response)
 
     if data is None:
-        print("⚠️ IA: no se pudo extraer JSON → fallback crítica")
+        logger.warning("gemini_inconsistency_json_parse_failed")
         return _fallback_inconsistency(user_text, context)
-
-    print(f"🤖 IA clasificó: {data.get('severidad', '?')}")
 
     return _validate_inconsistency(data, context, user_text)
 

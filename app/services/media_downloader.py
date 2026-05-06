@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from uuid import uuid4
+import logging
 
 import requests
 
 from app.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # app/services/media_downloader.py -> subimos 2 niveles y caemos en /app
 MEDIA_DIR = Path.cwd() / "media" # Ruta del docker
@@ -90,17 +93,16 @@ def download_and_store(media_id: str) -> str:
     generated_name = f"{uuid4().hex}.{extension}"
     destination = MEDIA_DIR / generated_name
 
-    #Para pruebas locales, si el archivo ya existe
-    print("🧪 MEDIA_DIR:", MEDIA_DIR)
-    print("🧪 DESTINATION:", destination)
-
     try:
         with destination.open("wb") as output:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if not chunk:
                     continue
                 output.write(chunk)
-        print("🧪 ARCHIVO GUARDADO?", destination.exists())
+        logger.info(
+            "media_download_stored",
+            extra={"content_type": content_type, "size_bytes": destination.stat().st_size},
+        )
     except Exception:
         destination.unlink(missing_ok=True)
         raise

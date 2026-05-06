@@ -19,11 +19,20 @@ DEFAULT_VERIFICATION_PROGRESS: Dict[str, int] = {
 }
 
 VERIFICATION_STEP_ORDER = list(DEFAULT_VERIFICATION_PROGRESS.keys())
+NON_TRACKABLE_VERIFICATION_STEPS = {"inicio"}
 
 
 def assert_valid_step(step: str) -> None:
     if step not in DEFAULT_VERIFICATION_PROGRESS:
         raise ValueError(f"Paso de verificacion desconocido: {step}")
+
+
+def is_trackable_step(step: str | None) -> bool:
+    return bool(step) and step in DEFAULT_VERIFICATION_PROGRESS
+
+
+def is_non_trackable_step(step: str | None) -> bool:
+    return bool(step) and step in NON_TRACKABLE_VERIFICATION_STEPS
 
 
 def normalize_progress_payload(payload: Dict[str, Any] | None) -> Dict[str, int]:

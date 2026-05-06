@@ -1172,8 +1172,6 @@ export async function loadChat(sessionId, phone, name = null) {
 
             return
         }
-        await markConversationRead(numericSessionId)
-
         paginationState = {
             offset: 0,
             loading: false,

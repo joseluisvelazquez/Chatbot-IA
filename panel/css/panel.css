@@ -83,6 +83,10 @@ body {
     -webkit-overflow-scrolling: touch;
 }
 
+#drawerInconsistencias {
+    text-align: left;
+}
+
 @media (max-width: 640px) {
     #drawer {
         width: 100vw;

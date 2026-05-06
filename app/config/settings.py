@@ -90,10 +90,11 @@ class Settings(BaseSettings):
     SIGA_BRIDGE_VERIFICATION_TIMEOUT_CONNECT: float = 1.0
     SIGA_BRIDGE_VERIFICATION_TIMEOUT_READ: float = 2.5
     SIGA_BRIDGE_VERIFICATION_MAX_ATTEMPTS: int = 1
+    SIGA_PANEL_BASE_URL: str = "https://siga.mxcomp.mx/"
+    SIGA_ACCOUNT_REDIRECT_PATH: str = "cuentas.php"
 
     @property
     def DATABASE_URL(self) -> str:
-        print("ENV DEBUG:", self.DEBUG)
         return (
             f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"

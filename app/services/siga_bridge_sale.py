@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.utils.address_formatter import capitalizar_texto
+from app.utils.product_mapping import normalize_product_name, product_sku_from_sale
 
 _VERIFICATION_KEYS = {
     "found",
@@ -370,10 +371,12 @@ def normalize_siga_verification_snapshot(
         _safe_text(_dict_value(customer, ("address_text", "domicilio_texto")))
         or format_bridge_address(address_raw, customer, sale, account, data)
     )
-    product = _first_safe_text(
+    product_sku = product_sku_from_sale(records)
+    product_description = _first_safe_text(
         records,
-        ("product", "producto", "nombre_producto", "descripcion", "description", "sku_bitacora_v", "sku"),
+        ("descripcion", "description"),
     )
+    product = normalize_product_name(records)
 
     return {
         "found": bridge_verification_found(data),
@@ -395,6 +398,8 @@ def normalize_siga_verification_snapshot(
         },
         "sale": {
             "product": product,
+            "product_sku": product_sku,
+            "product_description": product_description,
             "sale_date": _date_text(
                 _first_value(records, ("sale_date", "fecha_venta", "fecha", "created_at"))
             ),
@@ -422,6 +427,8 @@ def bridge_sale_from_payload(payload: Any) -> BridgeSale | None:
     payment = snapshot.get("payment") if isinstance(snapshot.get("payment"), dict) else {}
     customer = snapshot.get("customer") if isinstance(snapshot.get("customer"), dict) else {}
     sale = snapshot.get("sale") if isinstance(snapshot.get("sale"), dict) else {}
+    product_sku = sale.get("product_sku") or product_sku_from_sale(sale)
+    product_name = sale.get("product") or normalize_product_name(sale)
 
     return BridgeSale(
         id_venta_b=None,
@@ -430,8 +437,9 @@ def bridge_sale_from_payload(payload: Any) -> BridgeSale | None:
         folio=folio or "",
         no_cuenta=no_cuenta or "",
         nombre_completo=customer.get("name") or "",
-        sku_bitacora_v=sale.get("product") or "",
-        descripcion=sale.get("product") or "",
+        sku_bitacora_v=product_sku or product_name or "",
+        descripcion=sale.get("product_description") or product_name or "",
+        nombre_producto=product_name or "",
         fecha_venta=_datetime_or_none(sale.get("sale_date")),
         pago=_decimal_or_none(payment.get("pago_inicial")),
         subsidio=None,

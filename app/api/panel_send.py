@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
+import logging
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import ChatSessions
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.services.message_service import save_message
-from app.security.auth_dependencies import get_current_panel_user, require_roles
-from app.websockets import manager
+from app.security.auth_dependencies import require_roles
+from app.security.auth_service import restrict_to_assigned
 
 #Para enviar mensajes desde el panel de administración a WhatsApp
 
@@ -14,6 +15,8 @@ from pydantic import BaseModel
 from app.adapters.whatsapp_client import send_whatsapp_media
 from app.db.models import Message
 from app.utils.timezone import mexico_now_naive
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/panel", tags=["panel"])
 class SendFileRequest(BaseModel):
@@ -28,10 +31,14 @@ async def send_message(
     session_id: int,
     message: str,
     db: Session = Depends(get_db),
-    user = Depends(require_roles("ventas", "admin", "cobranza")),
+    user = Depends(require_roles("ventas", "admin", "cobranza", "jefe_operativo")),
 ):
 
-    chat = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
+    chat = (
+        restrict_to_assigned(db.query(ChatSessions), user, db)
+        .filter(ChatSessions.id == session_id)
+        .first()
+    )
 
     if not chat:
         return {"error": "session not found"}
@@ -60,14 +67,20 @@ async def send_message(
 @router.post("/messages/file")
 async def send_file_message(
     payload: SendFileRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user = Depends(require_roles("ventas", "admin", "cobranza", "jefe_operativo")),
 ):
-    chat = db.query(ChatSessions).filter(
-        ChatSessions.id == payload.session_id
-    ).first()
+    chat = (
+        restrict_to_assigned(db.query(ChatSessions), user, db)
+        .filter(ChatSessions.id == payload.session_id)
+        .first()
+    )
 
     if not chat:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if user.empresa_id != 1:
+        raise HTTPException(status_code=403, detail="Acceso no permitido")
 
     phone = chat.phone
 
@@ -128,6 +141,9 @@ async def send_file_message(
             caption=caption
         )
     except Exception as e:
-        print(f"[WHATSAPP ERROR] phone={phone} error={e}")
+        logger.warning(
+            "panel_send_file_whatsapp_failed",
+            extra={"session_id": chat.id, "error_type": e.__class__.__name__},
+        )
 
     return {"status": "sent"}

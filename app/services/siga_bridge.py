@@ -52,6 +52,15 @@ _metrics: dict[str, Any] = {
 }
 
 
+def _mask(value: Any, *, visible: int = 4) -> str:
+    text = str(value or "")
+    if not text:
+        return "[empty]"
+    if len(text) <= visible:
+        return "***"
+    return f"***{text[-visible:]}"
+
+
 def _sanitize_url(url: httpx.URL | str) -> str:
     try:
         parts = urlsplit(str(url))
@@ -92,10 +101,8 @@ def _debug_request_params(action: str, params: dict[str, Any]) -> dict[str, Any]
     sanitized: dict[str, Any] = {}
     for key, value in params.items():
         key_lower = str(key).lower()
-        if action == "verification" and key_lower == "folio":
-            sanitized[key] = value
-        elif key_lower in _SENSITIVE_QUERY_KEYS or "token" in key_lower:
-            sanitized[key] = "[redacted]"
+        if key_lower in _SENSITIVE_QUERY_KEYS or "token" in key_lower:
+            sanitized[key] = _mask(value)
         else:
             sanitized[key] = value
     return sanitized
@@ -305,7 +312,7 @@ class SigaBridgeClient:
             extra={
                 "company_id": company_id,
                 "phone_digits_len": len(digits),
-                "phone_last10": digits[-10:] if len(digits) >= 10 else digits,
+                "phone_last4": digits[-4:] if digits else None,
                 "lookup_authoritative": False,
             },
         )
@@ -333,7 +340,7 @@ class SigaBridgeClient:
             "siga_bridge_verification_lookup_input",
             extra={
                 "company_id": company_id,
-                "folio": str(folio or ""),
+                "folio_masked": _mask(folio),
                 "lookup_authoritative": True,
             },
         )

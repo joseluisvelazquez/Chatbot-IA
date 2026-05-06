@@ -19,6 +19,15 @@ from app.siga.siga_repository import obtener_venta_por_folio
 logger = logging.getLogger(__name__)
 
 
+def _mask(value: Any, *, visible: int = 4) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= visible:
+        return "***"
+    return f"***{text[-visible:]}"
+
+
 class VerificationTransitionError(ValueError):
     """La transicion solicitada no respeta el contrato de verificacion."""
 
@@ -62,7 +71,7 @@ def log_flow_event(
             "flow_event_log_failed",
             extra={
                 "session_id": getattr(session, "id", None),
-                "phone": getattr(session, "phone", None),
+                "phone_last4": _mask(getattr(session, "phone", None)),
                 "from_state": from_state,
                 "to_state": to_state,
                 "event_type": event_type,
@@ -72,8 +81,6 @@ def log_flow_event(
 
 def is_verification_complete(payload: Dict[str, Any]) -> bool:
     data = normalize_progress_payload(payload)
-    print(f"DEBUG: Verificación normalizada para check completo: {data}")
-
     return data.get("beneficios", 0) == 1 or data.get("finalizado", 0) == 1
 
 
@@ -122,7 +129,7 @@ class VerificationService:
         except IntegrityError:
             logger.info(
                 "verification_store_create_race",
-                extra={"no_cuenta": no_cuenta},
+                extra={"no_cuenta_masked": _mask(no_cuenta)},
             )
 
     def _lock_row(self, no_cuenta: str) -> VerificacionCuenta:
@@ -224,7 +231,7 @@ class VerificationService:
             logger.info(
                 "verification_transition_idempotent",
                 extra={
-                    "no_cuenta": no_cuenta,
+                    "no_cuenta_masked": _mask(no_cuenta),
                     "step": step,
                     "value": value,
                     "version": current_version,
@@ -257,10 +264,10 @@ class VerificationService:
             logger.exception(
                 "verification_transition_persist_failed",
                 extra={
-                    "no_cuenta": no_cuenta,
+                    "no_cuenta_masked": _mask(no_cuenta),
                     "step": step,
                     "value": value,
-                    "phone": phone,
+                    "phone_last4": _mask(phone),
                     "event_id": event_id,
                 },
             )
@@ -269,12 +276,12 @@ class VerificationService:
         logger.info(
             "verification_transition_persisted",
             extra={
-                "no_cuenta": no_cuenta,
+                "no_cuenta_masked": _mask(no_cuenta),
                 "step": step,
                 "from_value": current_value,
                 "to_value": value,
                 "version": row.version,
-                "phone": phone,
+                "phone_last4": _mask(phone),
                 "event_id": event_id,
             },
         )

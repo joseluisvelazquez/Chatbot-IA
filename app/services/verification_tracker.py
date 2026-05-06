@@ -6,6 +6,15 @@ from app.services.verification_service import VerificationService, VerificationT
 logger = logging.getLogger(__name__)
 
 
+def _mask(value, *, visible: int = 4) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= visible:
+        return "***"
+    return f"***{text[-visible:]}"
+
+
 STEP_MAP = {
     ChatState.CONFIRMAR_NOMBRE: "nombre",
     ChatState.CONFIRMAR_DOMICILIO: "domicilio",
@@ -66,21 +75,15 @@ def track_verification(
     3 = duda 
     """
 
-    print(f"DEBUG: track_verification called with current_state={current_state}, detected_intent={detected_intent}")
-
-
     if db is None:
         return
 
     folio = getattr(session, "folio", None)
-    print(f"DEBUG: Tracking verification for folio {folio}")
 
     if not folio:
         return
 
     step = STEP_MAP.get(current_state)
-
-    print(f"DEBUG: Mapped current_state {current_state} to step {step}")
 
     if not step:
         return
@@ -107,8 +110,8 @@ def track_verification(
             "verification_transition_rejected",
             extra={
                 "session_id": getattr(session, "id", None),
-                "phone": getattr(session, "phone", None),
-                "folio": folio,
+                "phone_last4": _mask(getattr(session, "phone", None)),
+                "folio_masked": _mask(folio),
                 "step": step,
                 "value": value,
                 "reason": str(exc),

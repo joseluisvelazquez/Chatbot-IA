@@ -22,8 +22,14 @@ from app.utils.folio_parser import extraer_folio
 
 from app.services.verification_service import VerificationService, log_flow_event
 from app.services.verification_tracker import track_verification
+from app.core.verification.verification_schema import (
+    assert_valid_step,
+    is_non_trackable_step,
+    is_trackable_step,
+)
 from app.services.ai.ai_service import analyze_inconsistency, generate_ai_response
 from app.services.inconsistencias_service import open_or_patch_inconsistencia
+from app.services.session_context import reset_verification_context_for_folio
 from app.services.ai.intent_interpreter import interpret_intent_with_ai, should_use_ai, is_doubt, detect_frustration
 from app.services.faq.faq_service import find_faq_answer
 from app.services.siga_bridge_sale import (
@@ -34,6 +40,15 @@ from app.services.siga_bridge_sale import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _mask(value, *, visible: int = 4) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= visible:
+        return "***"
+    return f"***{text[-visible:]}"
 
 
 # --------------------------------------
@@ -55,6 +70,13 @@ class FlowResult:
 # --------------------------------------
 
 def _try_mark_step(db, session, step_key: str, bridge_verification=None):
+    if is_non_trackable_step(step_key):
+        logger.debug("verification_step_not_trackable", extra={"step": step_key})
+        return
+
+    if not is_trackable_step(step_key):
+        assert_valid_step(step_key)
+
     if not db:
         return
 
@@ -62,25 +84,22 @@ def _try_mark_step(db, session, step_key: str, bridge_verification=None):
     if not folio:
         return
 
-    try:
-        service = VerificationService(db)
-        result = service.mark_step_from_folio(
-            str(folio),
-            step_key,
-            1,
-            phone=session.phone,
-        )
-        if result is None:
-            no_cuenta = _no_cuenta_from_bridge(session, str(folio), bridge_verification)
-            if no_cuenta:
-                service.update_step_atomic(
-                    no_cuenta=no_cuenta,
-                    step=step_key,
-                    value=1,
-                    phone=session.phone,
-                )
-    except Exception:
-        logger.exception("Error guardando progreso")
+    service = VerificationService(db)
+    result = service.mark_step_from_folio(
+        str(folio),
+        step_key,
+        1,
+        phone=session.phone,
+    )
+    if result is None:
+        no_cuenta = _no_cuenta_from_bridge(session, str(folio), bridge_verification)
+        if no_cuenta:
+            service.update_step_atomic(
+                no_cuenta=no_cuenta,
+                step=step_key,
+                value=1,
+                phone=session.phone,
+            )
 
 def is_descuento_query(text: str) -> bool:
     if not text:
@@ -155,7 +174,7 @@ def _venta_or_bridge_for_folio(db, session, folio: str | None, bridge_verificati
         logger.info(
             "chatbot_folio_resolution_decision",
             extra={
-                "folio": str(folio),
+                "folio_masked": _mask(folio),
                 "found": True,
                 "source": "local_db",
             },
@@ -167,7 +186,7 @@ def _venta_or_bridge_for_folio(db, session, folio: str | None, bridge_verificati
     logger.info(
         "chatbot_folio_resolution_decision",
         extra={
-            "folio": str(folio),
+            "folio_masked": _mask(folio),
             "found": bool(bridge_sale),
             "source": "siga_bridge" if bridge_sale else "not_found",
             "bridge_summary": bridge_sale_summary(bridge_payload) if bridge_payload else None,
@@ -200,10 +219,10 @@ def process_message(
     # --------------------------------------
     def _check_verification_complete(folio: str) -> FlowResult | None:    
         no_cuenta = (
-            VerificationService(db).resolve_no_cuenta_from_folio(folio)
+            VerificationService(db).resolve_no_cuenta_from_folio(folio) if db else None
             or _no_cuenta_from_bridge(session, folio, bridge_verification)
         )
-        verificacion = obtener_verificacion_por_no_cuenta(db,no_cuenta)
+        verificacion = obtener_verificacion_por_no_cuenta(db, no_cuenta) if db and no_cuenta else None
         logger.info(
             "chatbot_verification_complete_check",
             extra={
@@ -624,7 +643,10 @@ def process_message(
         ChatState.FINALIZADO,
     }
 
-    if folio_detectado and not session.folio and current_state in STATES_ALLOW_AUTO_FOLIO:
+    current_folio = str(getattr(session, "folio", None) or "")
+    detected_folio_is_new = bool(folio_detectado and str(folio_detectado) != current_folio)
+
+    if folio_detectado and (not session.folio or detected_folio_is_new) and current_state in STATES_ALLOW_AUTO_FOLIO:
         venta = _venta_or_bridge_for_folio(db, session, folio_detectado, bridge_verification)
 
         if venta:
@@ -639,7 +661,7 @@ def process_message(
             if verification_result:
                 return verification_result
             
-            session.folio = folio_detectado
+            reset_verification_context_for_folio(session, folio_detectado)
 
             _log()
 
@@ -676,7 +698,7 @@ def process_message(
             # FASE 1: SALA DE ESPERA (El folio no existe AÚN)
             # Guardamos el folio en sesión y ponemos en pausa.
             # ==========================================
-            session.folio = folio_a_buscar
+            reset_verification_context_for_folio(session, folio_a_buscar)
             _log()
             
             mensaje_saludo = messages.SALA_ESPERA.format(folio=folio_a_buscar)
@@ -696,7 +718,7 @@ def process_message(
         if verification_result:
             return verification_result
 
-        session.folio = folio_a_buscar
+        reset_verification_context_for_folio(session, folio_a_buscar)
 
         _try_mark_step(db, session, "inicio", bridge_verification)
         _try_mark_step(db, session, "folio", bridge_verification)
@@ -744,8 +766,6 @@ def process_message(
     if current_state == ChatState.INCONSISTENCIA or is_direct_inconsistency:
 
         result = analyze_inconsistency(text, context, session=session)
-        print(" RESULTADO IA:", result)
-
         severidad = result["severidad"]
 
         # --------------------------------------
@@ -808,7 +828,15 @@ def process_message(
         # DECISIÓN
         # --------------------------------------
 
-        print("SEVERIDAD:", severidad, "| CONTADOR:", contador, "| MODERADAS EFECTIVAS:", moderadas_efectivas)
+        logger.debug(
+            "inconsistency_ai_classified",
+            extra={
+                "session_id": getattr(session, "id", None),
+                "severity": severidad,
+                "total": contador.get("total"),
+                "moderadas_efectivas": moderadas_efectivas,
+            },
+        )
 
         # 🔴 crítica → parar flujo y cerrar registro
         if severidad == "critica":

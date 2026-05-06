@@ -4,19 +4,23 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 from typing import Any
 
 from fastapi import HTTPException, status
+from sqlalchemy import false
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import datetime
 
 from app.config.settings import settings
-from app.db.models import AuthToken, Colaboradores, Cuentas
+from app.db.models import AuthToken, BitacoraVentas, ChatSessions, Colaboradores, Cuentas, Inconsistencias
 from app.security.auth_models import PanelUser
 import secrets
 from app.db.models import PanelSession
+
+logger = logging.getLogger(__name__)
 
 ROLE_MAP: dict[str, str] = {
     "GERENTE EJECUTIVO": "admin",
@@ -52,29 +56,61 @@ def get_nombre_resumido(db: Session, username: str) -> str | None:
 
     return colab.nombre_resumido
 
+
+def _query_has_entity(query, entity) -> bool:
+    return any(
+        description.get("entity") is entity
+        for description in getattr(query, "column_descriptions", [])
+    )
+
+
 def restrict_to_assigned(query, user, db):
     """
     Filtra registros según rol del usuario.
     """
 
-    # Roles que ven todo
-    if user.role in ("admin", "sistemas"):
+    if user.role in ("admin", "sistemas", "jefe_operativo"):
         return query
 
-    # Gestor de cobranza → solo lo suyo
     if user.role == "cobranza":
         nombre_resumido = get_nombre_resumido(db, user.username)
 
         if not nombre_resumido:
-            # No tiene asignación válida → no ve nada
-            return query.filter(False)
+            return query.filter(false())
 
-        return query.filter(
-            Cuentas.agente_verificador == nombre_resumido
+        assigned_accounts = (
+            db.query(Cuentas.cuenta)
+            .filter(
+                Cuentas.agente_verificador == nombre_resumido,
+                Cuentas.id_emp_cuenta == user.empresa_id,
+                Cuentas.cuenta.isnot(None),
+            )
         )
 
-    # Cualquier otro rol → por defecto nada
-    return query.filter(False)
+        assigned_folios = (
+            db.query(BitacoraVentas.folio)
+            .filter(
+                BitacoraVentas.no_cuenta.in_(assigned_accounts),
+                BitacoraVentas.id_emp_bv == user.empresa_id,
+                BitacoraVentas.folio.isnot(None),
+            )
+        )
+
+        if _query_has_entity(query, ChatSessions):
+            return query.filter(ChatSessions.folio.in_(assigned_folios))
+
+        if _query_has_entity(query, Inconsistencias):
+            return query.filter(Inconsistencias.folio.in_(assigned_folios))
+
+        if _query_has_entity(query, BitacoraVentas):
+            return query.filter(
+                BitacoraVentas.no_cuenta.in_(assigned_accounts),
+                BitacoraVentas.id_emp_bv == user.empresa_id,
+            )
+
+        return query.filter(false())
+
+    return query.filter(false())
 
 def _get_shared_secret() -> str:
     secret = getattr(settings, "PANEL_SHARED_SECRET", None)
@@ -128,10 +164,7 @@ def _parse_signed_token(token: str) -> dict[str, Any]:
     ).hexdigest()
 
     if not hmac.compare_digest(signature, expected_signature):
-        print("❌ Firma inválida")
-        print("Payload:", payload_json)
-        print("Expected:", expected_signature)
-        print("Received:", signature)
+        logger.warning("siga_token_signature_invalid")
         raise AuthError("Firma inválida")
 
     try:
