@@ -92,7 +92,7 @@ def require_company_scope(user) -> None:
 
 
 def require_reply_permission(user) -> None:
-    if user.role not in ("admin", "ventas", "cobranza", "jefe_operativo"):
+    if user.role not in ("admin", "ventas", "cobranza", "jefe_operativo", "sistemas"):
         raise HTTPException(403, "No autorizado")
 
 

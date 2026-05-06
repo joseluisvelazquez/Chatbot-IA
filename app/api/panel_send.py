@@ -31,7 +31,7 @@ async def send_message(
     session_id: int,
     message: str,
     db: Session = Depends(get_db),
-    user = Depends(require_roles("ventas", "admin", "cobranza", "jefe_operativo")),
+    user = Depends(require_roles("ventas", "admin", "cobranza", "jefe_operativo", "sistemas")),
 ):
 
     chat = (
@@ -68,7 +68,7 @@ async def send_message(
 async def send_file_message(
     payload: SendFileRequest,
     db: Session = Depends(get_db),
-    user = Depends(require_roles("ventas", "admin", "cobranza", "jefe_operativo")),
+    user = Depends(require_roles("ventas", "admin", "cobranza", "jefe_operativo", "sistemas")),
 ):
     chat = (
         restrict_to_assigned(db.query(ChatSessions), user, db)
