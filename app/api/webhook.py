@@ -44,7 +44,7 @@ from app.websockets.manager import manager
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _WEBHOOK_PHONE_LOCKS: dict[str, asyncio.Lock] = {}
-_SIGA_DETAIL_ROLES = {"admin", "jefe_operativo"}
+_SIGA_DETAIL_ROLES = {"admin", "jefe_operativo", "sistemas"}
 
 
 def utcnow_naive() -> datetime:

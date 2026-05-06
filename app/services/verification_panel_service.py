@@ -33,6 +33,7 @@ PANEL_STEP_MAP = {
     ChatState.COMPONENTES_FALTANTES: "componentes",
     ChatState.VERIFICAR_FOTO_COMPONENTE: "componentes",
     ChatState.COMPONENTES_CONFIRMAR_FALTANTES: "componentes",
+    ChatState.FINALIZADO: "finalizado",
 }
 
 INTERRUPTION_STATES = {
@@ -126,6 +127,7 @@ def build_verification_snapshot(
         db,
         session.id,
         verif.json if verif and isinstance(verif.json, dict) else {},
+        current_state=session.state,
     )
     verification_data = compute_verification(progress_json)
 
@@ -179,6 +181,7 @@ def merge_progress_from_flow_events(
     db: Session,
     session_id: int,
     progress: Optional[Dict[str, int]],
+    current_state: Any = None,
 ) -> Dict[str, int]:
     normalized = normalize_progress_payload(progress or {})
 
@@ -201,6 +204,11 @@ def merge_progress_from_flow_events(
         for reached_step in STEP_ORDER[: max_index + 1]:
             if normalized.get(reached_step, 0) == 0:
                 normalized[reached_step] = 1
+
+    if _coerce_chat_state(current_state) == ChatState.FINALIZADO:
+        for step in STEP_ORDER:
+            if normalized.get(step, 0) == 0:
+                normalized[step] = 1
 
     return normalized
 
@@ -233,6 +241,10 @@ def compute_verification(progress: Optional[Dict[str, int]]) -> Dict[str, Any]:
         normalized.get("beneficios") in (1, 2)
         or normalized.get("finalizado") == 1
     )
+    if is_completed:
+        progress_count = total_steps
+        progress_pct = 100 if total_steps else 0
+        last_step = "finalizado"
 
     return {
         "progress_pct": progress_pct,

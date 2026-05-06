@@ -3,6 +3,7 @@ import asyncio
 from app.core.states.state_renderer import render_state
 from app.core.states.states import ChatState
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
+from app.services.verification_panel_service import compute_verification
 from app.services.verification_tracker import track_verification
 from app.services.siga_bridge_cache import (
     get_cached_verification,
@@ -444,3 +445,12 @@ def test_tracker_marks_bridge_verification_progress_from_cached_snapshot(monkeyp
             "event_id": None,
         },
     ]
+
+
+def test_panel_progress_finalizado_counts_as_100_percent():
+    data = compute_verification({"finalizado": 1})
+
+    assert data["progress_pct"] == 100
+    assert data["current_step"] == "finalizado"
+    assert data["progress_count"] == data["total_steps"]
+    assert data["is_completed"] is True

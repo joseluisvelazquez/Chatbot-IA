@@ -62,7 +62,7 @@ def build_siga_url(no_cuenta: str | None, folio: str | None) -> str | None:
 
 
 def redact_siga_details_for_role(item: dict, role: str | None) -> dict:
-    if role in ("admin", "jefe_operativo"):
+    if role in ("admin", "jefe_operativo", "sistemas"):
         return item
 
     siga = item.get("siga") if isinstance(item.get("siga"), dict) else None
@@ -651,6 +651,7 @@ def get_verifications(
             db,
             session.id,
             verification.json if verification else {},
+            current_state=session.state,
         )
 
         verification_data = compute_verification(progress)
@@ -773,6 +774,13 @@ async def get_verification_by_session(
     if verification:
         progress = verification.json or {}
 
+    progress = merge_progress_from_flow_events(
+        db,
+        session.id,
+        progress,
+        current_state=session.state,
+    )
+
     verification_data = compute_verification(progress)
 
     # =========================
@@ -838,7 +846,7 @@ async def get_verification_by_session(
         "last_activity": session.last_message_at,
         "siga_url": build_siga_url(no_cuenta, folio),
     }
-    if user.role in ("admin", "jefe_operativo"):
+    if user.role in ("admin", "jefe_operativo", "sistemas"):
         fetched = False
         siga_snapshot = cached_siga
         siga_cache_row = cached_siga_row
@@ -868,7 +876,13 @@ async def get_verification_by_session(
                 .first()
             )
             if refreshed_verification:
-                refreshed_data = compute_verification(refreshed_verification.json or {})
+                refreshed_progress = merge_progress_from_flow_events(
+                    db,
+                    session.id,
+                    refreshed_verification.json or {},
+                    current_state=session.state,
+                )
+                refreshed_data = compute_verification(refreshed_progress)
                 item.update(
                     {
                         "progress_pct": refreshed_data["progress_pct"],
@@ -927,7 +941,7 @@ async def get_verification_by_session(
                     "source": "siga_refresh",
                     "payload": item,
                 },
-                roles={"admin", "jefe_operativo"},
+                roles={"admin", "jefe_operativo", "sistemas"},
             )
         return item
 

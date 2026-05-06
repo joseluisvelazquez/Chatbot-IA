@@ -29,7 +29,7 @@ const SEVERITY_LABELS = {
 };
 
 function canUseSigaBridgeOps() {
-    return ["admin", "jefe_operativo"].includes(window.currentUser?.role);
+    return ["admin", "jefe_operativo", "sistemas"].includes(window.currentUser?.role);
 }
 
 function isVerificationDetailRequestActive(sessionId) {
