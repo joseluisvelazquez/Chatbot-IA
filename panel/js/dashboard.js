@@ -9,8 +9,12 @@ import { dispatch, subscribeStore, getState } from "./store.js"
 let funnelChartInstance = null;
 let unsubscribeDashboardStore = null
 
+function hasAllowedCompany() {
+    return [1, 8].includes(Number(window.currentUser?.empresa_id));
+}
+
 function canViewSigaBridgeMetrics() {
-    return ["admin", "jefe_operativo"].includes(window.currentUser?.role);
+    return hasAllowedCompany() && ["admin", "jefe_operativo"].includes(window.currentUser?.role);
 }
 
 async function loadSummary() {

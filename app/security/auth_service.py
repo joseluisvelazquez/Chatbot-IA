@@ -22,6 +22,8 @@ from app.db.models import PanelSession
 
 logger = logging.getLogger(__name__)
 
+ALLOWED_PANEL_COMPANY_IDS = frozenset({1, 8})
+
 ROLE_MAP: dict[str, str] = {
     "GERENTE EJECUTIVO": "admin",
     "GERENTE GENERAL": "admin",
@@ -43,6 +45,14 @@ class AuthError(HTTPException):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=detail,
         )
+
+
+def is_allowed_panel_company(empresa_id: object) -> bool:
+    try:
+        return int(empresa_id) in ALLOWED_PANEL_COMPANY_IDS
+    except (TypeError, ValueError):
+        return False
+
 
 def get_nombre_resumido(db: Session, username: str) -> str | None:
     colab = (
@@ -195,6 +205,9 @@ def decode_panel_session(session_token: str, db: Session) -> PanelUser:
     if row.exp <= now:
         raise AuthError("Sesión expirada")
 
+    if not is_allowed_panel_company(row.empresa_id):
+        raise AuthError("Empresa inválida en sesión")
+
     return PanelUser(
         username=row.username,
         puesto=row.puesto,
@@ -297,6 +310,9 @@ def decode_siga_token(token: str, db: Session) -> PanelUser:
         empresa_id = int(empresa_raw)
     except (TypeError, ValueError) as exc:
         raise AuthError("Empresa inválida") from exc
+
+    if not is_allowed_panel_company(empresa_id):
+        raise AuthError("Empresa inválida")
 
     try:
         exp = int(exp_raw)

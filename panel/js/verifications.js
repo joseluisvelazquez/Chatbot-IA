@@ -28,8 +28,12 @@ const SEVERITY_LABELS = {
     leve: "Leve",
 };
 
+function hasAllowedCompany() {
+    return [1, 8].includes(Number(window.currentUser?.empresa_id));
+}
+
 function canUseSigaBridgeOps() {
-    return ["admin", "jefe_operativo", "sistemas"].includes(window.currentUser?.role);
+    return hasAllowedCompany() && ["admin", "jefe_operativo", "sistemas"].includes(window.currentUser?.role);
 }
 
 function isVerificationDetailRequestActive(sessionId) {

@@ -287,11 +287,15 @@ def classify_panel_status(
     # 🔵 normal
     return "in_progress"
 
-def resolve_no_cuenta(db: Session, folio: str) -> Optional[str]:
+def resolve_no_cuenta(
+    db: Session,
+    folio: str,
+    company_id: int = 1,
+) -> Optional[str]:
     if not folio:
         return None
 
-    venta = obtener_venta_por_folio(db, str(folio))
+    venta = obtener_venta_por_folio(db, str(folio), company_id)
     if not venta:
         return None
 
@@ -305,6 +309,7 @@ def resolve_no_cuenta(db: Session, folio: str) -> Optional[str]:
 def resolve_cuentas_from_folios(
     folios: Iterable[str],
     db: Optional[Session] = None,
+    company_id: int = 1,
 ) -> Dict[str, Optional[str]]:
     result: Dict[str, Optional[str]] = {}
 
@@ -315,7 +320,7 @@ def resolve_cuentas_from_folios(
             continue
 
         try:
-            result[folio_key] = resolve_no_cuenta(db, folio_key)
+            result[folio_key] = resolve_no_cuenta(db, folio_key, company_id)
         except Exception:
             result[folio_key] = None
 

@@ -98,11 +98,15 @@ class VerificationService:
     def __init__(self, db: Session):
         self.db = db
 
-    def resolve_no_cuenta_from_folio(self, folio: str) -> Optional[str]:
+    def resolve_no_cuenta_from_folio(
+        self,
+        folio: str,
+        company_id: int = 1,
+    ) -> Optional[str]:
         if not folio or not isinstance(folio, str):
             return None
 
-        venta = obtener_venta_por_folio(self.db, folio)
+        venta = obtener_venta_por_folio(self.db, folio, company_id)
         if not venta:
             return None
 

@@ -6,12 +6,16 @@ from typing import Optional
 # ===============================
 # OBTENER VENTA POR FOLIO
 # ===============================
-def obtener_venta_por_folio(db: Session, folio: str) -> Optional[BitacoraVentas]:
+def obtener_venta_por_folio(
+    db: Session,
+    folio: str,
+    company_id: int = 1,
+) -> Optional[BitacoraVentas]:
     return (
         db.query(BitacoraVentas)
         .filter(
             BitacoraVentas.folio == folio,
-            BitacoraVentas.id_emp_bv == 1
+            BitacoraVentas.id_emp_bv == company_id
         )
         .first()
     )

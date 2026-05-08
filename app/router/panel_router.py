@@ -14,7 +14,11 @@ from app.schemas.panel import (
 
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.db.session import get_db
-from app.security.auth_service import decode_panel_session, restrict_to_assigned
+from app.security.auth_service import (
+    decode_panel_session,
+    is_allowed_panel_company,
+    restrict_to_assigned,
+)
 from app.services.verification_service import VerificationService
 from app.websockets.manager import manager
 from app.db.models import VerificacionCuenta, ChatSessions, Inconsistencias, Message, FlowEvent
@@ -88,7 +92,7 @@ def redact_siga_details_for_role(item: dict, role: str | None) -> dict:
 
 
 def require_company_scope(user) -> None:
-    if user.empresa_id != 1:
+    if not is_allowed_panel_company(user.empresa_id):
         raise HTTPException(403, "No autorizado")
 
 
@@ -213,8 +217,7 @@ async def mark_as_read(
     return {"status": "ok"}
 
 def resolve_cuentas_from_folios(folios: list[str], db: Session, user) -> dict:
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
+    require_company_scope(user)
 
     unique_folios = [str(folio) for folio in dict.fromkeys(folios) if folio]
     result = {folio: None for folio in unique_folios}
@@ -226,7 +229,7 @@ def resolve_cuentas_from_folios(folios: list[str], db: Session, user) -> dict:
         db.query(BitacoraVentas.folio, BitacoraVentas.no_cuenta)
         .filter(
             BitacoraVentas.folio.in_(unique_folios),
-            BitacoraVentas.id_emp_bv == 1,
+            BitacoraVentas.id_emp_bv == user.empresa_id,
         )
         .order_by(desc(BitacoraVentas.id_venta_b))
         .all()
@@ -500,8 +503,7 @@ def get_verifications(
     # =========================
     # 🔐 VALIDACIONES
     # =========================
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
+    require_company_scope(user)
 
     valid_statuses = {
         None,
@@ -570,7 +572,7 @@ def get_verifications(
         restrict_to_assigned(db.query(BitacoraVentas.tel_1, BitacoraVentas.nombre_completo), user, db)
         .filter(
             func.right(BitacoraVentas.tel_1, 10).in_(normalized_phones),
-            BitacoraVentas.id_emp_bv == 1
+            BitacoraVentas.id_emp_bv == user.empresa_id
         )
         .all()
     )
@@ -731,8 +733,7 @@ async def get_verification_by_session(
     # =========================
     # 🔐 VALIDACIÓN
     # =========================
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
+    require_company_scope(user)
 
     session = get_scoped_session_or_404(
         db,
@@ -753,7 +754,11 @@ async def get_verification_by_session(
     # =========================
     service = VerificationService(db)
 
-    no_cuenta = service.resolve_no_cuenta_from_folio(str(session.folio)) if session.folio else None
+    no_cuenta = (
+        service.resolve_no_cuenta_from_folio(str(session.folio), user.empresa_id)
+        if session.folio
+        else None
+    )
     if not no_cuenta and isinstance(cached_siga, dict) and cached_siga.get("no_cuenta"):
         no_cuenta = str(cached_siga["no_cuenta"])
 
@@ -961,8 +966,7 @@ async def update_inconsistencia_panel_resolution(
     db: Session = Depends(get_db),
     user = Depends(get_current_panel_user),
 ):
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
+    require_company_scope(user)
 
     payload = await request.json()
     if "resolved_by_panel" not in payload or not isinstance(payload["resolved_by_panel"], bool):
@@ -1103,7 +1107,7 @@ def get_conversations(
         db.query(BitacoraVentas.tel_1, BitacoraVentas.nombre_completo)
         .filter(
             func.right(BitacoraVentas.tel_1, 10).in_(normalized_phones),
-            BitacoraVentas.id_emp_bv == 1
+            BitacoraVentas.id_emp_bv == user.empresa_id
         )
         .all()
     )
@@ -1171,8 +1175,7 @@ def get_messages(
     if not session:
         raise HTTPException(404, "La sesión no existe")
     # evita acceso cruzado
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
+    require_company_scope(user)
 
     base_query = db.query(Message).filter(
         Message.session_id == session_id
@@ -1225,8 +1228,7 @@ async def send_agent_message(
     if len(content) > 1000:
         raise HTTPException(400, "Mensaje demasiado largo")
 
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
+    require_company_scope(user)
     require_reply_permission(user)
 
     session = get_scoped_session_or_404(
@@ -1336,8 +1338,7 @@ async def send_agent_file(
     except (TypeError, ValueError):
         raise HTTPException(400, "session_id invalido")
 
-    if user.empresa_id != 1:
-        raise HTTPException(403, "No autorizado")
+    require_company_scope(user)
     require_reply_permission(user)
 
     session = get_scoped_session_or_404(

@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.security.auth_dependencies import require_roles
+from app.security.auth_service import is_allowed_panel_company
 from app.services.siga_bridge import (
     SigaBridgeBadRequestError,
     SigaBridgeConfigError,
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/panel/siga-bridge", tags=["panel"])
 
 
 def require_bridge_user(user=Depends(require_roles("admin", "jefe_operativo"))):
-    if user.empresa_id != 1:
+    if not is_allowed_panel_company(user.empresa_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
     return user
 

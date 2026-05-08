@@ -7,7 +7,7 @@ from app.db.models import ChatSessions
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.services.message_service import save_message
 from app.security.auth_dependencies import require_roles
-from app.security.auth_service import restrict_to_assigned
+from app.security.auth_service import is_allowed_panel_company, restrict_to_assigned
 
 #Para enviar mensajes desde el panel de administración a WhatsApp
 
@@ -43,7 +43,7 @@ async def send_message(
     if not chat:
         return {"error": "session not found"}
     #  VALIDACIÓN EMPRESA (mínimo control multi-tenant)
-    if user.empresa_id != 1:
+    if not is_allowed_panel_company(user.empresa_id):
         raise HTTPException(status_code=403, detail="Acceso no permitido")
 
     # enviar a WhatsApp
@@ -79,7 +79,7 @@ async def send_file_message(
     if not chat:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if user.empresa_id != 1:
+    if not is_allowed_panel_company(user.empresa_id):
         raise HTTPException(status_code=403, detail="Acceso no permitido")
 
     phone = chat.phone
