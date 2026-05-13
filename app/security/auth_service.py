@@ -33,7 +33,7 @@ ROLE_MAP: dict[str, str] = {
     "GESTOR DE COBRANZA": "cobranza",
     "SUPERVISOR DE COBRANZA": "cobranza",
     "JEFE DE SISTEMAS": "sistemas",
-    "JEFE OPERATIVO": "jefe_operativo",
+    "JEFE DE OPERACIONES": "jefe_operativo",
     "DESARROLLOS DE WEB JR": "sistemas",
     "PROGRAMADOR": "sistemas",
 }
