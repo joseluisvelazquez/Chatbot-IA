@@ -1,18 +1,159 @@
 <section class="flex flex-col gap-4 md:gap-6 text-gray-900 dark:text-white">
-    <div>
-        <h1 class="text-xl font-semibold md:text-2xl">Cobranza</h1>
-        <p class="text-sm text-gray-500 dark:text-slate-400">
-            Este módulo quedó preparado dentro del panel, pero todavía no tiene flujos operativos habilitados.
-        </p>
-    </div>
 
-    <div class="rounded-lg border border-dashed border-gray-300 bg-white p-5 md:p-8 dark:border-slate-700 dark:bg-slate-800">
-        <div class="max-w-2xl space-y-3">
-            <h2 class="text-lg font-semibold">Pendiente de integración</h2>
-            <p class="text-sm text-gray-600 dark:text-slate-300">
-                La navegación y la carga de la vista ya no se rompen al entrar aquí. Cuando se definan los endpoints y
-                componentes de cobranza, este espacio puede conectarse sin volver a tocar la infraestructura del panel.
+    <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+            <h1 class="text-xl font-semibold md:text-2xl">Cobranza</h1>
+            <p class="text-sm text-gray-500 dark:text-slate-400">
+                Cuentas de SIGA normalizadas para seguimiento operativo.
             </p>
         </div>
+
+        <button
+            id="collectionsReloadButton"
+            type="button"
+            class="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+            <i data-lucide="refresh-cw" class="h-4 w-4"></i>
+            <span>Actualizar</span>
+        </button>
     </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4">
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5">
+            <span class="text-sm text-gray-500 dark:text-slate-400">Cuentas</span>
+            <div id="collectionsKpiTotal" class="mt-2 text-2xl font-semibold">0</div>
+        </div>
+
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5">
+            <span class="text-sm text-gray-500 dark:text-slate-400">Con atraso</span>
+            <div id="collectionsKpiOverdue" class="mt-2 text-2xl font-semibold">0</div>
+        </div>
+
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5">
+            <span class="text-sm text-gray-500 dark:text-slate-400">Liquidadas</span>
+            <div id="collectionsKpiPaid" class="mt-2 text-2xl font-semibold">0</div>
+        </div>
+
+        <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-5">
+            <span class="text-sm text-gray-500 dark:text-slate-400">Activas</span>
+            <div id="collectionsKpiActive" class="mt-2 text-2xl font-semibold">0</div>
+        </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-4 md:p-5 flex flex-col gap-4">
+        <form id="collectionsFilterForm" class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <label class="min-w-0">
+                <span class="text-xs font-medium text-gray-500 dark:text-slate-400">No. cuenta</span>
+                <input id="collectionFilterAccount" name="no_cuenta" class="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900" autocomplete="off">
+            </label>
+
+            <label class="min-w-0">
+                <span class="text-xs font-medium text-gray-500 dark:text-slate-400">Folio</span>
+                <input id="collectionFilterFolio" name="folio" class="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900" autocomplete="off">
+            </label>
+
+            <label class="min-w-0">
+                <span class="text-xs font-medium text-gray-500 dark:text-slate-400">Telefono</span>
+                <input id="collectionFilterPhone" name="phone" class="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900" autocomplete="off">
+            </label>
+
+            <label class="min-w-0">
+                <span class="text-xs font-medium text-gray-500 dark:text-slate-400">Nombre</span>
+                <input id="collectionFilterName" name="name" class="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900" autocomplete="off">
+            </label>
+
+            <label class="min-w-0">
+                <span class="text-xs font-medium text-gray-500 dark:text-slate-400">Estado</span>
+                <select id="collectionFilterStatus" name="status" class="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900">
+                    <option value="">Activas</option>
+                    <option value="all">Todas</option>
+                    <option value="sano">Sano</option>
+                    <option value="critico">Critico</option>
+                    <option value="otro">Otros estados</option>
+                    <option value="pagado">Pagado</option>
+                </select>
+            </label>
+
+            <label class="min-w-0">
+                <span class="text-xs font-medium text-gray-500 dark:text-slate-400">Desde</span>
+                <input id="collectionFilterDateFrom" name="date_from" type="date" class="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900">
+            </label>
+
+            <label class="min-w-0">
+                <span class="text-xs font-medium text-gray-500 dark:text-slate-400">Hasta</span>
+                <input id="collectionFilterDateTo" name="date_to" type="date" class="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900">
+            </label>
+
+            <label id="collectionFilterGestorGroup" class="hidden min-w-0">
+                <span class="text-xs font-medium text-gray-500 dark:text-slate-400">Gestor</span>
+                <select id="collectionFilterGestor" name="gestor" class="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900">
+                    <option value="">Todos</option>
+                </select>
+            </label>
+
+            <div class="flex flex-col justify-end gap-2">
+                <div class="flex flex-wrap gap-2">
+                    <label class="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-700 dark:bg-slate-700 dark:text-slate-200">
+                        <input id="collectionFilterOverdue" name="overdue_only" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-500">
+                        <span>Atraso</span>
+                    </label>
+                    <label class="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-700 dark:bg-slate-700 dark:text-slate-200">
+                        <input id="collectionFilterIncludePaid" name="include_paid" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-500">
+                        <span>Mostrar pagadas</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-2 sm:flex-row md:col-span-2 xl:col-span-4">
+                <button type="submit" class="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600">
+                    <i data-lucide="search" class="h-4 w-4"></i>
+                    <span>Buscar</span>
+                </button>
+                <button id="collectionsClearFiltersButton" type="button" class="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-200 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600">
+                    <i data-lucide="x" class="h-4 w-4"></i>
+                    <span>Limpiar</span>
+                </button>
+            </div>
+        </form>
+
+        <div id="collectionsBridgeMessage" class="hidden rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"></div>
+        <div id="collectionsLoading" class="hidden text-gray-500 dark:text-slate-400">Cargando cobranza...</div>
+        <div id="collectionsIncrementalLoading" class="hidden text-sm text-gray-500 dark:text-slate-400">Cargando mas cuentas...</div>
+        <div id="collectionsError" class="hidden text-red-500"></div>
+        <div id="collectionsEmpty" class="hidden text-gray-500 dark:text-slate-400">No hay cuentas para mostrar.</div>
+
+        <div id="collectionsTableWrapper" class="overflow-x-auto">
+            <table class="w-full min-w-[1180px] text-sm">
+                <thead>
+                    <tr class="border-b border-gray-200 dark:border-slate-700 text-gray-500 dark:text-slate-400">
+                        <th class="px-4 py-3 text-left font-medium">No. cuenta</th>
+                        <th class="px-4 py-3 text-left font-medium">Folio</th>
+                        <th class="px-4 py-3 text-left font-medium">Telefono</th>
+                        <th class="px-4 py-3 text-left font-medium">Cliente</th>
+                        <th class="px-4 py-3 text-left font-medium">Estado</th>
+                        <th class="px-4 py-3 text-left font-medium">Saldo</th>
+                        <th class="px-4 py-3 text-left font-medium">Ultimo pago</th>
+                        <th class="px-4 py-3 text-left font-medium">Fecha venta</th>
+                        <th class="px-4 py-3 text-left font-medium">Atraso</th>
+                        <th class="px-4 py-3 text-left font-medium">Total pagado</th>
+                    </tr>
+                </thead>
+
+                <tbody id="collectionsTableBody"></tbody>
+            </table>
+        </div>
+
+        <div class="flex flex-col items-center gap-2 border-t border-gray-100 pt-3 dark:border-slate-700 sm:flex-row sm:justify-between">
+            <div id="collectionsEnd" class="hidden text-sm text-gray-500 dark:text-slate-400">Fin de resultados.</div>
+            <button
+                id="collectionsLoadMoreButton"
+                type="button"
+                class="hidden inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600"
+            >
+                <i data-lucide="chevrons-down" class="h-4 w-4"></i>
+                <span>Cargar mas</span>
+            </button>
+        </div>
+    </div>
+
 </section>

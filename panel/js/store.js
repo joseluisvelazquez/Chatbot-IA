@@ -44,6 +44,13 @@ const state = {
         selected: null,
         _version: 0,
     },
+    collections: {
+        byAccount: {},
+        order: [],
+        loaded: false,
+        selected: null,
+        _version: 0,
+    },
 }
 
 const listeners = new Set()
@@ -164,6 +171,27 @@ function upsertVerification(item) {
     const exists = state.verifications.order.includes(sessionKey)
     if (!exists) {
         state.verifications.order.unshift(sessionKey)
+    }
+
+    return true
+}
+
+function upsertCollection(item, options = {}) {
+    const account = item?.no_cuenta == null ? null : String(item.no_cuenta)
+    if (!account) return false
+
+    state.collections.byAccount[account] = {
+        ...(state.collections.byAccount[account] || {}),
+        ...item,
+    }
+
+    const exists = state.collections.order.includes(account)
+    if (!exists) {
+        if (options.append) {
+            state.collections.order.push(account)
+        } else {
+            state.collections.order.unshift(account)
+        }
     }
 
     return true
@@ -742,6 +770,48 @@ export function dispatch(action) {
 
             state.verifications._version++
 
+            break
+        }
+
+        case "collections/loaded": {
+            const items = Array.isArray(action.payload) ? action.payload : []
+
+            state.collections.byAccount = {}
+            state.collections.order = []
+
+            items.forEach(item => {
+                upsertCollection(item, { append: true })
+            })
+
+            state.collections.loaded = true
+            state.collections._version++
+            break
+        }
+
+        case "collections/append": {
+            const items = Array.isArray(action.payload) ? action.payload : []
+            let changed = false
+
+            items.forEach(item => {
+                changed = upsertCollection(item, { append: true }) || changed
+            })
+
+            if (changed || items.length) {
+                state.collections.loaded = true
+                state.collections._version++
+            }
+            break
+        }
+
+        case "collections/upsert": {
+            if (upsertCollection(action.payload)) {
+                state.collections._version++
+            }
+            break
+        }
+
+        case "collections/select": {
+            state.collections.selected = action.payload == null ? null : String(action.payload)
             break
         }
 

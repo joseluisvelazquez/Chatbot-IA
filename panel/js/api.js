@@ -91,6 +91,78 @@ export async function fetchVerifications(status = "", limit = 500, offset = 0) {
     return apiRequest(`/panel/verifications?${params.toString()}`);
 }
 
+export async function fetchCollections(filters = {}, limit = 25, offset = 0, options = {}) {
+    const params = new URLSearchParams();
+
+    const map = {
+        no_cuenta: "no_cuenta",
+        cuenta: "cuenta",
+        folio: "folio",
+        phone: "phone",
+        telefono: "telefono",
+        name: "name",
+        nombre: "nombre",
+        cliente: "cliente",
+        status: "status",
+        classification: "classification",
+        gestor: "gestor",
+        date_from: "date_from",
+        date_to: "date_to",
+    };
+
+    Object.entries(map).forEach(([key, param]) => {
+        const value = filters?.[key];
+        if (value !== undefined && value !== null && String(value).trim()) {
+            params.set(param, String(value).trim());
+        }
+    });
+
+    ["overdue_only", "paid_only", "include_paid", "active_only"].forEach((key) => {
+        if (filters?.[key]) {
+            params.set(key, "true");
+        }
+    });
+
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+
+    return apiRequest(`/panel/collections?${params.toString()}`, {
+        signal: options.signal,
+    });
+}
+
+export async function fetchCollectionManagers(options = {}) {
+    const params = new URLSearchParams();
+    const limit = Number(options.limit || 100);
+    if (options.search) params.set("search", String(options.search).trim());
+    params.set("limit", String(Math.max(1, Math.min(200, limit))));
+
+    return apiRequest(`/panel/collections/managers?${params.toString()}`, {
+        signal: options.signal,
+    });
+}
+
+function includePaidQuery(options = {}) {
+    const params = new URLSearchParams();
+    if (options.includePaid) params.set("include_paid", "true");
+    const query = params.toString();
+    return query ? `?${query}` : "";
+}
+
+export async function getCollectionByAccount(noCuenta, options = {}) {
+    return apiRequest(`/panel/collections/${encodeURIComponent(noCuenta)}${includePaidQuery(options)}`);
+}
+
+export async function getCollectionPayments(noCuenta, options = {}) {
+    return apiRequest(`/panel/collections/${encodeURIComponent(noCuenta)}/payments${includePaidQuery(options)}`);
+}
+
+export async function refreshCollectionAccount(noCuenta, options = {}) {
+    return apiRequest(`/panel/collections/${encodeURIComponent(noCuenta)}/refresh${includePaidQuery(options)}`, {
+        method: "POST",
+    });
+}
+
 export async function getVerificationBySession(sessionId, options = {}) {
     const params = new URLSearchParams();
 

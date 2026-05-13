@@ -15,7 +15,19 @@ from app.services.siga_bridge_sale import bridge_sale_summary
 logger = logging.getLogger(__name__)
 
 _BODY_PREVIEW_LIMIT = 500
-_SENSITIVE_QUERY_KEYS = {"phone", "folio", "cuenta", "token", "bridge_token", "x-bridge-token"}
+_SENSITIVE_QUERY_KEYS = {
+    "phone",
+    "folio",
+    "cuenta",
+    "name",
+    "nombre",
+    "gestor",
+    "collector",
+    "search",
+    "token",
+    "bridge_token",
+    "x-bridge-token",
+}
 _SENSITIVE_HEADER_MARKERS = ("authorization", "cookie", "token")
 _FLAT_VERIFICATION_KEYS = {
     "found",
@@ -33,6 +45,8 @@ _CACHE_TTLS_SECONDS = {
     "customer": 300.0,
     "account": 60.0,
     "payments": 30.0,
+    "collections": 30.0,
+    "collection_managers": 300.0,
 }
 _cache: dict[tuple[str, tuple[tuple[str, str], ...]], tuple[float, Any]] = {}
 _CACHE_MISS = object()
@@ -372,6 +386,73 @@ class SigaBridgeClient:
         if limit is not None:
             params["limit"] = limit
         return await self._get("payments", params, bypass_cache=bypass_cache)
+
+    async def get_collections(
+        self,
+        company_id: int,
+        *,
+        cuenta: str | None = None,
+        folio: str | None = None,
+        phone: str | None = None,
+        name: str | None = None,
+        status: str | None = None,
+        classification: str | None = None,
+        gestor: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        overdue_only: bool = False,
+        paid_only: bool = False,
+        include_paid: bool = False,
+        active_only: bool = False,
+        collector: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        bypass_cache: bool = False,
+    ) -> dict[str, Any] | list[Any] | None:
+        params: dict[str, Any] = {"company_id": company_id}
+        optional_params = {
+            "cuenta": cuenta,
+            "folio": folio,
+            "phone": phone,
+            "name": name,
+            "status": status,
+            "classification": classification,
+            "date_from": date_from,
+            "date_to": date_to,
+            "collector": collector,
+            "gestor": gestor,
+            "limit": limit,
+            "offset": offset,
+        }
+        params.update({
+            key: value
+            for key, value in optional_params.items()
+            if value not in (None, "")
+        })
+        if overdue_only:
+            params["overdue_only"] = "1"
+        if paid_only:
+            params["paid_only"] = "1"
+        if include_paid:
+            params["include_paid"] = "1"
+        if active_only:
+            params["active_only"] = "1"
+        return await self._get("collections", params, bypass_cache=bypass_cache)
+
+    async def get_collection_managers(
+        self,
+        company_id: int,
+        *,
+        search: str | None = None,
+        limit: int | None = None,
+        bypass_cache: bool = False,
+    ) -> dict[str, Any] | list[Any] | None:
+        params: dict[str, Any] = {"company_id": company_id}
+        if search:
+            params["search"] = search
+        if limit is not None:
+            params["limit"] = limit
+        return await self._get("collection_managers", params, bypass_cache=bypass_cache)
 
     def _validate_config(self) -> None:
         if not self.enabled:
@@ -892,3 +973,17 @@ async def get_payments(
         limit,
         bypass_cache=bypass_cache,
     )
+
+
+async def get_collections(
+    company_id: int,
+    **kwargs: Any,
+) -> dict[str, Any] | list[Any] | None:
+    return await get_siga_bridge_client().get_collections(company_id, **kwargs)
+
+
+async def get_collection_managers(
+    company_id: int,
+    **kwargs: Any,
+) -> dict[str, Any] | list[Any] | None:
+    return await get_siga_bridge_client().get_collection_managers(company_id, **kwargs)

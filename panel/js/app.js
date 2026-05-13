@@ -2,6 +2,7 @@ import { renderHeader, renderSidebar } from "./ui.js";
 import { initVerificationsPage } from "./verifications.js";
 import { initConversationsPage } from "./chat.js";
 import { initDashboardPage } from "./dashboard.js";
+import { initCollectionsPage } from "./collections.js";
 import { initSidebar } from "./sidebar.js";
 import { setLayout } from "./layoutmanager.js";
 import { getAuthUrl, getPanelHomeUrl, getPanelPageUrl, isLocalPanelEnvironment } from "./config.js";
@@ -31,7 +32,7 @@ const PAGE_CONFIG = {
     cobranza: {
         path: getPanelPageUrl("pages/cobranza.html"),
         layout: "default",
-        init: null
+        init: initCollectionsPage
     }
 };
 export function startSessionHeartbeat() {

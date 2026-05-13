@@ -252,6 +252,63 @@ def test_params_are_sent_correctly_without_logging_token():
     }
 
 
+def test_collections_params_are_sent_correctly():
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        assert params["action"] == "collections"
+        assert params["company_id"] == "8"
+        assert params["cuenta"] == "60436"
+        assert params["status"] == "critico"
+        assert params["include_paid"] == "1"
+        assert params["gestor"] == "GESTOR UNO"
+        assert params["overdue_only"] == "1"
+        assert params["limit"] == "25"
+        assert params["offset"] == "5"
+        return httpx.Response(
+            200,
+            json=bridge_payload(
+                action="collections",
+                data={"accounts": [], "total": 0},
+            ),
+        )
+
+    client = make_client(handler)
+
+    assert run(
+        client.get_collections(
+            8,
+            cuenta="60436",
+            status="critico",
+            include_paid=True,
+            gestor="GESTOR UNO",
+            overdue_only=True,
+            limit=25,
+            offset=5,
+        )
+    ) == {"accounts": [], "total": 0}
+
+
+def test_collection_managers_params_are_sent_correctly():
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        assert params["action"] == "collection_managers"
+        assert params["company_id"] == "8"
+        assert params["limit"] == "100"
+        return httpx.Response(
+            200,
+            json=bridge_payload(
+                action="collection_managers",
+                data={"items": [{"value": "GESTOR UNO"}]},
+            ),
+        )
+
+    client = make_client(handler)
+
+    assert run(client.get_collection_managers(8, limit=100)) == {
+        "items": [{"value": "GESTOR UNO"}],
+    }
+
+
 def test_flat_verification_contract_returns_bridge_payload():
     def handler(request: httpx.Request) -> httpx.Response:
         params = request.url.params

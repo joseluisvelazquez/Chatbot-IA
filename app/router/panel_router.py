@@ -42,6 +42,15 @@ from app.services.verification_panel_service import (
 )
 from app.utils.timezone import mexico_now_naive
 from app.services.inconsistencias_service import mark_panel_resolution
+from app.services.collections_panel_service import (
+    build_collection_filters,
+    can_filter_collections_by_gestor,
+    can_view_collections,
+    get_collection_detail,
+    get_collection_payments,
+    list_collection_managers,
+    list_collections,
+)
 from app.services.siga_bridge_cache import (
     apply_siga_snapshot_to_panel_item,
     get_cached_verification,
@@ -98,6 +107,11 @@ def require_company_scope(user) -> None:
 
 def require_reply_permission(user) -> None:
     if user.role not in ("admin", "ventas", "cobranza", "jefe_operativo", "sistemas"):
+        raise HTTPException(403, "No autorizado")
+
+
+def require_collection_permission(user) -> None:
+    if not can_view_collections(user):
         raise HTTPException(403, "No autorizado")
 
 
@@ -491,6 +505,154 @@ def dashboard_summary(
 # =========================================
 # Obtener verificaciones (PAGINADO + DTO + LÓGICA DE NEGOCIO)
 # =========================================
+
+@router.get("/collections")
+async def get_collections(
+    no_cuenta: str | None = None,
+    cuenta: str | None = None,
+    folio: str | None = None,
+    phone: str | None = None,
+    telefono: str | None = None,
+    name: str | None = None,
+    nombre: str | None = None,
+    cliente: str | None = None,
+    status: str | None = None,
+    classification: str | None = None,
+    gestor: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    overdue_only: bool = False,
+    paid_only: bool = False,
+    include_paid: bool = False,
+    active_only: bool = True,
+    limit: int = 25,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    require_company_scope(user)
+    require_collection_permission(user)
+
+    try:
+        filters = build_collection_filters(
+            account=no_cuenta or cuenta,
+            folio=folio,
+            phone=phone or telefono,
+            name=name or nombre or cliente,
+            status=status,
+            classification=classification,
+            gestor=gestor,
+            date_from=date_from,
+            date_to=date_to,
+            overdue_only=overdue_only,
+            paid_only=paid_only,
+            include_paid=include_paid,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    return await list_collections(db, user, filters)
+
+
+@router.get("/collections/managers")
+async def get_collection_managers_endpoint(
+    search: str | None = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    require_company_scope(user)
+    require_collection_permission(user)
+    if not can_filter_collections_by_gestor(user):
+        raise HTTPException(403, "No autorizado")
+
+    try:
+        return await list_collection_managers(db, user, search=search, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.get("/collections/{no_cuenta}/payments")
+async def get_collection_payments_endpoint(
+    no_cuenta: str,
+    include_paid: bool = False,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    require_company_scope(user)
+    require_collection_permission(user)
+
+    try:
+        filters = build_collection_filters(account=no_cuenta, limit=1)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    payments = await get_collection_payments(
+        db,
+        user,
+        filters.account or no_cuenta,
+        include_paid=include_paid,
+    )
+    if payments is None:
+        raise HTTPException(404, "Cuenta no encontrada")
+    return {"data": payments, "total": len(payments)}
+
+
+@router.get("/collections/{no_cuenta}")
+async def get_collection_by_account(
+    no_cuenta: str,
+    include_paid: bool = False,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    require_company_scope(user)
+    require_collection_permission(user)
+
+    try:
+        filters = build_collection_filters(account=no_cuenta, limit=1)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    item = await get_collection_detail(
+        db,
+        user,
+        filters.account or no_cuenta,
+        include_paid=include_paid,
+    )
+    if not item:
+        raise HTTPException(404, "Cuenta no encontrada")
+    return item
+
+
+@router.post("/collections/{no_cuenta}/refresh")
+async def refresh_collection_by_account(
+    no_cuenta: str,
+    include_paid: bool = False,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    require_company_scope(user)
+    require_collection_permission(user)
+
+    try:
+        filters = build_collection_filters(account=no_cuenta, limit=1)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    item = await get_collection_detail(
+        db,
+        user,
+        filters.account or no_cuenta,
+        force_refresh=True,
+        include_paid=include_paid,
+    )
+    if not item:
+        raise HTTPException(404, "Cuenta no encontrada")
+    return item
+
 
 @router.get("/verifications")
 def get_verifications(

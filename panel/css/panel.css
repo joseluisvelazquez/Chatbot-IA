@@ -199,6 +199,7 @@ textarea {
     }
 
     #verificationTableWrapper,
+    #collectionsTableWrapper,
     #stateTableWrapper {
         overflow: visible;
     }
@@ -208,6 +209,11 @@ textarea {
     #verificationTableWrapper tbody,
     #verificationTableWrapper tr,
     #verificationTableWrapper td,
+    #collectionsTableWrapper table,
+    #collectionsTableWrapper thead,
+    #collectionsTableWrapper tbody,
+    #collectionsTableWrapper tr,
+    #collectionsTableWrapper td,
     #stateTableWrapper table,
     #stateTableWrapper thead,
     #stateTableWrapper tbody,
@@ -219,11 +225,13 @@ textarea {
     }
 
     #verificationTableWrapper thead,
+    #collectionsTableWrapper thead,
     #stateTableWrapper thead {
         display: none;
     }
 
     #verificationTableWrapper tr,
+    #collectionsTableWrapper tr,
     #stateTableWrapper tr {
         margin-bottom: 0.75rem;
         overflow: hidden;
@@ -233,12 +241,14 @@ textarea {
     }
 
     .dark #verificationTableWrapper tr,
+    .dark #collectionsTableWrapper tr,
     .dark #stateTableWrapper tr {
         border-color: rgb(51 65 85);
         background: rgb(30 41 59);
     }
 
     #verificationTableWrapper td,
+    #collectionsTableWrapper td,
     #stateTableWrapper td {
         display: flex;
         align-items: flex-start;
@@ -250,16 +260,19 @@ textarea {
     }
 
     .dark #verificationTableWrapper td,
+    .dark #collectionsTableWrapper td,
     .dark #stateTableWrapper td {
         border-color: rgb(51 65 85);
     }
 
     #verificationTableWrapper td:last-child,
+    #collectionsTableWrapper td:last-child,
     #stateTableWrapper td:last-child {
         border-bottom-width: 0;
     }
 
     #verificationTableWrapper td::before,
+    #collectionsTableWrapper td::before,
     #stateTableWrapper td::before {
         content: attr(data-label);
         flex: 0 0 42%;
@@ -271,6 +284,7 @@ textarea {
     }
 
     .dark #verificationTableWrapper td::before,
+    .dark #collectionsTableWrapper td::before,
     .dark #stateTableWrapper td::before {
         color: rgb(148 163 184);
     }
