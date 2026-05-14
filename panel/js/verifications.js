@@ -28,6 +28,30 @@ const SEVERITY_LABELS = {
     leve: "Leve",
 };
 
+// Etiquetas de pasos de verificación para mostrar en el panel.
+// Las claves son los identificadores técnicos del backend (STEP_MAP en verification_tracker.py).
+const STEP_DISPLAY_LABELS = {
+    folio: "Folio",
+    nombre: "Nombre",
+    domicilio: "Domicilio",
+    fecha: "Fecha venta",
+    producto: "Producto",
+    componentes: "Componentes",
+    pagoInicial: "Pago inicial",
+    pagos: "Pagos",
+    plan3meses: "Plan 3 meses",
+    planes: "Otros planes",
+    bancos: "Métodos de pago",
+    beneficios: "Beneficios",
+    finalizado: "Finalizado",
+    inicio: "Inicio",
+};
+
+function stepLabel(key) {
+    if (!key) return "-";
+    return STEP_DISPLAY_LABELS[key] || key;
+}
+
 function hasAllowedCompany() {
     return [1, 8].includes(Number(window.currentUser?.empresa_id));
 }
@@ -162,30 +186,103 @@ function renderSeveritySummary(item) {
     return parts.join("");
 }
 
+// ---------------------------------------------------------------------------
+// Helpers: mapas de recordatorio a texto legible
+// ---------------------------------------------------------------------------
+const REMINDER_LABELS = {
+    RECORDATORIO_1H: "Recordatorio de 1 hora enviado",
+    RECORDATORIO_2H: "Recordatorio de 2 horas enviado",
+    RECORDATORIO_24H: "Recordatorio de 24 horas enviado",
+    RECORDATORIO: "Recordatorio enviado",
+};
+
+// ---------------------------------------------------------------------------
+// Chip visual: mismo ancho y forma que el badge de Estado
+// ---------------------------------------------------------------------------
+function makeObservationChip(colorClasses, icon, text) {
+    return `<span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${colorClasses}">
+        <span>${icon}</span><span>${ui.escapeHtml(text)}</span>
+    </span>`;
+}
+
+// ---------------------------------------------------------------------------
+// Celda "Observaciones" de la tabla
+// ---------------------------------------------------------------------------
 function renderInconsistenciasCell(item) {
     const counts = getSeverityCounts(item);
-    const highestSeverity = getHighestSeverity(item);
+    const status = item?.status || "";
+    const sessionState = String(item?.session_state || "").toUpperCase();
+    const parts = [];
 
-    if (!counts.total) {
-        return `<span class="text-sm font-medium text-green-600 dark:text-green-400">Sin inconsistencias</span>`;
+    // --- 🔴 INCONSISTENCIAS: siempre visibles si hay alguna abierta ---
+    // (independiente del status: puede estar en_progreso y aún tener inconsistencias)
+    const sev = item.severity_counts || {};
+    const incCritica = Number(sev.critica || 0);
+    const incModerada = Number(sev.moderada || 0);
+    const incLeve = Number(sev.leve || 0);
+    const incTotal = Number(item.inconsistencias_count || sev.total || (incCritica + incModerada + incLeve));
+
+    if (incTotal > 0) {
+        const parts_sev = [];
+        if (incLeve > 0) parts_sev.push(`${incLeve} leve${incLeve > 1 ? "s" : ""}`);
+        if (incModerada > 0) parts_sev.push(`${incModerada} moderada${incModerada > 1 ? "s" : ""}`);
+        if (incCritica > 0) parts_sev.push(`${incCritica} crítica${incCritica > 1 ? "s" : ""}`);
+        if (parts_sev.length === 0) parts_sev.push(`${incTotal} sin grado`);
+
+        parts.push(makeObservationChip(
+            "bg-red-500/20 text-red-400",
+            "", parts_sev.join(" / ")
+        ));
     }
 
-    const breakdown = [];
+    // --- 🟠 DUDA: asesor debe revisar la pregunta ---
+    if (status === "doubts") {
+        parts.push(makeObservationChip(
+            "bg-orange-500/20 text-orange-400",
+            "", "Asesor debe revisar el caso"
+        ));
+    }
 
-    if (counts.critica > 0) breakdown.push(`${counts.critica} critica`);
-    if (counts.moderada > 0) breakdown.push(`${counts.moderada} moderada`);
-    if (counts.leve > 0) breakdown.push(`${counts.leve} leve`);
-    if (counts.unknown > 0) breakdown.push(`${counts.unknown} sin grado`);
+    // --- 💤 INACTIVA: mostrar qué recordatorios se han enviado ---
+    if (status === "stalled") {
+        const reminderLabel = REMINDER_LABELS[sessionState];
+        if (reminderLabel) {
+            parts.push(makeObservationChip(
+                "bg-gray-500/20 text-gray-400",
+                "", reminderLabel
+            ));
+        } else {
+            parts.push(makeObservationChip(
+                "bg-gray-500/20 text-gray-400",
+                "", "Sin actividad reciente"
+            ));
+        }
+    }
 
-    return `
-        <div class="flex min-w-0 flex-col gap-1 md:min-w-[180px]">
-            <div class="flex items-center gap-2">
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">${counts.total}</span>
-                ${renderSeverityBadge(highestSeverity)}
-            </div>
-            <span class="text-xs text-gray-500 dark:text-slate-400">${ui.escapeHtml(breakdown.join(" | "))}</span>
-        </div>
-    `;
+    // --- 🟣 LLAMADA: distinguir voluntaria (LLAMADA) vs 24h sin respuesta ---
+    if (status === "calls") {
+        const prev = String(item?.previous_state || "").toUpperCase();
+        const isTimeout = prev.includes("RECORDATORIO");
+
+        if (isTimeout) {
+            parts.push(makeObservationChip(
+                "bg-purple-500/20 text-purple-400",
+                "", "Se necesita contactar, no contestó mensajes"
+            ));
+        } else {
+            parts.push(makeObservationChip(
+                "bg-purple-500/20 text-purple-400",
+                "", "Cliente solicitó llamada"
+            ));
+        }
+    }
+
+    // --- Sin nada relevante ---
+    if (parts.length === 0) {
+        return `<span class="text-sm font-medium text-gray-900 dark:text-white">Ninguna</span>`;
+    }
+
+    return `<div class="flex min-w-0 flex-col gap-1.5">${parts.join("")}</div>`;
 }
 
 function buildRowSignature(item) {
@@ -196,6 +293,8 @@ function buildRowSignature(item) {
         item.folio || "",
         item.phone || "",
         item.status || "",
+        item.session_state || "",
+        item.previous_state || "",
         Number(item.progress_pct || 0),
         item.current_step || "",
         Number(item.inconsistencias_count || 0),
@@ -427,14 +526,14 @@ function renderSigaBridgeSummary(item = {}) {
                 </span>
             </div>
             ${ui.renderKeyValueGrid([
-                { label: "Cliente", value: customerName },
-                { label: "Cuenta", value: item.no_cuenta },
-                { label: "Telefono", value: item.phone },
-                { label: "Saldo", value: balance },
-                { label: "Plan / pagos", value: plan },
-                { label: "Fuente", value: sourceTable },
-                { label: "Actualizado", value: updatedAt },
-            ])}
+        { label: "Cliente", value: customerName },
+        { label: "Cuenta", value: item.no_cuenta },
+        { label: "Telefono", value: item.phone },
+        { label: "Saldo", value: balance },
+        { label: "Plan / pagos", value: plan },
+        { label: "Fuente", value: sourceTable },
+        { label: "Actualizado", value: updatedAt },
+    ])}
             <div class="mt-4">
                 <p class="text-xs text-gray-500 dark:text-slate-400">Producto</p>
                 <p class="drawer-clamp-3 mt-1 break-words text-sm font-medium text-gray-900 dark:text-white">
@@ -507,15 +606,20 @@ function updateVerificationKpis(items) {
 
     const safeItems = Array.isArray(items) ? items : [];
     const inProgress = document.getElementById("kpiInProgress");
-    const inconsistent = document.getElementById("kpiInconsistent");
+    const needsAttention = document.getElementById("kpiInconsistent");
     const completed = document.getElementById("kpiCompleted");
+
+    // Statuses que requieren atención de un asesor
+    const ATTENTION_STATUSES = new Set(["inconsistent", "doubts", "stalled", "calls"]);
 
     total.textContent = safeItems.length;
     if (inProgress) {
         inProgress.textContent = safeItems.filter((item) => item?.status === "in_progress").length;
     }
-    if (inconsistent) {
-        inconsistent.textContent = safeItems.filter((item) => item?.status === "inconsistent").length;
+    if (needsAttention) {
+        needsAttention.textContent = safeItems.filter(
+            (item) => ATTENTION_STATUSES.has(item?.status)
+        ).length;
     }
     if (completed) {
         completed.textContent = safeItems.filter((item) => item?.status === "completed").length;
@@ -1132,7 +1236,7 @@ function updateVerificationRow(row, item) {
             <span class="${ui.statusClass(item.status)}">${ui.escapeHtml(ui.statusLabel(item.status))}</span>
         </td>
         <td data-label="Progreso" class="px-4 py-4">${ui.renderProgressBar(item.progress_pct)}</td>
-        <td data-label="Paso actual" class="px-4 py-4">${ui.escapeHtml(ui.safeText(item.current_step))}</td>
+        <td data-label="Pregunta actual" class="px-4 py-4">${ui.escapeHtml(stepLabel(item.current_step))}</td>
         <td data-label="Inconsistencias" class="px-4 py-4">${renderInconsistenciasCell(item)}</td>
         <td data-label="Ultima actividad" class="px-4 py-4 whitespace-nowrap">${ui.formatDateTime(item.last_activity)}</td>
     `;
@@ -1313,13 +1417,14 @@ export function initVerificationsPage() {
         lastDrawerSignature = "";
         cancelStaleVerificationDetailRequests(null);
 
+        // Carga inicial
         void loadVerifications();
 
         if (unsubscribeVerificationStore) {
             unsubscribeVerificationStore();
         }
 
-        unsubscribeVerificationStore = subscribeStore((state) => {
+        const storeUnsubscribe = subscribeStore((state) => {
             try {
                 const verificationVersion = Number(state?.verifications?._version || 0);
 
@@ -1360,9 +1465,13 @@ export function initVerificationsPage() {
                 }
             } catch (error) {
                 reportVerificationError("store_subscription_failed", error);
-                renderVerificationError();
             }
         });
+
+        unsubscribeVerificationStore = () => {
+            storeUnsubscribe();
+        };
+
     } catch (error) {
         reportVerificationError("init_failed", error);
         renderVerificationError("Error iniciando verificaciones");

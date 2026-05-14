@@ -30,6 +30,8 @@ class AuthUserResponse(BaseModel):
     empresa_id: int
     role: str
     exp: int
+    whatsapp_bot_number: str | None = None
+    advisor_notifications: list[dict] = []
 
 
 def _cookie_name() -> str:
@@ -131,6 +133,7 @@ def exchange_siga_token(
             empresa_id=user.empresa_id,
             role=user.role,
             exp=user.exp,
+            whatsapp_bot_number=settings.WHATSAPP_BOT_NUMBER,
         )
 
     except Exception:
@@ -138,13 +141,53 @@ def exchange_siga_token(
         raise
 
 @router.get("/me", response_model=AuthUserResponse)
-def get_me(user: PanelUser = Depends(get_current_panel_user)):
+def get_me(
+    db: Session = Depends(get_db),
+    user: PanelUser = Depends(get_current_panel_user)
+):
+    # 🕵️ Calcular estado de notificaciones de asesores
+    advisor_status = []
+    if settings.ADVISOR_PHONES:
+        from app.db.models import ChatSessions
+        from app.utils.timezone import mexico_now_naive
+        from sqlalchemy import desc
+        
+        now = mexico_now_naive()
+        
+        for phone in settings.ADVISOR_PHONES:
+            # Obtener última interacción de este asesor
+            session = (
+                db.query(ChatSessions)
+                .filter(ChatSessions.phone == phone)
+                .order_by(desc(ChatSessions.last_customer_message_at))
+                .first()
+            )
+            
+            is_active = False
+            hours_left = 0
+            
+            if session and session.last_customer_message_at:
+                diff = now - session.last_customer_message_at
+                seconds_elapsed = diff.total_seconds()
+                if seconds_elapsed < 24 * 3600:
+                    is_active = True
+                    hours_left = max(0, 24 - (seconds_elapsed / 3600))
+            
+            advisor_status.append({
+                "phone": phone,
+                "is_active": is_active,
+                "hours_left": round(hours_left, 1),
+                "last_activity": session.last_customer_message_at.isoformat() if session and session.last_customer_message_at else None
+            })
+
     return AuthUserResponse(
         username=user.username,
         puesto=user.puesto,
         empresa_id=user.empresa_id,
         role=user.role,
         exp=user.exp,
+        whatsapp_bot_number=settings.WHATSAPP_BOT_NUMBER,
+        advisor_notifications=advisor_status
     )
 
 

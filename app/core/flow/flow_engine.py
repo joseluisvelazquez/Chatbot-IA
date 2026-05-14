@@ -318,7 +318,7 @@ def process_message(
                 reply=messages.PEDIR_FOLIO,
                 next_state=ChatState.CAMBIAR_FOLIO,
                 buttons=[],
-                previous_state=new_previous_state
+                previous_state=previous_state
             )
             
         # El sistema está esperando a que el webhook externo cambie el estado
@@ -328,7 +328,7 @@ def process_message(
             reply=None,
             next_state=current_state,
             buttons=[],
-            previous_state=new_previous_state
+            previous_state=previous_state
         )
 
     # ==========================================
@@ -838,10 +838,8 @@ def process_message(
             },
         )
 
-        # 🔴 crítica → parar flujo y cerrar registro
+        # 🔴 crítica → parar flujo
         if severidad == "critica":
-            from app.services.inconsistencias_service import close_open_inconsistencia
-            close_open_inconsistencia(db=db, phone=session.phone, folio=session.folio, session_id=session.id)
             return FlowResult(
                 reply=messages.ESCALAMIENTO_CRITICO,
                 next_state=ChatState.ACLARACION,
@@ -849,10 +847,8 @@ def process_message(
                 previous_state=new_previous_state
             )
 
-        # 🟡 demasiadas inconsistencias → parar flujo y cerrar registro
+        # 🟡 demasiadas inconsistencias → parar flujo
         if moderadas_efectivas > 2 or contador["total"] > 3:
-            from app.services.inconsistencias_service import close_open_inconsistencia
-            close_open_inconsistencia(db=db, phone=session.phone, folio=session.folio, session_id=session.id)
             return FlowResult(
                 reply=messages.ESCALAMIENTO_MULTIPLES,
                 next_state=ChatState.ACLARACION,
@@ -861,18 +857,11 @@ def process_message(
             )
 
         # 🟢 continuar flujo
-        LEVE_NEXT_STATE = {
-            ChatState.CONFIRMAR_NOMBRE:          ChatState.CONFIRMAR_DOMICILIO,
-            ChatState.CONFIRMAR_DOMICILIO:       ChatState.CONFIRMAR_FECHA,
-            ChatState.CONFIRMAR_FECHA:           ChatState.CONFIRMAR_PRODUCTO,
-            ChatState.CONFIRMAR_PRODUCTO:        ChatState.CONFIRMAR_COMPONENTES,
-            ChatState.CONFIRMAR_ESTADO_PRODUCTO: ChatState.CONFIRMAR_PAGO_INICIAL,
-            ChatState.CONFIRMAR_PAGO_INICIAL:    ChatState.INFO_PAGOS,
-        }
+        from app.core.flow.flow import NEXT_STATE_MAP
 
         origen_inco = previous_state if current_state == ChatState.INCONSISTENCIA else current_state
         prev = ChatState(origen_inco) if origen_inco else None
-        next_state = LEVE_NEXT_STATE.get(prev) or prev or ChatState.INICIO
+        next_state = NEXT_STATE_MAP.get(prev) or prev or ChatState.INICIO
 
         next_state = handle_flow_skips(context, next_state)
 
@@ -914,11 +903,11 @@ def process_message(
     # --------------------------------------
 
     if action == "escalate":
-        _log(ChatState.ACLARACION)
+        _log(ChatState.LLAMADA)
         return FlowResult(
             reply=messages.ACLARACION,
-            next_state=ChatState.ACLARACION,
-            buttons=FLOW[ChatState.ACLARACION].get("buttons", []),
+            next_state=ChatState.LLAMADA,
+            buttons=FLOW[ChatState.LLAMADA].get("buttons", []),
             previous_state=new_previous_state
         )
 
@@ -1165,7 +1154,7 @@ def process_message(
         ] or "asesor" in ai_reply.lower():
             return FlowResult(
                 reply=ai_reply,
-                next_state=ChatState.ACLARACION,
+                next_state=ChatState.LLAMADA,
                 buttons=[],
                 previous_state=new_previous_state
             )

@@ -113,6 +113,52 @@ function renderLogoutButton() {
     `;
 }
 
+function renderNotificationButton() {
+    const user = window.currentUser;
+    const botNumber = user?.whatsapp_bot_number;
+    const notifications = user?.advisor_notifications || [];
+
+    if (!botNumber) return "";
+
+    const url = `https://wa.me/${botNumber}?text=Activar%20notificaciones`;
+
+    // Generar los indicadores de estado
+    const statusDots = notifications.map(n => {
+        const dotClass = n.is_active ? "bg-emerald-500" : "bg-red-500";
+        const label = n.phone.slice(-4);
+        const title = n.is_active
+            ? `Activo: ${n.hours_left}h restantes (Tel: ...${label})`
+            : `Expirado: Haz clic para reactivar (Tel: ...${label})`;
+
+        return `<span class="flex h-2 w-2 rounded-full ${dotClass}" title="${title}"></span>`;
+    }).join("");
+
+    return `
+        <div class="px-2 mb-2">
+            <div class="flex items-center justify-between px-1 mb-1">
+                <span class="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">Estado Notificaciones</span>
+                <div class="flex gap-1">
+                    ${statusDots}
+                </div>
+            </div>
+            <a
+                href="${url}"
+                target="_blank"
+                class="nav-item flex min-h-[40px] items-center gap-3 rounded-xl
+                bg-emerald-500/10 text-emerald-600 dark:text-emerald-400
+                hover:bg-emerald-500/20 active:scale-[0.98] transition-all duration-200 px-3"
+                title="Abrir ventana de 24h en WhatsApp"
+            >
+                <i data-lucide="bell-ring" class="h-5 w-5 shrink-0"></i>
+                <span data-sidebar-label class="truncate font-medium text-xs">Activar Notificaciones</span>
+            </a>
+            <p data-sidebar-label class="mt-1 px-1 text-[10px] text-gray-400 dark:text-slate-500 leading-tight">
+                Haz clic y envía el mensaje para recibir alertas hoy.
+            </p>
+        </div>
+    `;
+}
+
 // =========================
 // HEADER
 // =========================
@@ -219,11 +265,23 @@ export function renderSidebar() {
                     </button>
                 `).join("")}
             </nav>
+
+            <div id="advisor-status-container" class="mt-auto border-t border-gray-100 dark:border-slate-700 pt-4">
+                ${renderNotificationButton()}
+            </div>
         </div>
     `
 
     if (window.lucide) {
         window.lucide.createIcons()
+    }
+}
+export function refreshAdvisorStatus() {
+    const container = document.getElementById("advisor-status-container");
+    if (!container) return;
+    container.innerHTML = renderNotificationButton();
+    if (window.lucide) {
+        window.lucide.createIcons();
     }
 }
 
@@ -332,8 +390,10 @@ function formatDateTime(value) {
 function statusLabel(status) {
     const map = {
         in_progress: "En proceso",
-        inconsistent: "Inconsistencias",
-        human_required: "Asesor",
+        inconsistent: "Inconsistencia",
+        doubts: "Duda",
+        calls: "Llamada",
+        human_required: "Asesor",   // compatibilidad con datos viejos
         stalled: "Inactiva",
         completed: "Finalizada"
     };
@@ -344,7 +404,9 @@ function statusClass(status) {
     const map = {
         in_progress: "bg-yellow-500/20 text-yellow-400",
         inconsistent: "bg-red-500/20 text-red-400",
-        human_required: "bg-blue-500/20 text-blue-400",
+        doubts: "bg-orange-500/20 text-orange-400",
+        calls: "bg-purple-500/20 text-purple-400",
+        human_required: "bg-blue-500/20 text-blue-400",   // compatibilidad
         stalled: "bg-gray-500/20 text-gray-400",
         completed: "bg-green-500/20 text-green-400"
     };

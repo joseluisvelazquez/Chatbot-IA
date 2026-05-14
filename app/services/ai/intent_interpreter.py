@@ -128,15 +128,8 @@ Debes responder ÚNICAMENTE en JSON válido.
 INTENTS POSIBLES
 --------------------------------------
 
-- affirmative
-- negative
-- doubt
-- human
-- call
-- later
-- other
-- devolucion
-- descuento
+affirmative, negative, doubt, human, call, 
+later, other, devolucion, descuento
 
 --------------------------------------
 CONTEXTO
@@ -153,7 +146,9 @@ MENSAJE DEL USUARIO
 REGLAS
 --------------------------------------
 
-- REGLA ESTRICTA: Si el "Estado actual" es una confirmación (ej: CONFIRMAR_DOMICILIO, CONFIRMAR_FECHA, CONFIRMAR_PAGO_INICIAL, etc.) y el usuario proporciona un dato diferente, un número, o una corrección (ej: "mi numero de casa es 32", "fue el 10", "fue por 600"), DEBES clasificarlo obligatoriamente como "negative".
+- REGLA ESTRICTA: Si el "Estado actual" es una confirmación (ej: CONFIRMAR_DOMICILIO, CONFIRMAR_FECHA, CONFIRMAR_PAGO_INICIAL, etc.) 
+y el usuario proporciona un dato diferente, un número, o una corrección (ej: "mi numero de casa es 32", "fue el 10", "fue por 600"), 
+DEBES clasificarlo obligatoriamente como "negative".
 - "sí", "correcto", "todo bien" → affirmative
 - "no", "está mal", "yo pagué 550" → negative
 - preguntas generales, "cómo", "por qué", "qué es el subsidio", "qué descuentos manejan" → doubt

@@ -21,4 +21,4 @@ mysql_data/
 docker-compose.yml
 
 # Imagenes
-assets/
+assets/.vscode/

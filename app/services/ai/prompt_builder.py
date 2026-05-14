@@ -295,7 +295,7 @@ def build_inconsistency_prompt(user_text: str, context: ConversationContext) -> 
 
     elif campo == "producto":
         detalle_campo = """
-    - critica: Cuando el cliente indica que compró uno distinto al mostrado o niega haber comprado el producto.
+    - critica: Cuando el cliente indica que compró cualquier otro producto diferente al mostrado o niega haber comprado el producto.
     """
 
     elif campo == "estado_producto":

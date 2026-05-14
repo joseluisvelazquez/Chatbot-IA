@@ -57,7 +57,7 @@ def resolve_next_state(current_state, action, detected_intent=None, previous_sta
     # ESCALAMIENTO HUMANO (CHAT)
     # --------------------------------------
     if action == "escalate":
-        return ChatState.ACLARACION
+        return ChatState.LLAMADA
 
     # --------------------------------------
     # ESCALAMIENTO LLAMADA

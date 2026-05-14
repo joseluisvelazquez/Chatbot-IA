@@ -14,16 +14,14 @@ INICIO = (
     "¡Ya volví!\n\n"
     "Vamos a confirmar algunos datos de tu compra.\n"
     "El proceso toma menos de ⌚ 5 minutos y es necesario para activar tus beneficios 🎁\n\n"
-    "Continuaremos tu verificación en base al folio: *{folio}*.\n\n"
-    "¿Podemos comenzar?"
+    "📝 ¿Tu nombre completo es *{nombre_completo}*?"
 )
 
 INICIO2 = (
     "Hola, soy Alonso 👋🏻\n\n"
     "Vamos a confirmar algunos datos de tu compra.\n"
     "El proceso toma menos de ⌚ 5 minutos y es necesario para activar tus beneficios 🎁\n\n"
-    "Realizaremos tu verificación en base al folio: *{folio}*.\n\n"
-    "¿Podemos comenzar?"
+    "📝 ¿Tu nombre completo es *{nombre_completo}*?"
 )
 
 CONFIRMAR_NOMBRE = "📝 ¿Tu nombre completo es *{nombre_completo}*?"
@@ -59,7 +57,7 @@ INFO_PAGOS = (
 INFO_METODOS_PAGO = (
     "🏦 Aquí te dejo las opciones para realizar tus pagos.\n\n"
     "💳 No olvides incluir este número *A{numero_cuenta}* como concepto o referencia.\n\n"
-    "Cada que hagas uno, deberás enviar tu comprobante por el siguiente sitio 👇🏻\n"
+    "Cada que hagas uno, deberás subir tu comprobante en el siguiente sitio 👇🏻\n"
     "https://mxcomp.mx/\n\n"
     "¿Está claro o tienes alguna duda respecto a los métodos de pago?"
 )
@@ -116,7 +114,10 @@ FUERA_DE_FLUJO = (
     "Fuera de flujo, un asesor te contactará para atender tu caso."
 )
 
-ACLARACION = "Entendido. Voy a transferir tu caso con un asesor para que te brinde atención personalizada lo más pronto posible."
+ACLARACION = (
+    "Entendido. Voy a transferir tu caso con un asesor para que te brinde atención personalizada lo más pronto posible.\n\n"
+    "🕒 Te recuerdo que nuestros horarios de atención son de Lunes a Viernes de 9:00 AM a 6:00 PM."
+)
 
 RECORDATORIO_1H = (
     "👋🏼 Solo paso a recordarte que podemos continuar con tu verificación cuando gustes.\n\n"
@@ -138,6 +139,7 @@ RECORDATORIO_CONFIRMACION = "Entendido. Pondré la verificación en pausa. Te en
 PREGUNTA_DUDA = "¡Claro que sí! Platícame, ¿qué duda tienes? Estoy aquí para apoyarte."
 PEDIR_FOLIO = "✏️ Por favor, envíame tu número de folio."
 PEDIR_FOLIO_INICIO = "✏️ Por favor indícame tu número de folio para comenzar."
+PEDIR_FOLIO_REANUDAR = "Para poder iniciar con tu verificación, primero envíame tu número de folio, por favor."
 PEDIR_FOLIO_DEVOLUCION = "Para poder iniciar tu proceso de devolución, primero indícame tu número de folio, por favor."
 PEDIR_FOLIO_DESCUENTO = "Para poder darte mas detalles de tu cuenta, primero indícame tu número de folio, por favor."
 CONFIRMAR_FOLIO_DETECTADO = "🔎 Detecté tu folio: *{folio}*. ¿Es correcto?"
@@ -145,7 +147,7 @@ FOLIO_NO_DETECTADO = "Lo siento, ese folio no parece estar registrado. Por favor
 FOLIO_NO_EXISTE = "🔍 ¡Ups! No logré localizar ese número de folio en mi sistema."
 CONTINUAR_VERIFICACION = "🔁 Continuemos con la verificación:"
 CONTINUAR_VERIFICACION_MENU = "🔁 Continuemos con la verificación."
-CORRECCION_REGISTRADA = "✅ Entendido, ya registré la corrección.\n\nContinuemos con la verificación."
+CORRECCION_REGISTRADA = "✅ Entendido, ya registré la corrección.\n\n🔁 Continuemos con la verificación."
 AYUDA_ALGO_MAS = "Entendido. ¿Te puedo ayudar con algo más?"
 EN_QUE_MAS_AYUDAR = "¿Hay algo más en lo que te pueda ayudar?"
 

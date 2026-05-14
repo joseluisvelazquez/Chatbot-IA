@@ -212,6 +212,12 @@ export async function sendFileMessage(payload) {
     });
 }
 
+export async function resumeBotControlApi(sessionId) {
+    return apiRequest(`/panel/conversations/${sessionId}/resume-bot`, {
+        method: "POST",
+    });
+}
+
 export async function uploadPanelFile(file) {
     const formData = new FormData();
     formData.append("file", file);

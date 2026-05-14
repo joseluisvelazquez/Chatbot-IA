@@ -7,7 +7,7 @@ from app.utils.timezone import mexico_now_naive
 TYPE_1H = "INACTIVITY_1H"
 TYPE_2H = "INACTIVITY_2H"
 TYPE_24H = "INACTIVITY_24H"
-
+TYPE_TIMEOUT = "INACTIVITY_TIMEOUT"
 
 def utcnow_naive() -> datetime:
     return mexico_now_naive()
@@ -18,7 +18,7 @@ def cancel_pending_inactivity_reminders(db: Session, phone: str) -> None:
     (
         db.query(Reminder)
         .filter(Reminder.phone == phone)
-        .filter(Reminder.type.in_([TYPE_1H, TYPE_2H, TYPE_24H]))
+        .filter(Reminder.type.in_([TYPE_1H, TYPE_2H, TYPE_24H, TYPE_TIMEOUT]))
         .filter(Reminder.sent_at.is_(None))
         .filter(Reminder.cancelled_at.is_(None))
         .update({Reminder.cancelled_at: now}, synchronize_session=False)
@@ -28,7 +28,7 @@ def cancel_pending_inactivity_reminders(db: Session, phone: str) -> None:
 def create_inactivity_reminders(db: Session, session: ChatSessions) -> None:
     """
     Regla: scheduled_at se calcula desde la actividad real.
-    Para pruebas, puedes cambiar hours->seconds aquí sin tocar el job.
+    Para pruebas, puedes cambiar hours->minutes aquí sin tocar el job.
     """
     now = utcnow_naive()
     base = session.last_message_at or now
@@ -56,7 +56,16 @@ def create_inactivity_reminders(db: Session, session: ChatSessions) -> None:
             session_id=session.id,
             phone=session.phone,
             type=TYPE_24H,
-            scheduled_at=base + timedelta(hours=23),
+            scheduled_at=base + timedelta(hours=23, minutes=59),
+            created_last_message_id=session.last_message_id,
+        )
+    )
+    db.add(
+        Reminder(
+            session_id=session.id,
+            phone=session.phone,
+            type=TYPE_TIMEOUT,
+            scheduled_at=base + timedelta(hours=48),
             created_last_message_id=session.last_message_id,
         )
     )
