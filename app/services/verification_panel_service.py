@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, Optional
 from sqlalchemy.orm import Session
 
 from app.core.states.states import ChatState
+from app.core.states.state_types import get_state_type
 from app.core.verification_steps import STEP_ORDER
 from app.core.verification.verification_schema import normalize_progress_payload
 from app.siga.siga_repository import obtener_venta_por_folio
@@ -145,7 +146,8 @@ def build_verification_snapshot(
         verification_data=verification_data,
         has_open_inconsistencia=open_inconsistencia,
         last_activity=session.last_message_at,
-        requires_human=False,
+        session_state=str(session.state or ""),
+        previous_state=str(session.previous_state or ""),
     )
 
     item = {
@@ -155,6 +157,8 @@ def build_verification_snapshot(
         "no_cuenta": no_cuenta,
         "siga_url": build_siga_account_url(no_cuenta, folio),
         "status": status,
+        "session_state": str(session.state or ""),
+        "previous_state": str(session.previous_state or ""),
         "progress_pct": verification_data["progress_pct"],
         "current_step": resolve_panel_current_step(
             session,
@@ -260,25 +264,49 @@ def classify_panel_status(
     verification_data: Dict[str, Any],
     has_open_inconsistencia: bool,
     last_activity: Optional[datetime],
-    requires_human: bool = False,
+    session_state: str = "",
+    previous_state: str = "",
+    requires_human: bool = False,  # mantenido por compatibilidad, ya no se usa
 ) -> str:
+    """
+    Clasifica el estado visible en el panel a partir del estado real del backend.
 
-    # 🔴 PRIORIDAD 1: asesor
-    if requires_human:
-        return "human_required"
+    Prioridades:
+    1. LLAMADA           → 'calls'
+    2. ACLARACION        → 'doubts' si el previous_state es de información,
+                           'inconsistent' si es de confirmación
+    3. RECORDATORIO*     → 'stalled' (usuario que no ha respondido)
+    4. inconsistencia BD abierta → 'inconsistent'
+    5. completado        → 'completed'
+    6. inactividad       → 'stalled'
+    7. default           → 'in_progress'
+    """
+    state_upper = (session_state or "").upper()
 
-    if has_open_inconsistencia:
+    # 📞 PRIORIDAD 1: llamada explícita
+    if state_upper == "LLAMADA":
+        return "calls"
+
+    # 🤝 PRIORIDAD 2: aclaración → separar duda vs inconsistencia
+    if state_upper == "ACLARACION":
+        if previous_state:
+            try:
+                prev_enum = ChatState(previous_state)
+                if get_state_type(prev_enum) == "information":
+                    return "doubts"
+            except ValueError:
+                pass
         return "inconsistent"
+
+    # 💤 PRIORIDAD 3: recordatorios de inactividad
+    if state_upper.startswith("RECORDATORIO"):
+        return "stalled"
 
     # 🟢 completado
-    if verification_data.get("is_completed",False):
+    if verification_data.get("is_completed", False):
         return "completed"
 
-    # 🟠 inconsistencias
-    if has_open_inconsistencia:
-        return "inconsistent"
-
-    # 🟡 inactivo
+    # 🟡 inactividad por tiempo
     if last_activity is not None:
         now = mexico_now_naive()
         if now - last_activity > timedelta(minutes=INACTIVITY_MINUTES):

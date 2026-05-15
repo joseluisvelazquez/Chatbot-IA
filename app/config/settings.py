@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     VERIFY_TOKEN: str
     WHATSAPP_TOKEN: str
     PHONE_NUMBER_ID: str
+    WHATSAPP_BOT_NUMBER: str | None = None
     META_APP_SECRET: str | None = None
 
     # ============================================================
@@ -75,6 +76,7 @@ class Settings(BaseSettings):
     # development/testing
     # ============================================================
     TEST_PHONE_ONLY: list[str]
+    ADVISOR_PHONES: list[str] = []
     DEBUG: bool = True
 
     # ============================================================

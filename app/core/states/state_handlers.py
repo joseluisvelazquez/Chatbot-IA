@@ -33,6 +33,8 @@ COMPONENTES_MAP = {
 }
 
 INCONSISTENCIAS_MAP = {
+    ChatState.INICIO: "nombre",
+    ChatState.INICIO2: "nombre",
     ChatState.CONFIRMAR_NOMBRE: "nombre",
     ChatState.CONFIRMAR_DOMICILIO: "domicilio",
     ChatState.CONFIRMAR_FECHA: "fecha_venta",

@@ -8,8 +8,26 @@ import app.content.messages as msg
 DEFAULT_TRANSITIONS = {
     "inconsistency": ChatState.INCONSISTENCIA,
     "pause": ChatState.RECORDATORIO,
-    "escalate": ChatState.ACLARACION,
+    "escalate": ChatState.LLAMADA,
     "ai": ChatState.FUERA_DE_FLUJO,
+}
+
+NEXT_STATE_MAP = {
+    ChatState.INICIO:                    ChatState.CONFIRMAR_DOMICILIO,
+    ChatState.INICIO2:                   ChatState.CONFIRMAR_DOMICILIO,
+    ChatState.CONFIRMAR_NOMBRE:          ChatState.CONFIRMAR_DOMICILIO,
+    ChatState.CONFIRMAR_DOMICILIO:       ChatState.CONFIRMAR_FECHA,
+    ChatState.CONFIRMAR_FECHA:           ChatState.CONFIRMAR_PRODUCTO,
+    ChatState.CONFIRMAR_PRODUCTO:        ChatState.CONFIRMAR_COMPONENTES,
+    ChatState.CONFIRMAR_COMPONENTES:     ChatState.CONFIRMAR_PAGO_INICIAL,
+    ChatState.CONFIRMAR_ESTADO_PRODUCTO: ChatState.CONFIRMAR_PAGO_INICIAL,
+    ChatState.CONFIRMAR_PAGO_INICIAL:    ChatState.INFO_PAGOS,
+    ChatState.INFO_PAGOS:                ChatState.INFO_METODOS_PAGO,
+    ChatState.INFO_METODOS_PAGO:         ChatState.INFO_PLAN_3_MESES,
+    ChatState.INFO_PLAN_3_MESES:         ChatState.INFO_OTROS_PLANES,
+    ChatState.INFO_OTROS_PLANES:         ChatState.INFO_BENEFICIOS,
+    ChatState.INFO_BENEFICIOS:           ChatState.FINALIZADO,
+    ChatState.INFO_BENEFICIOS2:          ChatState.FINALIZADO,
 }
 
 
@@ -43,30 +61,28 @@ FLOW = {
     ChatState.INICIO: {
         "text": msg.INICIO,
         "buttons": [
-            {"id": "INICIO_SI", "label": "✅ Sí, adelante"},
-            {"id": "INICIO_LUEGO", "label": "⏰ Recordar más tarde"},
-            {"id": "INICIO_LLAMADA", "label": "📞 Prefiero llamada"},
+            {"id": "NOMBRE_SI", "label": "✅ Sí"},
+            {"id": "NOMBRE_NO", "label": "❌ No"},
         ],
         "options": {
-            "INICIO_SI": ChatState.CONFIRMAR_NOMBRE, # ChatState.RETO_SEGURIDAD,
-            "INICIO_LUEGO": ChatState.RECORDATORIO,
-            "INICIO_LLAMADA": ChatState.LLAMADA,
-            "affirmative": ChatState.CONFIRMAR_NOMBRE, # ChatState.RETO_SEGURIDAD,
+            "NOMBRE_SI": ChatState.CONFIRMAR_DOMICILIO,
+            "NOMBRE_NO": ChatState.INCONSISTENCIA,
+            "affirmative": ChatState.CONFIRMAR_DOMICILIO,
+            "negative": ChatState.INCONSISTENCIA,
         },
     },
 
     ChatState.INICIO2: {
         "text": msg.INICIO2,
         "buttons": [
-            {"id": "INICIO_SI", "label": "✅ Sí, adelante"},
-            {"id": "INICIO_LUEGO", "label": "⏰ Recordar más tarde"},
-            {"id": "INICIO_LLAMADA", "label": "📞 Prefiero llamada"},
+            {"id": "NOMBRE_SI", "label": "✅ Sí"},
+            {"id": "NOMBRE_NO", "label": "❌ No"},
         ],
         "options": {
-            "INICIO_SI": ChatState.CONFIRMAR_NOMBRE, # ChatState.RETO_SEGURIDAD,
-            "INICIO_LUEGO": ChatState.RECORDATORIO,
-            "INICIO_LLAMADA": ChatState.LLAMADA,
-            "affirmative": ChatState.CONFIRMAR_NOMBRE, # ChatState.RETO_SEGURIDAD,
+            "NOMBRE_SI": ChatState.CONFIRMAR_DOMICILIO,
+            "NOMBRE_NO": ChatState.INCONSISTENCIA,
+            "affirmative": ChatState.CONFIRMAR_DOMICILIO,
+            "negative": ChatState.INCONSISTENCIA,
         },
     },
 

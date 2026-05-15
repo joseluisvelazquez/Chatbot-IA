@@ -38,6 +38,8 @@ function buildVerificationChanges(payload = {}) {
         siga_bridge: payload.siga_bridge,
         confirmed_count: payload.confirmed_count,
         total_steps: payload.total_steps,
+        session_state: payload.session_state,
+        previous_state: payload.previous_state,
     });
 }
 
@@ -147,7 +149,7 @@ export function initWebSocket() {
                 payload: data.payload,
             });
         }
-        
+
 
         if (
             ["verification_update", "verification_updated", "siga_snapshot_updated"].includes(data.type)

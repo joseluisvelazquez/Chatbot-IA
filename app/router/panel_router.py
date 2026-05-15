@@ -60,6 +60,7 @@ from app.services.siga_bridge_cache import (
 )
 from app.services.siga_navigation import build_siga_account_url
 from app.db.models import BitacoraVentas
+from app.config.settings import settings
 
 # ORDEN REAL DEL FLOW 
 FUNNEL_STEPS = STEP_ORDER
@@ -671,6 +672,8 @@ def get_verifications(
         None,
         "in_progress",
         "inconsistent",
+        "doubts",
+        "calls",
         "human_required",
         "stalled",
         "completed",
@@ -692,8 +695,13 @@ def get_verifications(
     sessions_query = (
         restrict_to_assigned(db.query(ChatSessions), user, db)
         .filter(ChatSessions.folio.isnot(None))
-        .order_by(ChatSessions.last_message_at.desc())
     )
+
+    # 🕵️ Filtrar asesores
+    if settings.ADVISOR_PHONES:
+        sessions_query = sessions_query.filter(ChatSessions.phone.notin_(settings.ADVISOR_PHONES))
+
+    sessions_query = sessions_query.order_by(ChatSessions.last_message_at.desc())
 
     total = sessions_query.order_by(None).count()
 
@@ -834,7 +842,8 @@ def get_verifications(
             verification_data=verification_data,
             has_open_inconsistencia=open_inconsistencia,
             last_activity=session.last_message_at,
-            requires_human=False,
+            session_state=str(session.state or ""),
+            previous_state=str(session.previous_state or ""),
         )
 
         inconsistencia_summary = summarize_inconsistencias(serialized_inconsistencias)
@@ -846,6 +855,8 @@ def get_verifications(
             "no_cuenta": no_cuenta,
             "phone": session.phone,
             "status": panel_status,
+            "session_state": str(session.state or ""),
+            "previous_state": str(session.previous_state or ""),
             "progress_pct": verification_data["progress_pct"],
             "current_step": current_step,
             "inconsistencias": serialized_inconsistencias,
@@ -973,7 +984,8 @@ async def get_verification_by_session(
         verification_data=verification_data,
         has_open_inconsistencia=open_inconsistencia,
         last_activity=session.last_message_at,
-        requires_human=False,
+        session_state=str(session.state or ""),
+        previous_state=str(session.previous_state or ""),
     )
 
     # =========================
@@ -999,6 +1011,8 @@ async def get_verification_by_session(
         "phone": session.phone,
 
         "status": panel_status,
+        "session_state": str(session.state or ""),
+        "previous_state": str(session.previous_state or ""),
         "progress_pct": verification_data["progress_pct"],
         "current_step": current_step,
 
@@ -1238,8 +1252,14 @@ def get_conversations(
     if limit > 500:
         limit = 500
 
+    sessions_query = restrict_to_assigned(db.query(ChatSessions), user, db)
+    
+    # 🕵️ Filtrar asesores para que no aparezcan en el panel de clientes
+    if settings.ADVISOR_PHONES:
+        sessions_query = sessions_query.filter(ChatSessions.phone.notin_(settings.ADVISOR_PHONES))
+
     sessions = (
-        restrict_to_assigned(db.query(ChatSessions), user, db)
+        sessions_query
         .order_by(desc(ChatSessions.last_message_at))
         .offset(offset)
         .limit(limit)
@@ -1305,6 +1325,13 @@ def get_conversations(
                 unread_count=s.unread_count,
                 no_cuenta=no_cuenta,
                 folio=folio,
+                status=classify_panel_status(
+                    verification_data={"is_completed": False},
+                    has_open_inconsistencia=False,
+                    last_activity=s.last_message_at,
+                    session_state=str(s.state or ""),
+                    previous_state=str(s.previous_state or ""),
+                ),
             )
         )
 
@@ -1631,3 +1658,204 @@ async def send_agent_file(
     asyncio.create_task(send_media_safe())
 
     return {"status": "sent"}
+
+# =========================================
+# Retomar control del chatbot
+# =========================================
+@router.post("/conversations/{session_id}/resume-bot")
+async def resume_bot_control(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user)
+):
+    require_company_scope(user)
+    
+    session = get_scoped_session_or_404(
+        db,
+        user,
+        session_id,
+        detail="Sesion no encontrada"
+    )
+
+    from app.core.states.states import ChatState
+    
+    if session.state not in (ChatState.ACLARACION.value, ChatState.LLAMADA.value):
+        raise HTTPException(400, f"El chatbot ya tiene el control (Estado: {session.state})")
+
+    # ——————————————————————————————————————————————————————————————
+    # Determinar el estado correcto al que volver
+    # ——————————————————————————————————————————————————————————————
+    # Si veníamos de LLAMADA, su previous_state puede ser ACLARACION (o un RECORDATORIO),
+    # lo cual no es el punto real del flujo. Buscamos el estado real de verificación
+    # que antecedía a toda la cadena de interrupciones.
+    current_state_value = session.state
+    
+    from app.core.states.state_types import get_state_type
+    from app.core.flow.flow import NEXT_STATE_MAP
+    from app.core.states.state_renderer import render_state
+    from app.content import messages as msg
+    
+    # Resolver la cadena de previous_state hasta encontrar un estado de flujo real
+    def resolve_real_previous_state(session_obj, db_session) -> "ChatState":
+        """
+        Encuentra el último estado real de verificación (confirmación o información)
+        ignorando interrupciones (ACLARACION, LLAMADA, RECORDATORIO, etc.).
+        Usa FlowEvents como respaldo si previous_state apunta a una interrupción.
+        """
+        INTERRUPTION_STATE_VALUES = {
+            ChatState.ACLARACION.value,
+            ChatState.LLAMADA.value,
+            ChatState.FUERA_DE_FLUJO.value,
+            ChatState.DUDA.value,
+            ChatState.MENU_DUDA.value,
+            ChatState.MENU_AYUDA.value,
+            ChatState.RECORDATORIO.value,
+            ChatState.RECORDATORIO_1H.value,
+            ChatState.RECORDATORIO_2H.value,
+            ChatState.RECORDATORIO_24H.value,
+        }
+        
+        # 1. Intentar con previous_state directo
+        candidate = session_obj.previous_state
+        if candidate and candidate not in INTERRUPTION_STATE_VALUES:
+            try:
+                return ChatState(candidate)
+            except ValueError:
+                pass
+        
+        # 2. Respaldo: buscar el último to_state de flujo real en FlowEvents
+        flow_rows = (
+            db_session.query(FlowEvent.to_state)
+            .filter(
+                FlowEvent.session_id == session_obj.id,
+                FlowEvent.to_state.notin_(list(INTERRUPTION_STATE_VALUES) + [None]),
+            )
+            .order_by(FlowEvent.id.desc())
+            .limit(10)
+            .all()
+        )
+        
+        for (to_state_val,) in flow_rows:
+            try:
+                return ChatState(to_state_val)
+            except ValueError:
+                continue
+        
+        return ChatState.INICIO
+    
+    prev_state_enum = resolve_real_previous_state(session, db)
+    
+    # 1. Si no hay folio, pedimos el folio.
+    if not session.folio:
+        next_state = ChatState.CAMBIAR_FOLIO
+        reply_text, botones, image_id = render_state(next_state, session, db)
+        reply_text = msg.PEDIR_FOLIO_REANUDAR
+    else:
+        # 2. Si era pregunta de confirmación, saltamos a la siguiente. Si es información, la repetimos.
+        if prev_state_enum and get_state_type(prev_state_enum) == "confirmation":
+            next_state = NEXT_STATE_MAP.get(prev_state_enum) or prev_state_enum or ChatState.INICIO
+        else:
+            next_state = prev_state_enum or ChatState.INICIO
+            
+        reply_text, botones, image_id = render_state(next_state, session, db)
+        
+        # Agregar etiqueta de continuación si no es el mensaje de inicio
+        if next_state != ChatState.INICIO and next_state != ChatState.INICIO2:
+            reply_text = f"{msg.CONTINUAR_VERIFICACION}\n\n{reply_text}"
+    
+    # Guardar estado y mensaje en DB
+    session.state = next_state.value
+    
+    from app.services.message_service import save_message
+    from app.utils.timezone import mexico_now_naive
+    
+    bot_msg = save_message(
+        db=db,
+        session_id=session.id,
+        phone=session.phone,
+        direction="out",
+        content=reply_text,
+    )
+    
+    session.last_message = "Retomó el chatbot"
+    session.last_message_at = mexico_now_naive()
+    
+    # Solo cerrar inconsistencias abiertas cuando venimos de ACLARACION,
+    # no de LLAMADA (donde el problema era de comunicación, no de datos incorrectos).
+    if current_state_value == ChatState.ACLARACION.value:
+        from sqlalchemy import func
+        from app.db.models import Inconsistencias
+        
+        open_incs = db.query(Inconsistencias).filter(
+            Inconsistencias.session_id == session.id,
+            func.upper(Inconsistencias.estatus) == "ABIERTA"
+        ).all()
+        
+        for inc in open_incs:
+            inc.estatus = "RESUELTA"
+            inc.resolved_by_panel = True
+    
+    db.commit()
+    db.refresh(session)
+    db.refresh(bot_msg)
+    
+    # Enviar WhatsApp
+    from app.adapters.whatsapp_client import send_whatsapp_message
+    await send_whatsapp_message(
+        phone=session.phone,
+        text=reply_text,
+        buttons=botones,
+        image_id=image_id
+    )
+    
+    # Broadcast Panel
+    from app.websockets.manager import manager
+    
+    await manager.send_to_all({
+        "type": "new_message",
+        "session_id": session.id,
+        "phone": session.phone,
+        "conversation": {
+            "id": session.id,
+            "phone": session.phone,
+            "name": None,
+            "last_message": session.last_message,
+            "last_message_at": bot_msg.created_at.isoformat() if bot_msg.created_at else session.last_message_at.isoformat(),
+            "unread_count": session.unread_count,
+            "folio": str(session.folio) if session.folio else None,
+            "status": classify_panel_status(
+                    verification_data={"is_completed": False},
+                    has_open_inconsistencia=False,
+                    last_activity=session.last_message_at,
+                    session_state=str(session.state or ""),
+                    previous_state=str(session.previous_state or ""),
+                ),
+        },
+        "message": {
+            "id": bot_msg.id,
+            "phone": bot_msg.phone,
+            "content": bot_msg.content,
+            "direction": bot_msg.direction,
+            "created_at": bot_msg.created_at.isoformat() if bot_msg.created_at else session.last_message_at.isoformat(),
+        },
+        "unread_count": session.unread_count
+    })
+    
+    await manager.send_to_all({
+        "type": "dashboard_update",
+        "payload": {
+            "messages_in_delta": 0,
+            "messages_out_delta": 1,
+            "active_sessions_delta": 0,
+        },
+    })
+    
+    from app.services.verification_panel_service import build_verification_snapshot
+    snapshot = build_verification_snapshot(db, session)
+    if snapshot:
+        await manager.send_to_all({
+            "type": "verification_update",
+            "payload": snapshot,
+        })
+        
+    return {"status": "success", "message": "El chatbot ha retomado el control", "next_state": next_state.value}

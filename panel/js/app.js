@@ -1,4 +1,4 @@
-import { renderHeader, renderSidebar } from "./ui.js";
+import { renderHeader, renderSidebar, refreshAdvisorStatus } from "./ui.js";
 import { initVerificationsPage } from "./verifications.js";
 import { initConversationsPage } from "./chat.js";
 import { initDashboardPage } from "./dashboard.js";
@@ -44,13 +44,17 @@ export function startSessionHeartbeat() {
 
             if (!res.ok) {
                 renderSessionExpired()
+            } else {
+                const user = await res.json()
+                window.currentUser = user
+                refreshAdvisorStatus()
             }
 
         } catch (error) {
             console.warn("Heartbeat error:", error)
             renderNetworkError()
         }
-    }, 120000) // 2 minutos
+    }, 60000) // 1 minuto
 }
 export function startSessionTimeout() {
     if (!window.currentUser?.exp) return

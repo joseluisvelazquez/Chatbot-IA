@@ -28,6 +28,7 @@ def attach_folio_to_session(db, session, folio):
         state=session.state,
         last_message=session.last_message,
         last_message_at=session.last_message_at,
+        last_customer_message_at=session.last_message_at or utcnow_naive(),
     )
 
     db.add(new_session)
@@ -116,6 +117,7 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None, tex
         phone=phone,
         folio=folio,
         state=ChatState.ESPERA.value,
+        last_customer_message_at=utcnow_naive(),
     )
     db.add(new_session)
 
@@ -152,6 +154,7 @@ def update_session(
     message_id: str | None = None,
     *,
     last_message_at: Optional[datetime] = None,
+    last_customer_message_at: Optional[datetime] = None,
 ) -> ChatSessions:
     """
     Solo muta el objeto dentro de la transacción.
@@ -185,5 +188,8 @@ def update_session(
     ts = last_message_at or utcnow_naive()
     session.last_message_at = ts
     session.updated_at = ts
+
+    if last_customer_message_at is not None:
+        session.last_customer_message_at = last_customer_message_at
 
     return session

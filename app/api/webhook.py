@@ -526,6 +526,32 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "out_of_order_saved"}
 
+        # 🔔 INTERCEPCIÓN: Activación de notificaciones para asesores
+        if text.strip().lower() == "activar notificaciones":
+            reply = "✅ *Notificaciones activadas*\nTu ventana de 24h está abierta para recibir alertas."
+            
+            # Guardar el mensaje entrante y saliente
+            save_message(db, chat.id, phone, "in", text, message_id=message_id, created_at=event_time)
+            bot_msg = save_message(db, chat.id, phone, "out", reply)
+            
+            # Actualizar la sesión para abrir la ventana de Meta
+            update_session(
+                session=chat,
+                state=chat.state, # mantener el estado actual
+                last_message=text,
+                previous_state=chat.previous_state,
+                message_id=message_id,
+                last_message_at=max(event_time, utcnow_naive()),
+                last_customer_message_at=max(event_time, utcnow_naive()) # 🔑 Clave para Meta
+            )
+            db.commit()
+            
+            # Responder y salir
+            asyncio.create_task(send_whatsapp_message(phone, reply))
+            _release_lock(lock)
+            lock_acquired = False
+            return {"status": "advisor_activated"}
+
         candidate_folio = extraer_folio(text)
         if settings.SIGA_BRIDGE_ENABLED and candidate_folio:
             bridge_verification = await lookup_verification_for_folio(
@@ -587,6 +613,8 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 session_id=chat.id,
             )
 
+        old_state = chat.state  # capturar antes de actualizar
+
         update_session(
             session=chat,
             state=next_state.value,
@@ -599,6 +627,22 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         upsert_inactivity_reminders(db, chat)
         db.commit()
         issues_open_delta = count_open_issues(db) - open_issues_before
+
+        # 🔔 Notificar a asesores si el nuevo estado requiere atención
+        from app.services.notification_service import notify_if_attention_needed
+        no_cuenta_val = bridge_verification.get("no_cuenta") if isinstance(bridge_verification, dict) else None
+        
+        # Si no lo tenemos del bridge, intentar resolverlo de la DB local
+        if not no_cuenta_val and chat.folio:
+            try:
+                from app.services.verification_panel_service import resolve_no_cuenta
+                no_cuenta_val = resolve_no_cuenta(db, str(chat.folio))
+            except Exception:
+                pass
+
+        asyncio.create_task(
+            notify_if_attention_needed(chat, old_state, next_state.value, no_cuenta=no_cuenta_val)
+        )
 
         db.refresh(chat)
         db.refresh(saved_msg)

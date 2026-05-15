@@ -6,6 +6,8 @@ from app.core.states.states import ChatState
 # Si usuario dice NO → INCONSISTENCIA
 
 STATE_CONFIRMATION = {
+    ChatState.INICIO,
+    ChatState.INICIO2,
     ChatState.CONFIRMAR_NOMBRE,
     ChatState.CONFIRMAR_DOMICILIO,
     ChatState.CONFIRMAR_FECHA,
@@ -77,7 +79,6 @@ STATE_HUMAN = {
 
 STATE_SYSTEM = {
     ChatState.ESPERA,
-    ChatState.INICIO,
     ChatState.RECORDATORIO_1H,
     ChatState.RECORDATORIO_2H,
     ChatState.RECORDATORIO,

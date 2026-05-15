@@ -23,6 +23,7 @@ class ConversationResponse(BaseModel):
     unread_count: int = 0
     no_cuenta: str | None = None
     folio: str | None = None
+    status: str | None = None
 
 
 class MessageResponse(BaseModel):

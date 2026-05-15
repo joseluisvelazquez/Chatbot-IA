@@ -62,19 +62,41 @@ async def trigger_verificacion(
     # ACCIÓN: DESPERTAR AL BOT Y PEDIR EL NOMBRE
     # ==========================================
     if chat:
-        from app.core.flow.flow import FLOW
+        from app.core.states.state_renderer import render_state
+        from app.services.message_service import save_message
+        from app.api.webhook import broadcast_new_message
+        from app.utils.timezone import mexico_now_naive
         
-        chat.state = ChatState.INICIO.value
-        db.commit()
+        reply_text, botones_inicio, _ = render_state(ChatState.INICIO, chat, db)
 
-        botones_inicio = FLOW.get(ChatState.INICIO, {}).get("buttons", [])
+        # 1. Guardar el mensaje en la base de datos para que aparezca en el panel
+        bot_msg = save_message(
+            db=db,
+            session_id=chat.id,
+            phone=chat.phone,
+            direction="out",
+            content=reply_text,
+        )
+        
+        # 2. Actualizar el estado de la sesión
+        chat.state = ChatState.INICIO.value
+        chat.last_message = "Inicio de verificación"
+        chat.last_message_at = mexico_now_naive()
+        db.commit()
+        db.refresh(chat)
+        db.refresh(bot_msg)
+        
+        # 3. Enviar el mensaje por WhatsApp
         await send_whatsapp_message(
             phone=chat.phone, 
-            text=msg.INICIO.format(folio=chat.folio), 
+            text=reply_text, 
             buttons=botones_inicio
         )
         
-        return {"status": "success", "message": "Sesión despertada y reto de seguridad enviado."}
+        # 4. Emitir evento por WebSocket para actualizar el panel en tiempo real
+        await broadcast_new_message(chat, bot_msg)
+        
+        return {"status": "success", "message": "Sesión despertada y pregunta de nombre enviada."}
 
     # Si nadie estaba esperando ni por teléfono ni por folio:
     return {"status": "ignored", "message": "Ninguna sesión en espera."}

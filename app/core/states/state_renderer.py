@@ -61,19 +61,16 @@ def render_state(next_state, session, db):
         from app.content import messages as msg
         reply = msg.CONFIRMAR_FOLIO_DETECTADO.format(folio=session.folio)
 
-    elif next_state == ChatState.INICIO:
-        reply = reply.format(folio=session.folio)
-
-    elif next_state == ChatState.INICIO2:
-        from app.content import messages as msg
-        reply = msg.INICIO2.format(folio=session.folio)
-
     if not venta:
         return reply, buttons, image_id
 
     if next_state == ChatState.RETO_SEGURIDAD:
         from app.content import messages as msg
         reply = msg.RETO_SEGURIDAD_SOLICITUD.format(folio=session.folio)
+
+    elif next_state in [ChatState.INICIO, ChatState.INICIO2]:
+        nombre = construir_nombre(venta)
+        reply = reply.format(nombre_completo=nombre)
 
     elif next_state == ChatState.CONFIRMAR_NOMBRE:
         reply = MessageBuilder.confirmar_nombre(
@@ -196,6 +193,8 @@ def render_state(next_state, session, db):
         origen = str(session.state) if session.state != ChatState.INCONSISTENCIA else str(session.previous_state)
         
         inconsistencia_map = {
+            ChatState.INICIO.value: msg.INCONSISTENCIA_NOMBRE,
+            ChatState.INICIO2.value: msg.INCONSISTENCIA_NOMBRE,
             ChatState.CONFIRMAR_NOMBRE.value: msg.INCONSISTENCIA_NOMBRE,
             ChatState.CONFIRMAR_DOMICILIO.value: msg.INCONSISTENCIA_DOMICILIO,
             ChatState.CONFIRMAR_FECHA.value: msg.INCONSISTENCIA_FECHA,

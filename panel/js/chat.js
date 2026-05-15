@@ -5,7 +5,8 @@ import {
     sendFileMessage,
     sendMessage,
     uploadPanelFile,
-    apiRequest
+    apiRequest,
+    resumeBotControlApi
 } from "./api.js"
 import { resolveMediaUrl } from "./config.js"
 import { EMOJIS } from "./emojis.js"
@@ -160,6 +161,108 @@ function clearPreviewFiles() {
 // =========================
 export async function initConversationsPage() {
     window.send = send
+    window.resumeBotControl = async function (sessionId) {
+        const confirmed = await new Promise((resolve) => {
+            const overlay = document.createElement("div")
+            overlay.className = "fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm transition-opacity"
+
+            const modal = document.createElement("div")
+            modal.className = "bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4 transform scale-95 transition-transform"
+
+            modal.innerHTML = `
+                <div class="flex items-center gap-3 mb-4 text-blue-600 dark:text-blue-500">
+                    <i data-lucide="bot" class="w-6 h-6"></i>
+                    <h3 class="text-lg font-bold text-slate-900 dark:text-white">Panel Mexicomp</h3>
+                </div>
+                <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">
+                    ¿Deseas terminar la atencion manual y devolver el control automatico al Chatbot?
+                </p>
+                <div class="flex justify-end gap-3">
+                    <button id="cancelConfirmBtn" class="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors">
+                        Cancelar
+                    </button>
+                    <button id="okConfirmBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-2 shadow-sm">
+                        <span>Aceptar</span>
+                    </button>
+                </div>
+            `
+
+            overlay.appendChild(modal)
+            document.body.appendChild(overlay)
+
+            if (window.lucide) lucide.createIcons({ root: modal })
+
+            // Animation
+            requestAnimationFrame(() => {
+                modal.classList.remove("scale-95")
+                modal.classList.add("scale-100")
+            })
+
+            const cleanup = (result) => {
+                overlay.classList.add("opacity-0")
+                setTimeout(() => {
+                    if (document.body.contains(overlay)) document.body.removeChild(overlay)
+                    resolve(result)
+                }, 200)
+            }
+
+            modal.querySelector("#cancelConfirmBtn").addEventListener("click", () => cleanup(false))
+            modal.querySelector("#okConfirmBtn").addEventListener("click", () => cleanup(true))
+            overlay.addEventListener("click", (e) => {
+                if (e.target === overlay) cleanup(false)
+            })
+        })
+
+        if (!confirmed) return;
+
+        try {
+            await resumeBotControlApi(sessionId)
+        } catch (err) {
+            const errorMessage = err.message || "Error al devolver el control al bot"
+            const alertOverlay = document.createElement("div")
+            alertOverlay.className = "fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm transition-opacity"
+
+            const alertModal = document.createElement("div")
+            alertModal.className = "bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4 transform scale-95 transition-transform"
+
+            alertModal.innerHTML = `
+                <div class="flex items-center gap-3 mb-4 text-blue-600 dark:text-blue-500">
+                    <i data-lucide="info" class="w-6 h-6"></i>
+                    <h3 class="text-lg font-bold text-slate-900 dark:text-white">Aviso</h3>
+                </div>
+                <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">
+                    ${errorMessage}
+                </p>
+                <div class="flex justify-end">
+                    <button id="okAlertBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center shadow-sm">
+                        <span>Aceptar</span>
+                    </button>
+                </div>
+            `
+
+            alertOverlay.appendChild(alertModal)
+            document.body.appendChild(alertOverlay)
+
+            if (window.lucide) lucide.createIcons({ root: alertModal })
+
+            requestAnimationFrame(() => {
+                alertModal.classList.remove("scale-95")
+                alertModal.classList.add("scale-100")
+            })
+
+            const cleanupAlert = () => {
+                alertOverlay.classList.add("opacity-0")
+                setTimeout(() => {
+                    if (document.body.contains(alertOverlay)) document.body.removeChild(alertOverlay)
+                }, 200)
+            }
+
+            alertModal.querySelector("#okAlertBtn").addEventListener("click", cleanupAlert)
+            alertOverlay.addEventListener("click", (e) => {
+                if (e.target === alertOverlay) cleanupAlert()
+            })
+        }
+    }
     window.handleTyping = handleTyping
     window.handleKeyDown = handleKeyDown
     window.autoResize = autoResize
@@ -1113,25 +1216,31 @@ export async function loadChat(sessionId, phone, name = null) {
 
         if (header) {
             header.innerHTML = `
-                <div class="flex items-center gap-3 w-full min-w-0">
-                    <button
-                        type="button"
-                        onclick="showMobileConversationList()"
-                        class="md:hidden h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-lg
-                        hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition"
-                        title="Volver a conversaciones"
-                        aria-label="Volver a conversaciones"
-                    >
-                        <i data-lucide="arrow-left" class="w-5 h-5"></i>
-                    </button>
-                    <div class="flex min-w-0 flex-col">
-                        <span class="truncate font-semibold text-sm">
-                            ${escapeHtml(displayName)}
-                        </span>
-                        <span class="truncate text-xs text-gray-400">
-                            ${escapeHtml(safePhone ? `+${safePhone}` : "En conversacion")}
-                        </span>
+                <div class="flex items-center justify-between w-full min-w-0">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <button
+                            type="button"
+                            onclick="showMobileConversationList()"
+                            class="md:hidden h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-lg
+                            hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95 transition"
+                            title="Volver a conversaciones"
+                            aria-label="Volver a conversaciones"
+                        >
+                            <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                        </button>
+                        <div class="flex min-w-0 flex-col">
+                            <span class="truncate font-semibold text-sm">
+                                ${escapeHtml(displayName)}
+                            </span>
+                            <span class="truncate text-xs text-gray-400">
+                                ${escapeHtml(safePhone ? `+${safePhone}` : "En conversacion")}
+                            </span>
+                        </div>
                     </div>
+                    
+                    <button onclick="resumeBotControl(${numericSessionId})" class="shrink-0 ml-2 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Devolver control al chatbot">
+                        <span class="inline">🔄</span> <span class="hidden sm:inline">Transferir Control</span>
+                    </button>
                 </div>
             `
             if (window.lucide) lucide.createIcons()
