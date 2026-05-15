@@ -790,9 +790,33 @@ async function refreshCollectionDetail(item, options = {}) {
 
     requestState.promise = (async () => {
         try {
-            const latest = options.force
+            let latest = options.force
                 ? await refreshCollectionAccount(account, { includePaid: shouldIncludePaidDetail() })
                 : await getCollectionByAccount(account, { includePaid: shouldIncludePaidDetail() });
+
+            if (!Array.isArray(latest?.payments) || !latest.payments.length) {
+                try {
+                    const paymentsResponse = await getCollectionPayments(account, { includePaid: true });
+                    const paymentItems = Array.isArray(paymentsResponse?.data)
+                        ? paymentsResponse.data
+                        : Array.isArray(paymentsResponse)
+                            ? paymentsResponse
+                            : [];
+                    if (paymentItems.length) {
+                        latest = {
+                            ...latest,
+                            payments: paymentItems,
+                            payments_count: paymentItems.length,
+                            financial_summary: {
+                                ...(latest?.financial_summary || {}),
+                                payments_count: paymentItems.length,
+                            },
+                        };
+                    }
+                } catch (paymentsError) {
+                    console.warn("No se pudo cargar historial de pagos:", paymentsError);
+                }
+            }
 
             if (requestState.cancelled || String(lastDrawerAccount || "") !== account) {
                 return;

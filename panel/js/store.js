@@ -176,14 +176,54 @@ function upsertVerification(item) {
     return true
 }
 
+function hasCollectionValue(value) {
+    if (value == null) return false
+    if (typeof value === "string") {
+        const trimmed = value.trim()
+        return trimmed !== "" && trimmed !== "-"
+    }
+    if (Array.isArray(value)) return value.length > 0
+    if (typeof value === "object") return Object.keys(value).length > 0
+    return true
+}
+
+function mergeCollectionObject(existing = {}, incoming = {}) {
+    const merged = { ...(existing || {}) }
+
+    Object.entries(incoming || {}).forEach(([key, value]) => {
+        if (hasCollectionValue(value) || !hasCollectionValue(merged[key])) {
+            merged[key] = value
+        }
+    })
+
+    return merged
+}
+
+function mergeCollectionRecord(existing = {}, incoming = {}) {
+    const merged = mergeCollectionObject(existing, incoming)
+
+    if (existing?.customer || incoming?.customer) {
+        merged.customer = mergeCollectionObject(existing.customer, incoming.customer)
+    }
+
+    if (existing?.financial_summary || incoming?.financial_summary) {
+        merged.financial_summary = mergeCollectionObject(
+            existing.financial_summary,
+            incoming.financial_summary,
+        )
+    }
+
+    return merged
+}
+
 function upsertCollection(item, options = {}) {
     const account = item?.no_cuenta == null ? null : String(item.no_cuenta)
     if (!account) return false
 
-    state.collections.byAccount[account] = {
-        ...(state.collections.byAccount[account] || {}),
-        ...item,
-    }
+    state.collections.byAccount[account] = mergeCollectionRecord(
+        state.collections.byAccount[account] || {},
+        item,
+    )
 
     const exists = state.collections.order.includes(account)
     if (!exists) {
