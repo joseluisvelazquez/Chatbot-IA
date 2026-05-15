@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     # Gemini API (obligatorias)
     # ============================================================
     GEMINI_API_KEY: str
+    
+    def get_asset_url(self, filename: str | None) -> str | None:
+        if not filename:
+            return None
+        
+        if filename.startswith("http"):
+            return filename
+            
+        base = self.MEDIA_BASE_URL.rstrip("/")
+        return f"{base}/media/imagenes_verificacion/{filename}"
+
 
     @property
     def BASE_URL(self) -> str:

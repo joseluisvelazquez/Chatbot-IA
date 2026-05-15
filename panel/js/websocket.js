@@ -99,6 +99,7 @@ export function initWebSocket() {
                 name: data.name || data.conversation?.name || null,
                 last_message: message.content || data.conversation?.last_message || "",
                 last_message_at: message.created_at || data.conversation?.last_message_at || "",
+                last_customer_message_at: data.conversation?.last_customer_message_at || null,
             };
 
             dispatch({

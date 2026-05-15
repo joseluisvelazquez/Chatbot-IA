@@ -1332,6 +1332,7 @@ def get_conversations(
                     session_state=str(s.state or ""),
                     previous_state=str(s.previous_state or ""),
                 ),
+                last_customer_message_at=s.last_customer_message_at,
             )
         )
 
@@ -1430,6 +1431,13 @@ async def send_agent_message(
     if not session:
         raise HTTPException(404, "Sesión no encontrada")
 
+    # 🛡️ VALIDACION: Ventana de 24 horas
+    if session.last_customer_message_at and session.last_customer_message_at < mexico_now_naive() - timedelta(days=1):
+        raise HTTPException(
+            status_code=403,
+            detail="La ventana de atención de 24 horas ha expirado. Por favor, contacte al cliente por llamada."
+        )
+
     phone = session.phone
     was_active = bool(
         session.last_message_at
@@ -1475,6 +1483,7 @@ async def send_agent_message(
                 "name": None,
                 "last_message": message.content,
                 "last_message_at": message_payload["created_at"],
+                "last_customer_message_at": session.last_customer_message_at.isoformat() if session.last_customer_message_at else None,
                 "unread_count": 0,
                 "folio": str(session.folio) if session.folio else None,
             },
@@ -1540,6 +1549,13 @@ async def send_agent_file(
     if not session:
         raise HTTPException(404, "Sesión no encontrada")
 
+    # 🛡️ VALIDACION: Ventana de 24 horas
+    if session.last_customer_message_at and session.last_customer_message_at < mexico_now_naive() - timedelta(days=1):
+        raise HTTPException(
+            status_code=403,
+            detail="La ventana de atención de 24 horas ha expirado. Por favor, contacte al cliente por llamada."
+        )
+
     phone = session.phone
     was_active = bool(
         session.last_message_at
@@ -1596,6 +1612,7 @@ async def send_agent_file(
             "name": None,
             "last_message": last_message,
             "last_message_at": message.created_at.isoformat(),
+            "last_customer_message_at": session.last_customer_message_at.isoformat() if session.last_customer_message_at else None,
             "unread_count": 0,
             "folio": str(session.folio) if session.folio else None,
         },

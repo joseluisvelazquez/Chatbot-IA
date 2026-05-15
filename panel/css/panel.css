@@ -20,6 +20,9 @@ body {
         height: 100dvh;
     }
 }
+#sidebar[data-collapsed="true"] [data-sidebar-label] {
+    display: none;
+}
 
 #content,
 #drawerBody,

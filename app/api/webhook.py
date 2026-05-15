@@ -212,6 +212,7 @@ def build_conversation_payload(chat, message: Message) -> dict:
         "name": None,
         "last_message": message.content or "",
         "last_message_at": message.created_at.isoformat() if message.created_at else "",
+        "last_customer_message_at": chat.last_customer_message_at.isoformat() if chat.last_customer_message_at else None,
         "unread_count": chat.unread_count or 0,
         "folio": str(chat.folio) if chat.folio else None,
     }
@@ -401,6 +402,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 previous_state=chat.previous_state,
                 message_id=message_id,
                 last_message_at=max(event_time, utcnow_naive()),
+                last_customer_message_at=max(event_time, utcnow_naive()),
             )
             db.flush()
             db.commit()
@@ -622,6 +624,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             previous_state=previous_state,
             message_id=message_id,
             last_message_at=max(event_time, utcnow_naive()),
+            last_customer_message_at=max(event_time, utcnow_naive()),
         )
 
         upsert_inactivity_reminders(db, chat)

@@ -135,7 +135,7 @@ function renderNotificationButton() {
 
     return `
         <div class="px-2 mb-2">
-            <div class="flex items-center justify-between px-1 mb-1">
+        <div data-sidebar-label class="flex items-center justify-between px-1 mb-1">
                 <span class="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">Estado Notificaciones</span>
                 <div class="flex gap-1">
                     ${statusDots}

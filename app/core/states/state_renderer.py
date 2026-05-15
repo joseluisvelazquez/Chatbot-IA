@@ -132,7 +132,7 @@ def render_state(next_state, session, db):
         reply = MessageBuilder.info_metodos_pago(
             construir_no_cuenta(venta)
         )
-        image_id = settings.METODOS_PAGO_IMAGE_ID
+        image_id = settings.get_asset_url(settings.METODOS_PAGO_IMAGE_ID)
 
     elif next_state == ChatState.INFO_PLAN_3_MESES:
         calculos_3m = calcular_info_plan_3_meses(venta)
@@ -184,7 +184,8 @@ def render_state(next_state, session, db):
             
             env_var = componente.get("image_env")
             if env_var:
-                image_id = getattr(settings, env_var, None)
+                filename = getattr(settings, env_var, None)
+                image_id = settings.get_asset_url(filename)
 
     elif next_state == ChatState.INCONSISTENCIA:
         from app.content import messages as msg

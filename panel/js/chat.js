@@ -266,6 +266,8 @@ export async function initConversationsPage() {
     window.handleTyping = handleTyping
     window.handleKeyDown = handleKeyDown
     window.autoResize = autoResize
+    
+    startWindowValidationTimer()
 
     // reset visual de la vista al volver a entrar al módulo
     lastLoadedSessionId = null
@@ -314,6 +316,14 @@ export async function initConversationsPage() {
             renderSidebarFromState(state)
             console.timeEnd("renderSidebar")
             lastConversationSignature = state.conversations._version
+
+            // 🛡️ ACTUALIZAR ESTADO DE INPUT SI LA SESION ACTUAL CAMBIA
+            if (currentSessionId) {
+                const currentSession = state.conversations.byId[currentSessionId]
+                if (currentSession) {
+                    updateChatInputState(currentSession)
+                }
+            }
         }
 
         if (state.chat._previewVersion !== lastPreviewVersion) {
@@ -1146,6 +1156,57 @@ async function loadMoreMessages() {
 }
 
 // =========================
+// VALIDACION VENTANA 24H
+// =========================
+function updateChatInputState(session) {
+    const input = document.getElementById("messageInput")
+    const warning = document.getElementById("expiredWindowWarning")
+    const inputControls = document.getElementById("inputControls")
+
+    if (!input || !warning || !inputControls) return
+
+    if (!session || !session.last_customer_message_at) {
+        warning.classList.add("hidden")
+        inputControls.classList.remove("hidden")
+        input.disabled = false
+        return
+    }
+
+    const lastMsgDate = new Date(session.last_customer_message_at)
+    const now = new Date()
+    const diffMs = now - lastMsgDate
+    const diffHours = diffMs / (1000 * 60 * 60)
+
+    const isExpired = diffHours >= 24
+
+    if (isExpired) {
+        warning.classList.remove("hidden")
+        inputControls.classList.add("hidden")
+        input.disabled = true
+        if (window.lucide) lucide.createIcons()
+    } else {
+        warning.classList.add("hidden")
+        inputControls.classList.remove("hidden")
+        input.disabled = false
+    }
+}
+
+// Monitoreo automático de la ventana cada 10 segundos
+let windowValidationTimer = null
+function startWindowValidationTimer() {
+    if (windowValidationTimer) return
+    windowValidationTimer = setInterval(() => {
+        if (currentSessionId) {
+            const state = getState()
+            const session = state.conversations.byId[currentSessionId]
+            if (session) {
+                updateChatInputState(session)
+            }
+        }
+    }, 30000) // Revisar cada 30 segundos
+}
+
+// =========================
 // LOAD CHAT
 // =========================
 export async function loadChat(sessionId, phone, name = null) {
@@ -1180,6 +1241,8 @@ export async function loadChat(sessionId, phone, name = null) {
         console.warn("Intentando cargar sesion inexistente:", sessionId)
         return
     }
+
+    updateChatInputState(sessionInfo)
 
     const requestId = ++chatLoadRequestId
     imageList = []

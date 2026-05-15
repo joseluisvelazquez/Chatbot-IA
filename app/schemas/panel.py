@@ -24,6 +24,7 @@ class ConversationResponse(BaseModel):
     no_cuenta: str | None = None
     folio: str | None = None
     status: str | None = None
+    last_customer_message_at: Optional[datetime] = None
 
 
 class MessageResponse(BaseModel):
