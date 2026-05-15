@@ -1,5 +1,6 @@
 const DEV_PANEL_PORTS = new Set(["5500"]);
 const DEFAULT_DEV_BACKEND_ORIGIN = "http://localhost:8000";
+const SIGA_LOGIN_URL = "https://siga.mxcomp.mx/index.php";
 
 const panelAssetBaseUrl = new URL("../", import.meta.url);
 const panelBasePath = panelAssetBaseUrl.pathname.replace(/\/$/, "");
@@ -48,6 +49,10 @@ export function getWebSocketUrl(path = "/api/panel/ws") {
     const url = new URL(path, getBackendOrigin());
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
+}
+
+export function getSigaLoginUrl() {
+    return SIGA_LOGIN_URL;
 }
 
 export function resolveMediaUrl(path = "") {

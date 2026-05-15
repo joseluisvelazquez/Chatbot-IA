@@ -5,7 +5,7 @@ import { initDashboardPage } from "./dashboard.js";
 import { initCollectionsPage } from "./collections.js";
 import { initSidebar } from "./sidebar.js";
 import { setLayout } from "./layoutmanager.js";
-import { getAuthUrl, getPanelHomeUrl, getPanelPageUrl, isLocalPanelEnvironment } from "./config.js";
+import { getAuthUrl, getPanelPageUrl, getSigaLoginUrl, isLocalPanelEnvironment } from "./config.js";
 import { initWebSocket } from "./websocket.js"
 import { dispatch, getState } from "./store.js"
 
@@ -182,10 +182,12 @@ export function renderSessionExpired() {
                     Tu sesión ha expirado por seguridad.
                 </p>
 
-                <button onclick="location.reload()"
-                    class="mt-4 px-4 py-2 bg-green-500 text-black rounded-lg">
-                    Reingresar
-                </button>
+                <a
+                    href="${getSigaLoginUrl()}"
+                    class="mt-4 inline-flex min-h-[40px] items-center justify-center rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-black transition hover:bg-green-400"
+                >
+                    Ir a SIGA
+                </a>
 
             </div>
         </div>
@@ -236,6 +238,13 @@ function renderUnauthorized(message = "Debes acceder desde SIGA para continuar."
                     ${message}
                 </p>
 
+                <a
+                    href="${getSigaLoginUrl()}"
+                    class="mb-4 inline-flex min-h-[40px] items-center justify-center rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-black transition hover:bg-green-400"
+                >
+                    Ir a SIGA
+                </a>
+
                 <div class="text-xs text-slate-500">
                     Si el problema persiste, contacta a sistemas.
                 </div>
@@ -259,8 +268,8 @@ export async function logout() {
     window.currentUser = null
     localStorage.removeItem("lastSession")
 
-    // reload limpio
-    window.location.href = getPanelHomeUrl()
+    // volver al punto de entrada correcto
+    window.location.href = getSigaLoginUrl()
 }
 async function initAuth() {
     const params = new URLSearchParams(window.location.search)

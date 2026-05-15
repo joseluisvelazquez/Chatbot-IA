@@ -1,4 +1,11 @@
-import { fetchCollectionManagers, fetchCollections, getCollectionByAccount, refreshCollectionAccount } from "./api.js";
+import {
+    fetchCollectionManagers,
+    fetchCollections,
+    getCollectionByAccount,
+    getCollectionPayments,
+    refreshCollectionAccount,
+} from "./api.js";
+import { navigateTo, setSelectedSession } from "./app.js";
 import { dispatch, getState, subscribeStore } from "./store.js";
 
 let currentCollectionFilters = {};
@@ -110,6 +117,8 @@ function drawerSignature(item = {}) {
         balance: item.balance || "",
         overdue_amount: item.overdue_amount || "",
         total_paid: item.total_paid || "",
+        has_conversation: Boolean(item.has_conversation),
+        conversation_session_id: item.conversation_session_id || "",
         last_payment: item.last_payment || "",
         sale_date: item.sale_date || "",
         payments: Array.isArray(item.payments)
@@ -138,6 +147,8 @@ function rowSignature(item = {}) {
         item.sale_date || "",
         item.days_overdue || "",
         item.total_paid || "",
+        Boolean(item.has_conversation),
+        item.conversation_session_id || "",
     ]);
 }
 
@@ -212,6 +223,42 @@ function formatDays(value) {
     return number === 1 ? "1 dia" : `${number} dias`;
 }
 
+async function goToConversation(item = {}) {
+    const sessionId = Number(item.conversation_session_id || item.session_id);
+    if (!Number.isFinite(sessionId) || sessionId <= 0) return;
+
+    const url = new URL(window.location);
+    url.searchParams.set("view", "conversations");
+    url.searchParams.set("session_id", String(sessionId));
+
+    setSelectedSession({
+        sessionId,
+        phone: item.phone || null,
+        name: item.customer_name || item.customer?.name || null,
+    });
+
+    window.history.pushState({}, "", url);
+    await navigateTo("conversations", false);
+}
+
+function renderConversationAction(item = {}) {
+    if (!item.has_conversation || !item.conversation_session_id) {
+        return `<span class="text-xs text-gray-400 dark:text-slate-500">-</span>`;
+    }
+
+    return `
+        <button
+            type="button"
+            class="collection-conversation-button inline-flex min-h-[36px] items-center justify-center gap-2 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+            aria-label="Ir a conversacion"
+            title="Ir a conversacion"
+        >
+            <i data-lucide="message-circle" class="h-4 w-4"></i>
+            <span>Ir a conversacion</span>
+        </button>
+    `;
+}
+
 function updateCollectionRow(row, item) {
     row.className = "cursor-pointer border-b border-gray-100 transition hover:bg-gray-50 dark:border-slate-700 dark:hover:bg-slate-700/40";
     row.innerHTML = `
@@ -230,7 +277,16 @@ function updateCollectionRow(row, item) {
         <td data-label="Fecha venta" class="px-4 py-4 whitespace-nowrap">${ui.escapeHtml(ui.formatDateTime(item.sale_date))}</td>
         <td data-label="Atraso" class="px-4 py-4">${ui.escapeHtml(formatDays(item.days_overdue))}</td>
         <td data-label="Total pagado" class="px-4 py-4 whitespace-nowrap">${ui.escapeHtml(ui.formatMoney(item.total_paid))}</td>
+        <td data-label="Conversacion" class="px-4 py-4 whitespace-nowrap">${renderConversationAction(item)}</td>
     `;
+
+    const conversationButton = row.querySelector(".collection-conversation-button");
+    if (conversationButton) {
+        conversationButton.onclick = (event) => {
+            event.stopPropagation();
+            void goToConversation(item);
+        };
+    }
 }
 
 function renderCollectionRows(items = [], validKeys = new Set()) {
@@ -266,6 +322,10 @@ function renderCollectionRows(items = [], validKeys = new Set()) {
         if (!validKeys.has(account)) {
             collectionRowCache.delete(account);
         }
+    }
+
+    if (window.lucide) {
+        window.lucide.createIcons();
     }
 }
 
@@ -704,6 +764,16 @@ function updateDrawer(item) {
             const isRefreshing = isDetailRequestActive(item.no_cuenta);
             footer.innerHTML = `
                 <div class="flex flex-col gap-2 sm:flex-row">
+                    ${item.has_conversation && item.conversation_session_id ? `
+                        <button
+                            id="collectionsGoToConversationButton"
+                            type="button"
+                            class="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+                        >
+                            <i data-lucide="message-circle" class="h-4 w-4"></i>
+                            <span>Ir a conversacion</span>
+                        </button>
+                    ` : ""}
                     <button
                         id="collectionsRefreshSigaButton"
                         type="button"
@@ -737,6 +807,13 @@ function updateDrawer(item) {
             if (sigaButton) {
                 sigaButton.onclick = () => {
                     window.open(item.siga_url, "_blank", "noopener");
+                };
+            }
+
+            const conversationButton = document.getElementById("collectionsGoToConversationButton");
+            if (conversationButton) {
+                conversationButton.onclick = () => {
+                    void goToConversation(item);
                 };
             }
         }
@@ -790,9 +867,33 @@ async function refreshCollectionDetail(item, options = {}) {
 
     requestState.promise = (async () => {
         try {
-            const latest = options.force
+            let latest = options.force
                 ? await refreshCollectionAccount(account, { includePaid: shouldIncludePaidDetail() })
                 : await getCollectionByAccount(account, { includePaid: shouldIncludePaidDetail() });
+
+            if (!Array.isArray(latest?.payments) || !latest.payments.length) {
+                try {
+                    const paymentsResponse = await getCollectionPayments(account, { includePaid: true });
+                    const paymentItems = Array.isArray(paymentsResponse?.data)
+                        ? paymentsResponse.data
+                        : Array.isArray(paymentsResponse)
+                            ? paymentsResponse
+                            : [];
+                    if (paymentItems.length) {
+                        latest = {
+                            ...latest,
+                            payments: paymentItems,
+                            payments_count: paymentItems.length,
+                            financial_summary: {
+                                ...(latest?.financial_summary || {}),
+                                payments_count: paymentItems.length,
+                            },
+                        };
+                    }
+                } catch (paymentsError) {
+                    console.warn("No se pudo cargar historial de pagos:", paymentsError);
+                }
+            }
 
             if (requestState.cancelled || String(lastDrawerAccount || "") !== account) {
                 return;

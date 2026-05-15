@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+import logging
 import re
 from typing import Any
 
@@ -9,6 +10,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.utils.address_formatter import capitalizar_texto
 from app.utils.product_mapping import normalize_product_name, product_sku_from_sale
+
+logger = logging.getLogger(__name__)
 
 _VERIFICATION_KEYS = {
     "found",
@@ -146,6 +149,12 @@ def _value_from_path(record: dict[str, Any] | None, keys: tuple[str, ...]) -> An
 def _decimal_or_none(value: Any) -> Decimal | None:
     if value in (None, ""):
         return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.replace("$", "").replace(",", "").strip()
+        if not value:
+            return None
     try:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
@@ -188,6 +197,269 @@ def _date_text(value: Any) -> str | None:
 
 def _as_dict(value: Any) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
+
+
+def _mask(value: Any, *, visible: int = 4) -> str | None:
+    text = _safe_text(value)
+    if text is None:
+        return None
+    if len(text) <= visible:
+        return "***"
+    return f"***{text[-visible:]}"
+
+
+def _boolish_true(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, Decimal)) and not isinstance(value, bool):
+        return value == 1
+    text = _safe_text(value)
+    return bool(text and _strip_accents_for_match(text).lower() in {"1", "true", "si", "sí", "yes", "y"})
+
+
+def _strip_accents_for_match(value: str) -> str:
+    return "".join(
+        ch
+        for ch in value.casefold()
+        if ch.isascii() or ch.isalnum() or ch.isspace() or ch in "_-"
+    )
+
+
+def _payment_record_excluded(record: dict[str, Any]) -> bool:
+    for key in (
+        "cancelled",
+        "canceled",
+        "cancelado",
+        "is_cancelled",
+        "is_canceled",
+        "devolucion",
+        "devuelto",
+        "returned",
+        "refund",
+        "refunded",
+        "is_refund",
+        "reversed",
+        "anulado",
+    ):
+        if _boolish_true(record.get(key)):
+            return True
+
+    marker_parts = []
+    for key in (
+        "status",
+        "estatus",
+        "estado",
+        "state",
+        "concept",
+        "concepto",
+        "movement",
+        "movimiento",
+        "tipo",
+        "type",
+        "tipo_movimiento",
+        "descripcion",
+        "description",
+    ):
+        text = _safe_text(record.get(key))
+        if text:
+            marker_parts.append(_strip_accents_for_match(text).lower())
+    marker = " ".join(marker_parts)
+    return any(token in marker for token in ("cancel", "anulad", "devol", "refund", "revers"))
+
+
+def _payment_amount(record: dict[str, Any]) -> Decimal | None:
+    for key in (
+        "amount",
+        "cantidad",
+        "importe",
+        "monto",
+        "abono",
+        "pago",
+        "paid_amount",
+        "payment_amount",
+        "importe_pago",
+        "importe_abono",
+        "monto_pago",
+        "monto_abono",
+        "valor_pago",
+        "cantidad_pago",
+        "valor",
+    ):
+        amount = _decimal_or_none(record.get(key))
+        if amount is not None:
+            return amount
+    return None
+
+
+_PAYMENT_LIST_KEYS = (
+    "payments",
+    "pagos",
+    "historial_pagos",
+    "payment_history",
+    "history",
+    "movimientos",
+    "estado_cuenta",
+    "estados_cuenta",
+    "transactions",
+    "records",
+    "rows",
+    "recent_payments",
+    "abonos",
+    "items",
+    "data",
+)
+
+
+def _collect_payment_lists(record: dict[str, Any], prefix: str) -> list[tuple[str, list[Any]]]:
+    candidates: list[tuple[str, list[Any]]] = []
+    for key in _PAYMENT_LIST_KEYS:
+        value = record.get(key)
+        if isinstance(value, list):
+            source = key if prefix == "root" else f"{prefix}.{key}"
+            candidates.append((source, value))
+        elif isinstance(value, dict):
+            source = key if prefix == "root" else f"{prefix}.{key}"
+            candidates.extend(_collect_payment_lists(value, source))
+    return candidates
+
+
+def _candidate_payment_lists(data: dict[str, Any]) -> list[tuple[str, list[Any]]]:
+    candidates: list[tuple[str, list[Any]]] = []
+    named_records: list[tuple[str, dict[str, Any]]] = [("root", data)]
+    for name in ("payment_summary", "payment", "summary", "financial_summary", "account"):
+        record = _as_dict(data.get(name))
+        if record:
+            named_records.append((name, record))
+
+    for record_name, record in named_records:
+        candidates.extend(_collect_payment_lists(record, record_name))
+
+    return candidates
+
+
+def _summary_total_pagado(data: dict[str, Any]) -> tuple[Decimal | None, str | None]:
+    summary_keys = (
+        "total_pagado",
+        "monto_pagado",
+        "importe_pagado",
+        "total_abonado",
+        "monto_abonado",
+        "importe_abonado",
+        "abonos_total",
+        "total_abonos",
+        "paid_total",
+        "total_paid",
+        "paid_amount",
+        "amount_paid",
+        "pagos_total",
+        "payments_total",
+        "pagado",
+        "abonos",
+    )
+    named_records: list[tuple[str, dict[str, Any]]] = []
+    for name in ("payment_summary", "payment", "financial_summary", "summary", "account"):
+        record = _as_dict(data.get(name))
+        if record:
+            named_records.append((name, record))
+    named_records.append(("root", data))
+
+    for record_name, record in named_records:
+        for key in summary_keys:
+            raw = record.get(key)
+            if isinstance(raw, (list, dict, tuple, set)):
+                continue
+            amount = _decimal_or_none(raw)
+            if amount is not None and amount >= 0:
+                source = key if record_name == "root" else f"{record_name}.{key}"
+                return amount, source
+    return None, None
+
+
+def _sum_payment_lists(payment_lists: list[tuple[str, list[Any]]]) -> tuple[Decimal | None, str | None]:
+    for list_source, items in payment_lists:
+        valid_total = Decimal("0")
+        valid_count = 0
+        amount_seen = False
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            amount = _payment_amount(item)
+            amount_seen = amount_seen or amount is not None
+            if _payment_record_excluded(item) or amount is None or amount <= 0:
+                continue
+            valid_total += amount
+            valid_count += 1
+        if valid_count > 0 or amount_seen or not items:
+            return valid_total, f"{list_source}.sum"
+    return None, None
+
+
+def normalize_bridge_total_pagado(
+    data: Any,
+    *,
+    folio: Any = None,
+    no_cuenta: Any = None,
+    prefer_payments: bool = False,
+    log_result: bool = True,
+) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        result = {
+            "total_pagado": None,
+            "total_pagado_source": None,
+            "payments_count": 0,
+        }
+        if log_result:
+            logger.warning(
+                "bridge_total_pagado_normalized",
+                extra={
+                    "folio": _mask(folio),
+                    "cuenta": _mask(no_cuenta),
+                    "folio_masked": _mask(folio),
+                    "cuenta_masked": _mask(no_cuenta),
+                    "total_pagado": None,
+                    "source": None,
+                    "payments_count": 0,
+                    "reason": "payload_unavailable",
+                },
+            )
+        return result
+
+    payment_lists = _candidate_payment_lists(data)
+    payments_count = sum(len(items) for _source, items in payment_lists)
+    payment_total, payment_source = _sum_payment_lists(payment_lists)
+
+    if prefer_payments and payment_source:
+        total, source = payment_total, payment_source
+    else:
+        total, source = _summary_total_pagado(data)
+        if total is None:
+            total, source = payment_total, payment_source
+
+    result = {
+        "total_pagado": f"{total:.2f}" if total is not None else None,
+        "total_pagado_source": source,
+        "payments_count": payments_count,
+    }
+
+    if log_result:
+        log_extra = {
+            "folio": _mask(folio),
+            "cuenta": _mask(no_cuenta),
+            "folio_masked": _mask(folio),
+            "cuenta_masked": _mask(no_cuenta),
+            "total_pagado": result["total_pagado"],
+            "source": source,
+            "payments_count": payments_count,
+        }
+        if total is None:
+            logger.warning(
+                "bridge_total_pagado_normalized",
+                extra={**log_extra, "reason": "total_pagado_unavailable"},
+            )
+        else:
+            logger.info("bridge_total_pagado_normalized", extra=log_extra)
+
+    return result
 
 
 def _build_records(data: dict[str, Any]) -> tuple[dict[str, Any] | None, ...]:
@@ -285,6 +557,14 @@ def _normalize_payment_snapshot(
 
     recent_payments = data.get("recent_payments")
     payments_count = len(recent_payments) if isinstance(recent_payments, list) else 0
+    total_pagado_info = normalize_bridge_total_pagado(
+        data,
+        folio=_first_safe_text(records, ("folio",)),
+        no_cuenta=_first_safe_text(records, ("no_cuenta", "cuenta", "account", "account_number", "numero_cuenta")),
+    )
+    total_pagado = total_pagado_info.get("total_pagado")
+    total_pagado_source = total_pagado_info.get("total_pagado_source")
+    payments_count = int(total_pagado_info.get("payments_count") or payments_count or 0)
     available = any(
         [
             saldo,
@@ -297,6 +577,7 @@ def _normalize_payment_snapshot(
             saldo_3_meses,
             fecha_limite_3_meses,
             importe_semanal_3m,
+            total_pagado,
             payments_count,
         ]
     )
@@ -314,6 +595,8 @@ def _normalize_payment_snapshot(
         "saldo_3_meses": saldo_3_meses,
         "fecha_limite_3_meses": fecha_limite_3_meses,
         "importe_semanal_3m": importe_semanal_3m,
+        "total_pagado": total_pagado,
+        "total_pagado_source": total_pagado_source,
         "payments_count": payments_count,
         "reason": None if available else "payment_data_unavailable",
     }
@@ -385,6 +668,8 @@ def normalize_siga_verification_snapshot(
                 "saldo_3_meses": None,
                 "fecha_limite_3_meses": None,
                 "importe_semanal_3m": None,
+                "total_pagado": None,
+                "total_pagado_source": None,
                 "payments_count": 0,
                 "reason": "payload_unavailable",
             },

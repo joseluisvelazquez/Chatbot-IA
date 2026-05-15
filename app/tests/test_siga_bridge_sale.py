@@ -14,6 +14,7 @@ from app.services.siga_bridge_sale import (
     bridge_address_from_payload,
     bridge_sale_from_payload,
     bridge_verification_found,
+    normalize_bridge_total_pagado,
     normalize_siga_verification_snapshot,
 )
 from app.utils.product_mapping import requires_components_check
@@ -173,6 +174,114 @@ def test_normalizer_payment_object_does_not_leak_raw_object():
     assert snapshot["payment"]["saldo"] == "100.00"
     assert snapshot["payment"]["plan_label"] is None
     assert "[object Object]" not in str(snapshot["payment"])
+
+
+def test_bridge_total_pagado_uses_payment_summary_total():
+    snapshot = normalize_siga_verification_snapshot(
+        verification_payload(
+            payment_summary={"total_pagado": "645.75", "saldo": "1200.00"},
+            recent_payments=[],
+        )
+    )
+
+    assert snapshot["payment"]["total_pagado"] == "645.75"
+    assert snapshot["payment"]["total_pagado_source"] == "payment_summary.total_pagado"
+
+
+def test_bridge_total_pagado_sums_individual_payments():
+    result = normalize_bridge_total_pagado(
+        {
+            "folio": "16809",
+            "account": {"no_cuenta": "60436"},
+            "payments": [
+                {"amount": "100.00", "status": "APLICADO"},
+                {"importe": "50.25", "concepto": "ABONO"},
+            ],
+        },
+        log_result=False,
+    )
+
+    assert result["total_pagado"] == "150.25"
+    assert result["total_pagado_source"] == "payments.sum"
+    assert result["payments_count"] == 2
+
+
+def test_bridge_total_pagado_can_prefer_payment_rows_over_summary():
+    result = normalize_bridge_total_pagado(
+        {
+            "payment_summary": {"total_pagado": "999.00"},
+            "payments": [
+                {"amount": "100.00", "status": "APLICADO"},
+                {"importe": "50.00", "concepto": "ABONO"},
+            ],
+        },
+        prefer_payments=True,
+        log_result=False,
+    )
+
+    assert result["total_pagado"] == "150.00"
+    assert result["total_pagado_source"] == "payments.sum"
+
+
+def test_bridge_total_pagado_sums_history_rows_shape():
+    result = normalize_bridge_total_pagado(
+        {
+            "data": {
+                "historial_pagos": [
+                    {"monto_pago": "225.75", "tipo_movimiento": "ABONO"},
+                    {"monto_pago": "99.00", "tipo_movimiento": "DEVOLUCION"},
+                ]
+            }
+        },
+        log_result=False,
+    )
+
+    assert result["total_pagado"] == "225.75"
+    assert result["total_pagado_source"] == "data.historial_pagos.sum"
+
+
+def test_bridge_total_pagado_excludes_cancelled_refunds_and_negative_rows():
+    result = normalize_bridge_total_pagado(
+        {
+            "payments": [
+                {"amount": "100.00", "status": "APLICADO"},
+                {"amount": "999.00", "status": "CANCELADO"},
+                {"amount": "50.00", "concepto": "DEVOLUCION"},
+                {"amount": "-10.00", "status": "APLICADO"},
+            ],
+        },
+        log_result=False,
+    )
+
+    assert result["total_pagado"] == "100.00"
+
+
+def test_bridge_total_pagado_only_cancelled_refunds_is_zero():
+    result = normalize_bridge_total_pagado(
+        {
+            "payments": [
+                {"amount": "999.00", "status": "CANCELADO"},
+                {"amount": "50.00", "concepto": "DEVOLUCION"},
+            ],
+        },
+        log_result=False,
+    )
+
+    assert result["total_pagado"] == "0.00"
+
+
+def test_bridge_total_pagado_empty_payments_is_zero():
+    result = normalize_bridge_total_pagado({"payments": []}, log_result=False)
+
+    assert result["total_pagado"] == "0.00"
+    assert result["total_pagado_source"] == "payments.sum"
+
+
+def test_bridge_total_pagado_unavailable_is_null():
+    result = normalize_bridge_total_pagado({"saldo": "1200.00"}, log_result=False)
+
+    assert result["total_pagado"] is None
+    assert result["total_pagado_source"] is None
 
 
 def test_address_formatter_omits_missing_values_and_technical_object():

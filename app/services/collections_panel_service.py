@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+import json
 import logging
 import re
 import time
 import unicodedata
 from typing import Any, Mapping
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, or_, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
-from app.security.auth_service import get_nombre_resumido
+from app.db.models import ChatSessions
+from app.security.auth_service import get_nombre_resumido, restrict_to_assigned
 from app.services.siga_bridge import SigaBridgeError, get_siga_bridge_client
+from app.services.siga_bridge_sale import normalize_bridge_total_pagado
 from app.services.siga_navigation import build_siga_account_url
 
 logger = logging.getLogger(__name__)
@@ -45,6 +50,10 @@ class CollectionFilters:
     active_only: bool = True
     limit: int = DEFAULT_COLLECTION_LIMIT
     offset: int = 0
+
+
+BRIDGE_LIST_PAYMENT_ENRICH_LIMIT = 100
+BRIDGE_LIST_PAYMENT_ENRICH_CONCURRENCY = 4
 
 
 def can_view_collections(user: Any) -> bool:
@@ -239,6 +248,35 @@ def _first_number(*values: Any) -> int | float | None:
     return None
 
 
+def _address_text_from_mapping(address: Mapping[str, Any]) -> str | None:
+    if not address:
+        return None
+
+    street = _first_text(address.get("street"), address.get("calle"))
+    external = _first_text(
+        address.get("external_number"),
+        address.get("numero_exterior"),
+        address.get("num_ext"),
+    )
+    internal = _first_text(
+        address.get("internal_number"),
+        address.get("numero_interior"),
+        address.get("num_int"),
+    )
+    neighborhood = _first_text(address.get("neighborhood"), address.get("colonia"))
+    city = _first_text(address.get("city"), address.get("ciudad"), address.get("municipio"))
+    state = _first_text(address.get("state"), address.get("estado"))
+    postal_code = _first_text(address.get("postal_code"), address.get("cp"), address.get("codigo_postal"))
+
+    street_parts = [part for part in (street, external) if part]
+    if internal:
+        street_parts.append(f"Int {internal}")
+    line_one = " ".join(street_parts)
+    postal = f"CP {postal_code}" if postal_code else None
+    parts = [part for part in (line_one, neighborhood, city, state, postal) if part]
+    return ", ".join(parts) if parts else None
+
+
 def _first_date(*values: Any) -> str | None:
     for value in values:
         text_value = _date_text(value)
@@ -336,40 +374,243 @@ def normalize_payment(record: Any) -> dict[str, Any] | None:
     if not payment:
         return None
 
+    amount = _first_money(
+        payment.get("amount"),
+        payment.get("cantidad"),
+        payment.get("importe"),
+        payment.get("monto"),
+        payment.get("abono"),
+        payment.get("pago"),
+        payment.get("paid_amount"),
+        payment.get("payment_amount"),
+        payment.get("importe_pago"),
+        payment.get("importe_abono"),
+        payment.get("monto_pago"),
+        payment.get("monto_abono"),
+        payment.get("valor_pago"),
+        payment.get("cantidad_pago"),
+        payment.get("valor"),
+    )
+    status_text = _first_text(
+        payment.get("status"),
+        payment.get("estatus"),
+        payment.get("estado"),
+        payment.get("state"),
+    )
+    concept = _first_text(
+        payment.get("concept"),
+        payment.get("concepto"),
+        payment.get("tipo"),
+        payment.get("tipo_movimiento"),
+        payment.get("movimiento"),
+        payment.get("descripcion"),
+    )
+
     return {
         "id": _first_text(payment.get("id")),
-        "account": _first_text(payment.get("account"), payment.get("cuenta_e")),
-        "concept": _first_text(payment.get("concept"), payment.get("concepto")),
+        "account": _first_text(payment.get("account"), payment.get("cuenta_e"), payment.get("cuenta"), payment.get("no_cuenta")),
+        "concept": concept,
         "product": _first_text(payment.get("product"), payment.get("producto_s")),
         "payment_method": _first_text(payment.get("payment_method"), payment.get("metodo_pago")),
-        "amount": _first_money(payment.get("amount"), payment.get("cantidad")),
-        "paid_at": _first_date(payment.get("paid_at"), payment.get("fecha_pago")),
+        "amount": amount,
+        "paid_at": _first_date(
+            payment.get("paid_at"),
+            payment.get("fecha_pago"),
+            payment.get("fecha"),
+            payment.get("created_at"),
+            payment.get("fecha_registro"),
+            payment.get("fecha_cobro"),
+            payment.get("fecha_movimiento"),
+            payment.get("fecha_abono"),
+        ),
         "balance_after_payment": _first_money(
             payment.get("balance_after_payment"),
+            payment.get("saldo_despues"),
+            payment.get("saldo_restante"),
             payment.get("saldo"),
         ),
         "user": _first_text(payment.get("user"), payment.get("usuario")),
+        "status": status_text,
+        "cancelled": bool(
+            _truthy_active(payment.get("cancelled")) is True
+            or _truthy_active(payment.get("canceled")) is True
+            or _truthy_active(payment.get("cancelado")) is True
+            or _truthy_active(payment.get("devolucion")) is True
+            or _truthy_active(payment.get("refund")) is True
+            or _truthy_active(payment.get("refunded")) is True
+        ),
     }
 
 
-def normalize_payments(payload: Any) -> list[dict[str, Any]]:
+def _payment_records_from_payload(payload: Any) -> list[Any]:
     if isinstance(payload, list):
-        raw_items = payload
-    elif isinstance(payload, Mapping):
-        raw_items = (
-            payload.get("payments")
-            or payload.get("pagos")
-            or payload.get("items")
-            or payload.get("data")
-            or []
-        )
-    else:
-        raw_items = []
-
-    if not isinstance(raw_items, list):
+        return payload
+    if not isinstance(payload, Mapping):
         return []
 
-    return [payment for item in raw_items if (payment := normalize_payment(item))]
+    for key in (
+        "payments",
+        "pagos",
+        "historial_pagos",
+        "payment_history",
+        "history",
+        "movimientos",
+        "estado_cuenta",
+        "estados_cuenta",
+        "transactions",
+        "records",
+        "rows",
+        "items",
+        "recent_payments",
+        "abonos",
+        "data",
+    ):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, Mapping):
+            nested = _payment_records_from_payload(value)
+            if nested:
+                return nested
+    return []
+
+
+def _has_payment_records_payload(payload: Any) -> bool:
+    if isinstance(payload, list):
+        return True
+    if not isinstance(payload, Mapping):
+        return False
+
+    for key in (
+        "payments",
+        "pagos",
+        "historial_pagos",
+        "payment_history",
+        "history",
+        "movimientos",
+        "estado_cuenta",
+        "estados_cuenta",
+        "transactions",
+        "records",
+        "rows",
+        "items",
+        "recent_payments",
+        "abonos",
+        "data",
+    ):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return True
+        if isinstance(value, Mapping) and _has_payment_records_payload(value):
+            return True
+    return False
+
+
+def _payment_is_excluded(payment: dict[str, Any]) -> bool:
+    if payment.get("cancelled"):
+        return True
+    marker = _strip_accents(
+        " ".join(
+            value.lower()
+            for value in (
+                _first_text(payment.get("status")),
+                _first_text(payment.get("concept")),
+            )
+            if value
+        )
+    )
+    return any(token in marker for token in ("cancel", "anulad", "devol", "refund", "revers"))
+
+
+def _same_date_prefix(left: Any, right: Any) -> bool:
+    left_text = _safe_text(left)
+    right_text = _safe_text(right)
+    if not left_text or not right_text:
+        return False
+    return left_text[:10] == right_text[:10]
+
+
+def _payment_matches_initial_payment(payment: dict[str, Any], initial_payment: Any, sale_date: Any) -> bool:
+    initial_amount = _safe_decimal(initial_payment)
+    payment_amount = _safe_decimal(payment.get("amount"))
+    if initial_amount is None or payment_amount is None or payment_amount != initial_amount:
+        return False
+
+    marker = _strip_accents(
+        " ".join(
+            value.lower()
+            for value in (
+                _first_text(payment.get("id")),
+                _first_text(payment.get("concept")),
+                _first_text(payment.get("product")),
+                _first_text(payment.get("payment_method")),
+            )
+            if value
+        )
+    )
+    if any(token in marker for token in ("inicial", "enganche", "anticipo", "down payment")):
+        return True
+    return _same_date_prefix(payment.get("paid_at"), sale_date)
+
+
+def _with_initial_payment(
+    payments: list[dict[str, Any]],
+    *,
+    no_cuenta: str,
+    initial_payment: Any,
+    sale_date: Any,
+    product: Any = None,
+) -> list[dict[str, Any]]:
+    amount = _first_money(initial_payment)
+    amount_value = _safe_decimal(amount)
+    if amount_value is None or amount_value <= 0:
+        return payments
+    if any(_payment_matches_initial_payment(payment, amount, sale_date) for payment in payments):
+        return payments
+
+    return [
+        *payments,
+        {
+            "id": "initial_payment",
+            "account": no_cuenta,
+            "concept": "Pago inicial",
+            "product": _first_text(product),
+            "payment_method": None,
+            "amount": amount,
+            "paid_at": _first_date(sale_date),
+            "balance_after_payment": None,
+            "user": None,
+            "status": "APLICADO",
+            "cancelled": False,
+            "source": "initial_payment",
+        },
+    ]
+
+
+def _sum_normalized_payments(payments: list[dict[str, Any]]) -> tuple[str | None, int]:
+    total = Decimal("0")
+    counted = 0
+    for payment in payments:
+        amount = _safe_decimal(payment.get("amount"))
+        if amount is None or amount <= 0 or _payment_is_excluded(payment):
+            continue
+        total += amount
+        counted += 1
+    return (_money(total) if counted else None, counted)
+
+
+def normalize_payments(payload: Any) -> list[dict[str, Any]]:
+    raw_items = _payment_records_from_payload(payload)
+    payments: list[dict[str, Any]] = []
+    for item in raw_items:
+        payment = normalize_payment(item)
+        if not payment:
+            continue
+        amount = _safe_decimal(payment.get("amount"))
+        if amount is None or amount <= 0 or _payment_is_excluded(payment):
+            continue
+        payments.append(payment)
+    return payments
 
 
 def normalize_collection_record(
@@ -378,6 +619,7 @@ def normalize_collection_record(
     payments: list[dict[str, Any]] | None = None,
     source: str = "siga_bridge",
     bridge_status: str = "ok",
+    prefer_payment_total: bool | None = None,
 ) -> dict[str, Any] | None:
     item = _as_mapping(record)
     if not item:
@@ -386,6 +628,7 @@ def normalize_collection_record(
     account_raw = item.get("account")
     account = _as_mapping(account_raw)
     customer = _as_mapping(item.get("customer"))
+    customer_address = _as_mapping(customer.get("address"))
     sale = _as_mapping(item.get("sale"))
     amounts = _as_mapping(account.get("amounts"))
     plan = _as_mapping(account.get("plan"))
@@ -462,22 +705,87 @@ def normalize_collection_record(
         summary.get("initial_payment"),
         summary.get("pago_inicial"),
     )
-    total_paid = _first_money(
-        item.get("total_paid"),
-        summary.get("paid_total"),
+    folio = _first_text(item.get("folio"), sale.get("folio"))
+    product = _first_text(item.get("product"), account.get("product"), account.get("producto"), sale.get("descripcion"))
+    sale_date = _first_date(
+        item.get("sale_date"),
+        item.get("fecha_venta"),
+        item.get("fecha_relevante"),
+        account.get("sale_date"),
+        account.get("fecha_venta"),
+        sale.get("fecha_venta"),
     )
-    if total_paid is None:
+    has_initial_payment_row = any(
+        _payment_matches_initial_payment(payment, initial_payment, sale_date)
+        for payment in payment_items
+    )
+    payment_items = _with_initial_payment(
+        payment_items,
+        no_cuenta=no_cuenta,
+        initial_payment=initial_payment,
+        sale_date=sale_date,
+        product=product,
+    )
+    total_paid_source = None
+    bridge_total_info: dict[str, Any] = {}
+    prefer_bridge_payments = (
+        payments is not None and _has_payment_records_payload(item)
+        if prefer_payment_total is None
+        else bool(prefer_payment_total)
+    )
+    if source == "siga_bridge":
+        bridge_total_info = normalize_bridge_total_pagado(
+            dict(item),
+            folio=folio,
+            no_cuenta=no_cuenta,
+            prefer_payments=prefer_bridge_payments,
+        )
+        total_paid = _first_money(bridge_total_info.get("total_pagado"))
+        total_paid_source = _first_text(bridge_total_info.get("total_pagado_source"))
+    else:
+        total_paid = _first_money(
+            item.get("total_paid"),
+            item.get("total_pagado"),
+            summary.get("paid_total"),
+            summary.get("total_paid"),
+            summary.get("total_pagado"),
+            summary.get("total_abonado"),
+            summary.get("abonos_total"),
+        )
+
+    if total_paid is None and source != "siga_bridge":
         payments_sum_raw = summary.get("payments_sum") if summary else None
         if payments_sum_raw is None:
             payments_sum_raw = item.get("payments_sum")
-        if initial_payment is not None or payments_sum_raw is not None:
-            initial = _safe_decimal(initial_payment) or Decimal("0")
+        if payments_sum_raw is not None:
             payments_sum = _safe_decimal(payments_sum_raw) or Decimal("0")
-            total_paid = _money(initial + payments_sum)
+            initial = _safe_decimal(initial_payment) or Decimal("0")
+            initial_extra = initial if initial > 0 and not has_initial_payment_row else Decimal("0")
+            total_paid = _money(payments_sum + initial_extra)
+            total_paid_source = (
+                "local.payments_sum+initial_payment"
+                if initial_extra > 0
+                else "local.payments_sum"
+            )
+
+    payment_items_total, counted_payment_items = _sum_normalized_payments(payment_items)
+    can_use_payment_items_total = (
+        source != "siga_bridge"
+        or payments is not None
+        or _has_payment_records_payload(item)
+    )
+    if prefer_bridge_payments and counted_payment_items:
+        total_paid = payment_items_total
+        total_paid_source = "payments.sum"
+    elif total_paid is None and counted_payment_items and can_use_payment_items_total:
+        total_paid = payment_items_total
+        total_paid_source = total_paid_source or "payments.sum"
 
     payments_count = _first_number(
+        len(payment_items) if payments is not None and payment_items else None,
         item.get("payments_count"),
         summary.get("payments_count"),
+        bridge_total_info.get("payments_count"),
         len(payment_items) if payment_items else None,
     )
     last_payment = _first_date(
@@ -499,7 +807,7 @@ def normalize_collection_record(
 
     return {
         "no_cuenta": no_cuenta,
-        "folio": _first_text(item.get("folio"), sale.get("folio")),
+        "folio": folio,
         "phone": _first_text(item.get("phone"), phones[0] if phones else None),
         "phones": phones,
         "customer_name": _first_text(
@@ -528,8 +836,13 @@ def normalize_collection_record(
             "phones": phones,
             "address_text": _first_text(
                 item.get("address_text"),
+                item.get("domicilio"),
+                item.get("direccion"),
                 customer.get("address_text"),
-                _as_mapping(customer.get("address")).get("full"),
+                customer.get("domicilio"),
+                customer.get("direccion"),
+                customer_address.get("full"),
+                _address_text_from_mapping(customer_address),
             ),
         },
         "account_status": status,
@@ -537,21 +850,16 @@ def normalize_collection_record(
         "classification": classification,
         "estado_calculado": classification,
         "classification_label": classification_label,
-        "product": _first_text(item.get("product"), account.get("product"), account.get("producto"), sale.get("descripcion")),
-        "sale_date": _first_date(
-            item.get("sale_date"),
-            item.get("fecha_venta"),
-            item.get("fecha_relevante"),
-            account.get("sale_date"),
-            account.get("fecha_venta"),
-            sale.get("fecha_venta"),
-        ),
+        "product": product,
+        "sale_date": sale_date,
         "last_payment": last_payment,
         "balance": balance,
         "debt": _first_money(item.get("debt"), balance),
         "overdue_amount": overdue_amount,
         "days_overdue": days_overdue,
         "total_paid": total_paid,
+        "total_pagado": total_paid,
+        "total_paid_source": total_paid_source,
         "payments_count": int(payments_count or 0),
         "has_overdue": has_overdue,
         "is_paid": is_paid,
@@ -583,10 +891,12 @@ def normalize_collection_record(
                 summary.get("pago_minimo"),
             ),
             "total_paid": total_paid,
+            "total_pagado": total_paid,
+            "total_paid_source": total_paid_source,
             "payments_count": int(payments_count or 0),
         },
         "payments": payment_items,
-        "siga_url": build_siga_account_url(no_cuenta, _first_text(item.get("folio"), sale.get("folio"))),
+        "siga_url": build_siga_account_url(no_cuenta, folio),
         "source": source,
         "source_table": _first_text(item.get("source_table"), "cuentas"),
         "siga_bridge": {
@@ -677,27 +987,424 @@ def _collections_response(
     }
 
 
+def _manager_key(value: Any) -> str | None:
+    text_value = _safe_text(value)
+    if not text_value:
+        return None
+    return _strip_accents(text_value).casefold()
+
+
+def _truthy_active(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        return int(value) == 1
+
+    text_value = _strip_accents(str(value).strip().lower())
+    if not text_value:
+        return None
+    if text_value in {"1", "activo", "activa", "alta", "enabled", "habilitado", "habilitada", "true", "si", "yes"}:
+        return True
+    if text_value in {"0", "inactivo", "inactiva", "baja", "disabled", "deshabilitado", "deshabilitada", "false", "no"}:
+        return False
+    if any(token in text_value for token in ("baja", "inactiv", "deshabil", "deleted")):
+        return False
+    if "activ" in text_value or "habilit" in text_value:
+        return True
+    return None
+
+
+def _manager_is_active(item: Mapping[str, Any]) -> bool:
+    for key in ("deleted_at", "fecha_baja", "baja", "disabled_at"):
+        value = item.get(key)
+        if value not in (None, "", 0, "0", False):
+            return False
+
+    for key in ("activo", "active", "is_active", "enabled", "habilitado", "estatus", "status"):
+        active = _truthy_active(item.get(key))
+        if active is not None:
+            return active
+
+    return True
+
+
+def _manager_has_collection_role(item: Mapping[str, Any]) -> bool:
+    role_values = [
+        _first_text(item.get("puesto"), item.get("position")),
+        _first_text(item.get("role"), item.get("rol")),
+        _first_text(item.get("tipo")),
+    ]
+    present_values = [value for value in role_values if value]
+    if not present_values:
+        return True
+
+    role_text = _strip_accents(" ".join(present_values).lower())
+    return (
+        "cobranza" in role_text
+        or "gestor" in role_text
+        or "collector" in role_text
+    )
+
+
 def normalize_collection_manager(record: Any) -> dict[str, Any] | None:
     item = _as_mapping(record)
     if not item:
         return None
-    value = _first_text(item.get("value"), item.get("gestor"), item.get("collector"))
+
+    if not _manager_is_active(item) or not _manager_has_collection_role(item):
+        return None
+
+    value = _first_text(
+        item.get("value"),
+        item.get("gestor"),
+        item.get("collector"),
+        item.get("nombre_resumido"),
+    )
     if not value:
         return None
+    label = _first_text(item.get("label"), item.get("nombre"), item.get("nombre_completo"), value)
     return {
+        "id": _first_text(item.get("id"), item.get("gestor_id"), item.get("id_colaborador")),
         "value": value,
-        "label": _first_text(item.get("label"), value),
+        "label": label,
+        "nombre": label,
+        "usuario": _first_text(item.get("usuario"), item.get("username"), item.get("nombre_usuario")),
+        "activo": True,
+        "empresa_id": _first_number(item.get("empresa_id"), item.get("id_emp_col"), item.get("id_emp")),
         "accounts_count": _first_number(item.get("accounts_count")),
-        "source_field": _first_text(item.get("source_field"), "cuentas.agente_verificador"),
+        "source": _first_text(item.get("source"), "siga_bridge"),
+        "source_field": _first_text(item.get("source_field"), "colaboradores.nombre_resumido"),
     }
 
 
-def normalize_collection_managers(payload: Any) -> list[dict[str, Any]]:
+def normalize_collection_managers(
+    payload: Any,
+    *,
+    allowed_keys: set[str] | None = None,
+) -> list[dict[str, Any]]:
     data = _as_mapping(payload)
     raw_items = data.get("items") or data.get("data") or data.get("managers") or []
     if not isinstance(raw_items, list):
         return []
-    return [manager for row in raw_items if (manager := normalize_collection_manager(row))]
+    managers_by_key: dict[str, dict[str, Any]] = {}
+    for row in raw_items:
+        manager = normalize_collection_manager(row)
+        if not manager:
+            continue
+        key = _manager_key(manager.get("value"))
+        if not key or (allowed_keys is not None and key not in allowed_keys):
+            continue
+        if key in managers_by_key:
+            existing_count = _safe_decimal(managers_by_key[key].get("accounts_count")) or Decimal("0")
+            next_count = _safe_decimal(manager.get("accounts_count")) or Decimal("0")
+            managers_by_key[key]["accounts_count"] = int(max(existing_count, next_count))
+            continue
+        managers_by_key[key] = manager
+    return list(managers_by_key.values())
+
+
+def _manager_key_set(managers: list[dict[str, Any]]) -> set[str]:
+    return {
+        key
+        for manager in managers
+        if (key := _manager_key(manager.get("value")))
+    }
+
+
+def _normalize_phone_match(value: Any) -> str | None:
+    text_value = _safe_text(value)
+    if not text_value:
+        return None
+    digits = re.sub(r"\D+", "", text_value)
+    if len(digits) >= 10:
+        return digits[-10:]
+    return None
+
+
+def _phone_match_variants(phone: str) -> set[str]:
+    normalized = _normalize_phone_match(phone)
+    if not normalized:
+        return set()
+    return {
+        normalized,
+        f"52{normalized}",
+        f"521{normalized}",
+        f"+52{normalized}",
+        f"+521{normalized}",
+    }
+
+
+def _read_json_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _path_value(payload: Mapping[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _extract_session_accounts(extra_json: Any) -> set[str]:
+    payload = _read_json_payload(extra_json)
+    paths = (
+        ("no_cuenta",),
+        ("cuenta",),
+        ("account_number",),
+        ("account", "no_cuenta"),
+        ("account", "cuenta"),
+        ("account", "account_number"),
+        ("siga_bridge", "normalized", "no_cuenta"),
+        ("siga_bridge", "verification_cache", "snapshot", "no_cuenta"),
+        ("siga_bridge", "verification_lookup", "data", "no_cuenta"),
+        ("siga_bridge", "verification_lookup", "data", "account", "no_cuenta"),
+        ("siga_bridge", "verification_lookup", "data", "account", "cuenta"),
+        ("siga_bridge", "customer_lookup", "data", "no_cuenta"),
+        ("siga_bridge", "customer_lookup", "data", "account", "no_cuenta"),
+        ("siga_bridge", "customer_lookup", "data", "account", "cuenta"),
+    )
+    accounts = {
+        account
+        for path in paths
+        if (account := _first_text(_path_value(payload, path)))
+    }
+    return accounts
+
+
+def _conversation_sort_value(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    text_value = _safe_text(value)
+    if not text_value:
+        return datetime.min
+    try:
+        return datetime.fromisoformat(text_value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return datetime.min
+
+
+def _conversation_candidate(row: Any) -> dict[str, Any] | None:
+    get_value = row.get if isinstance(row, Mapping) else lambda key, default=None: getattr(row, key, default)
+    session_id = get_value("id")
+    try:
+        session_id = int(session_id)
+    except (TypeError, ValueError):
+        return None
+    extra_json = get_value("extra_json")
+    return {
+        "id": session_id,
+        "folio": _first_text(get_value("folio")),
+        "phone": _first_text(get_value("phone")),
+        "phone_match": _normalize_phone_match(get_value("phone")),
+        "accounts": _extract_session_accounts(extra_json),
+        "last_message_at": get_value("last_message_at"),
+        "updated_at": get_value("updated_at"),
+        "created_at": get_value("created_at"),
+    }
+
+
+def _conversation_rank(candidate: dict[str, Any]) -> datetime:
+    return max(
+        _conversation_sort_value(candidate.get("last_message_at")),
+        _conversation_sort_value(candidate.get("updated_at")),
+        _conversation_sort_value(candidate.get("created_at")),
+    )
+
+
+def _set_no_conversation(item: dict[str, Any]) -> dict[str, Any]:
+    item["has_conversation"] = False
+    item["conversation_session_id"] = None
+    item["conversation_url"] = None
+    return item
+
+
+def _set_conversation(item: dict[str, Any], candidate: dict[str, Any] | None) -> dict[str, Any]:
+    if not candidate:
+        return _set_no_conversation(item)
+    session_id = int(candidate["id"])
+    item["has_conversation"] = True
+    item["conversation_session_id"] = str(session_id)
+    item["conversation_url"] = f"/panel/?view=conversations&session_id={session_id}"
+    return item
+
+
+def _account_json_condition() -> str:
+    paths = (
+        "$.no_cuenta",
+        "$.cuenta",
+        "$.account_number",
+        "$.account.no_cuenta",
+        "$.account.cuenta",
+        "$.account.account_number",
+        "$.siga_bridge.normalized.no_cuenta",
+        "$.siga_bridge.verification_cache.snapshot.no_cuenta",
+        "$.siga_bridge.verification_lookup.data.no_cuenta",
+        "$.siga_bridge.verification_lookup.data.account.no_cuenta",
+        "$.siga_bridge.verification_lookup.data.account.cuenta",
+        "$.siga_bridge.customer_lookup.data.no_cuenta",
+        "$.siga_bridge.customer_lookup.data.account.no_cuenta",
+        "$.siga_bridge.customer_lookup.data.account.cuenta",
+    )
+    return " OR ".join(
+        f"JSON_UNQUOTE(JSON_EXTRACT(extra_json, '{path}')) IN :accounts"
+        for path in paths
+    )
+
+
+def _conversation_candidates(db: Session, user: Any, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if db is None or not items:
+        return []
+
+    session_ids: set[int] = set()
+    folios: set[str] = set()
+    phone_variants: set[str] = set()
+    accounts: set[str] = set()
+    for item in items:
+        if item.get("session_id"):
+            try:
+                session_ids.add(int(item["session_id"]))
+            except (TypeError, ValueError):
+                pass
+        if folio := _first_text(item.get("folio")):
+            folios.add(folio)
+        for phone in [item.get("phone"), *(item.get("phones") if isinstance(item.get("phones"), list) else [])]:
+            phone_variants.update(_phone_match_variants(phone))
+        if account := _first_text(item.get("no_cuenta")):
+            accounts.add(account)
+
+    candidates_by_id: dict[int, dict[str, Any]] = {}
+    conditions = []
+    if session_ids:
+        conditions.append(ChatSessions.id.in_(session_ids))
+    if folios:
+        conditions.append(ChatSessions.folio.in_(folios))
+    if phone_variants:
+        conditions.append(ChatSessions.phone.in_(phone_variants))
+
+    if conditions:
+        try:
+            query = restrict_to_assigned(db.query(ChatSessions), user, db)
+            rows = (
+                query
+                .filter(or_(*conditions))
+                .order_by(ChatSessions.last_message_at.desc(), ChatSessions.updated_at.desc())
+                .limit(300)
+                .all()
+            )
+            for row in rows:
+                candidate = _conversation_candidate(row)
+                if candidate:
+                    candidates_by_id[candidate["id"]] = candidate
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "collections_conversation_candidates_failed",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "error_type": exc.__class__.__name__,
+                    "source": "session_lookup",
+                },
+            )
+
+    if accounts:
+        try:
+            sql = text(
+                f"""
+                SELECT id, phone, folio, extra_json, last_message_at, updated_at, created_at
+                FROM chat_sessions
+                WHERE ({_account_json_condition()})
+                ORDER BY COALESCE(last_message_at, updated_at, created_at) DESC
+                LIMIT :limit
+                """
+            ).bindparams(bindparam("accounts", expanding=True))
+            rows = db.execute(
+                sql,
+                {
+                    "accounts": sorted(accounts),
+                    "limit": 300,
+                },
+            ).mappings().all()
+            for row in rows:
+                candidate = _conversation_candidate(row)
+                if candidate:
+                    candidates_by_id[candidate["id"]] = candidate
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "collections_conversation_candidates_failed",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "error_type": exc.__class__.__name__,
+                    "source": "account_json_lookup",
+                },
+            )
+
+    return sorted(candidates_by_id.values(), key=_conversation_rank, reverse=True)
+
+
+def attach_conversation_links(
+    db: Session,
+    user: Any,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not items:
+        return items
+
+    for item in items:
+        _set_no_conversation(item)
+
+    candidates = sorted(_conversation_candidates(db, user, items), key=_conversation_rank, reverse=True)
+    if not candidates:
+        return items
+
+    by_id: dict[int, dict[str, Any]] = {}
+    by_folio: dict[str, dict[str, Any]] = {}
+    by_phone: dict[str, dict[str, Any]] = {}
+    by_account: dict[str, dict[str, Any]] = {}
+
+    for candidate in candidates:
+        by_id.setdefault(int(candidate["id"]), candidate)
+        if candidate.get("folio"):
+            by_folio.setdefault(str(candidate["folio"]), candidate)
+        if candidate.get("phone_match"):
+            by_phone.setdefault(str(candidate["phone_match"]), candidate)
+        for account in candidate.get("accounts") or set():
+            by_account.setdefault(str(account), candidate)
+
+    for item in items:
+        selected = None
+        if item.get("session_id"):
+            try:
+                selected = by_id.get(int(item["session_id"]))
+            except (TypeError, ValueError):
+                selected = None
+        if selected is None and item.get("folio"):
+            selected = by_folio.get(str(item["folio"]))
+        if selected is None:
+            item_phones = [item.get("phone"), *(item.get("phones") if isinstance(item.get("phones"), list) else [])]
+            for phone in item_phones:
+                normalized = _normalize_phone_match(phone)
+                if normalized and by_phone.get(normalized):
+                    selected = by_phone[normalized]
+                    break
+        if selected is None and item.get("no_cuenta"):
+            selected = by_account.get(str(item["no_cuenta"]))
+
+        _set_conversation(item, selected)
+
+    return items
 
 
 def _empty_response(
@@ -1152,6 +1859,321 @@ def _local_payments(db: Session, user: Any, no_cuenta: str, limit: int = 100) ->
     return [payment for row in rows if (payment := normalize_payment(row))]
 
 
+def _local_payments_with_initial(
+    db: Session,
+    user: Any,
+    no_cuenta: str,
+    local_item: dict[str, Any],
+) -> list[dict[str, Any]]:
+    local_summary = local_item.get("financial_summary") if isinstance(local_item.get("financial_summary"), dict) else {}
+    return _with_initial_payment(
+        _local_payments(db, user, no_cuenta),
+        no_cuenta=no_cuenta,
+        initial_payment=local_summary.get("initial_payment"),
+        sale_date=local_item.get("sale_date"),
+        product=local_item.get("product"),
+    )
+
+
+def _local_payment_summaries_for_accounts(
+    db: Session,
+    user: Any,
+    accounts: list[str],
+) -> dict[str, dict[str, Any]]:
+    account_values = [account for account in dict.fromkeys(accounts) if account]
+    if not account_values:
+        return {}
+
+    valid_payment_sql = """
+        COALESCE(ec.cantidad, 0) > 0
+        AND LOWER(COALESCE(ec.concepto, '')) NOT LIKE '%cancel%'
+        AND LOWER(COALESCE(ec.concepto, '')) NOT LIKE '%anulad%'
+        AND LOWER(COALESCE(ec.concepto, '')) NOT LIKE '%devol%'
+        AND LOWER(COALESCE(ec.concepto, '')) NOT LIKE '%revers%'
+    """
+    initial_marker_sql = """
+        (
+            LOWER(COALESCE(ec.concepto, '')) LIKE '%inicial%'
+            OR LOWER(COALESCE(ec.concepto, '')) LIKE '%enganche%'
+            OR LOWER(COALESCE(ec.producto_s, '')) LIKE '%inicial%'
+            OR LOWER(COALESCE(ec.producto_s, '')) LIKE '%enganche%'
+        )
+    """
+    sql = text(
+        f"""
+        SELECT
+            c.cuenta AS no_cuenta,
+            COALESCE(NULLIF(c.pago_inicial, 0), NULLIF(c.enganche, 0), 0) AS initial_payment,
+            COALESCE(c.fecha_venta, c.fecha_venta_domicilio) AS sale_date,
+            COALESCE(SUM(CASE WHEN {valid_payment_sql} THEN ec.cantidad ELSE 0 END), 0) AS payments_sum,
+            COALESCE(SUM(CASE WHEN {valid_payment_sql} THEN 1 ELSE 0 END), 0) AS payments_count,
+            COALESCE(SUM(
+                CASE
+                    WHEN {valid_payment_sql}
+                     AND {initial_marker_sql}
+                     AND ABS(COALESCE(ec.cantidad, 0) - COALESCE(NULLIF(c.pago_inicial, 0), NULLIF(c.enganche, 0), 0)) < 0.01
+                    THEN 1
+                    ELSE 0
+                END
+            ), 0) AS initial_payment_rows,
+            MAX(CASE WHEN {valid_payment_sql} THEN ec.fecha_pago ELSE NULL END) AS last_payment_at
+        FROM cuentas c
+        LEFT JOIN estados_cuenta ec
+          ON ec.cuenta_e = c.cuenta
+         AND ec.id_emp_estado_cuenta = :company_id
+        WHERE c.id_emp_cuenta = :company_id
+          AND c.cuenta IN :accounts
+        GROUP BY
+            c.cuenta,
+            c.pago_inicial,
+            c.enganche,
+            c.fecha_venta,
+            c.fecha_venta_domicilio
+        """
+    ).bindparams(bindparam("accounts", expanding=True))
+    rows = db.execute(
+        sql,
+        {
+            "company_id": int(user.empresa_id),
+            "accounts": account_values,
+        },
+    ).mappings().all()
+
+    summaries: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        account = _first_text(row.get("no_cuenta"))
+        if not account:
+            continue
+        payments_sum = _safe_decimal(row.get("payments_sum")) or Decimal("0")
+        initial_payment = _safe_decimal(row.get("initial_payment")) or Decimal("0")
+        initial_rows = int(_safe_decimal(row.get("initial_payment_rows")) or Decimal("0"))
+        total = payments_sum
+        source = "local.payments_sum"
+        extra_initial = Decimal("0")
+        if initial_payment > 0 and initial_rows <= 0:
+            extra_initial = initial_payment
+            total += initial_payment
+            source = "local.payments_sum+initial_payment"
+
+        summaries[account] = {
+            "total_paid": _money(total),
+            "total_paid_source": source,
+            "payments_sum": _money(payments_sum),
+            "initial_payment": _money(initial_payment) if initial_payment > 0 else None,
+            "payments_count": int(_safe_decimal(row.get("payments_count")) or Decimal("0")) + (1 if extra_initial > 0 else 0),
+            "last_payment": _first_date(row.get("last_payment_at"), row.get("sale_date") if extra_initial > 0 else None),
+        }
+    return summaries
+
+
+def _enrich_collection_list_with_local_payment_summary(
+    db: Session,
+    user: Any,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if db is None or not items:
+        return items
+
+    accounts = [
+        account
+        for item in items
+        if (account := _first_text(item.get("no_cuenta")))
+    ]
+    try:
+        summaries = _local_payment_summaries_for_accounts(db, user, accounts)
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "collections_local_payment_summary_failed",
+            extra={
+                "company_id": getattr(user, "empresa_id", None),
+                "role": getattr(user, "role", None),
+                "error_type": exc.__class__.__name__,
+            },
+        )
+        return items
+
+    for item in items:
+        summary = summaries.get(str(item.get("no_cuenta")))
+        if not summary:
+            continue
+        if item.get("total_paid") in (None, "", "-", "0", "0.00") and summary.get("total_paid") is not None:
+            item["total_paid"] = summary["total_paid"]
+            item["total_pagado"] = summary["total_paid"]
+            item["total_paid_source"] = summary["total_paid_source"]
+            financial_summary = dict(item.get("financial_summary") or {})
+            financial_summary["total_paid"] = summary["total_paid"]
+            financial_summary["total_pagado"] = summary["total_paid"]
+            financial_summary["total_paid_source"] = summary["total_paid_source"]
+            if not financial_summary.get("initial_payment") and summary.get("initial_payment"):
+                financial_summary["initial_payment"] = summary["initial_payment"]
+            item["financial_summary"] = financial_summary
+        if not item.get("payments_count") and summary.get("payments_count") is not None:
+            item["payments_count"] = summary["payments_count"]
+            financial_summary = dict(item.get("financial_summary") or {})
+            financial_summary["payments_count"] = summary["payments_count"]
+            item["financial_summary"] = financial_summary
+        if not item.get("last_payment") and summary.get("last_payment"):
+            item["last_payment"] = summary["last_payment"]
+    return items
+
+
+def _payment_summary_from_payload(payload: Any) -> Mapping[str, Any]:
+    data = _as_mapping(payload)
+    return _as_mapping(
+        data.get("summary")
+        or data.get("payment_summary")
+        or data.get("payment")
+        or data.get("financial_summary")
+    )
+
+
+def _collection_records_from_payload(payload: Any) -> list[Mapping[str, Any]]:
+    if isinstance(payload, list):
+        raw_items = payload
+    else:
+        data = _as_mapping(payload)
+        raw_items = data.get("items") or data.get("accounts") or data.get("data") or []
+
+    if not isinstance(raw_items, list):
+        return []
+    return [item for item in raw_items if isinstance(item, Mapping)]
+
+
+def _collection_record_for_account(payload: Any, no_cuenta: str) -> Mapping[str, Any]:
+    records = _collection_records_from_payload(payload)
+    if not records:
+        return {}
+
+    expected = str(no_cuenta)
+    for record in records:
+        candidate = _first_text(
+            record.get("no_cuenta"),
+            record.get("account_number"),
+            record.get("cuenta"),
+            record.get("account"),
+        )
+        if candidate and str(candidate) == expected:
+            return record
+    return records[0]
+
+
+async def _enrich_one_collection_with_bridge_payment_summary(
+    client: Any,
+    user: Any,
+    item: dict[str, Any],
+    semaphore: asyncio.Semaphore,
+) -> None:
+    no_cuenta = _first_text(item.get("no_cuenta"))
+    if not no_cuenta:
+        return
+    if item.get("total_paid") not in (None, "", "-", "0"):
+        return
+
+    async with semaphore:
+        try:
+            payload = await client.get_payments(
+                no_cuenta,
+                int(user.empresa_id),
+                limit=BRIDGE_LIST_PAYMENT_ENRICH_LIMIT,
+            )
+        except SigaBridgeError as exc:
+            logger.warning(
+                "collections_bridge_payment_summary_failed",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "no_cuenta_masked": _mask(no_cuenta),
+                    "error_type": exc.__class__.__name__,
+                    "status_code": getattr(exc, "status_code", None),
+                },
+            )
+            return
+        except Exception:
+            logger.exception(
+                "collections_bridge_payment_summary_unexpected",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "no_cuenta_masked": _mask(no_cuenta),
+                },
+            )
+            return
+
+    total_info = normalize_bridge_total_pagado(
+        _as_mapping(payload),
+        folio=item.get("folio"),
+        no_cuenta=no_cuenta,
+        prefer_payments=False,
+    )
+    total_paid = _first_money(total_info.get("total_pagado"))
+    summary = _payment_summary_from_payload(payload)
+    payments = normalize_payments(payload)
+    initial_payment = _first_money(
+        summary.get("initial_payment"),
+        summary.get("pago_inicial"),
+        summary.get("enganche"),
+    )
+    payments_with_initial = _with_initial_payment(
+        payments,
+        no_cuenta=no_cuenta,
+        initial_payment=initial_payment,
+        sale_date=item.get("sale_date"),
+        product=item.get("product"),
+    )
+
+    if total_paid is None:
+        total_paid, _counted = _sum_normalized_payments(payments_with_initial)
+
+    if total_paid is None:
+        return
+
+    item["total_paid"] = total_paid
+    item["total_pagado"] = total_paid
+    item["total_paid_source"] = _first_text(total_info.get("total_pagado_source"), "bridge.payments")
+    financial_summary = dict(item.get("financial_summary") or {})
+    financial_summary["total_paid"] = total_paid
+    financial_summary["total_pagado"] = total_paid
+    financial_summary["total_paid_source"] = item["total_paid_source"]
+    if initial_payment and not financial_summary.get("initial_payment"):
+        financial_summary["initial_payment"] = initial_payment
+    item["financial_summary"] = financial_summary
+
+    summary_count = _first_number(
+        summary.get("payments_count"),
+        summary.get("count"),
+        total_info.get("payments_count"),
+    )
+    rows_count = len(payments_with_initial) if payments_with_initial else None
+    count_candidates = [value for value in (summary_count, rows_count) if value is not None]
+    count_value = max(count_candidates) if count_candidates else None
+    if count_value is not None:
+        item["payments_count"] = int(count_value)
+        financial_summary["payments_count"] = int(count_value)
+
+
+async def enrich_collection_list_with_bridge_payment_summary(
+    client: Any,
+    user: Any,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    targets = [
+        item
+        for item in items
+        if item.get("total_paid") in (None, "", "-", "0") and _first_text(item.get("no_cuenta"))
+    ]
+    if not targets:
+        return items
+
+    semaphore = asyncio.Semaphore(BRIDGE_LIST_PAYMENT_ENRICH_CONCURRENCY)
+    await asyncio.gather(
+        *(
+            _enrich_one_collection_with_bridge_payment_summary(client, user, item, semaphore)
+            for item in targets
+        )
+    )
+    return items
+
+
 def _local_collection_managers(
     db: Session,
     user: Any,
@@ -1160,28 +2182,58 @@ def _local_collection_managers(
     limit: int,
 ) -> list[dict[str, Any]]:
     conditions = [
-        "c.id_emp_cuenta = :company_id",
-        "c.agente_verificador IS NOT NULL",
-        "TRIM(c.agente_verificador) <> ''",
+        "col.id_emp_col = :company_id",
+        "COALESCE(col.estatus, 0) = 1",
+        "col.nombre_resumido IS NOT NULL",
+        "TRIM(col.nombre_resumido) <> ''",
+        """(
+            LOWER(COALESCE(col.puesto, '')) LIKE '%cobranza%'
+            OR LOWER(COALESCE(col.puesto, '')) LIKE '%gestor%'
+        )""",
     ]
     params: dict[str, Any] = {
         "company_id": int(user.empresa_id),
         "limit": max(1, min(200, int(limit or 100))),
     }
     if search:
-        conditions.append("LOWER(TRIM(c.agente_verificador)) LIKE LOWER(:search)")
+        conditions.append(
+            """(
+                LOWER(TRIM(col.nombre_resumido)) LIKE LOWER(:search)
+                OR LOWER(COALESCE(col.nombre_usuario, '')) LIKE LOWER(:search)
+                OR LOWER(COALESCE(col.nombre_completo, '')) LIKE LOWER(:search)
+            )"""
+        )
         params["search"] = _like(search)
 
     rows = db.execute(
         text(
             f"""
             SELECT
-                TRIM(c.agente_verificador) AS gestor,
-                COUNT(*) AS accounts_count
-            FROM cuentas c
+                col.id AS id,
+                TRIM(col.nombre_resumido) AS gestor,
+                col.nombre_resumido,
+                col.nombre_usuario,
+                col.nombre_completo,
+                col.puesto,
+                col.estatus,
+                col.id_emp_col,
+                COUNT(DISTINCT c.cuenta) AS accounts_count,
+                'local_colaboradores' AS source,
+                'colaboradores.nombre_resumido' AS source_field
+            FROM colaboradores col
+            LEFT JOIN cuentas c
+              ON TRIM(c.agente_verificador) = TRIM(col.nombre_resumido)
+             AND c.id_emp_cuenta = col.id_emp_col
             WHERE {" AND ".join(f"({condition})" for condition in conditions)}
-            GROUP BY TRIM(c.agente_verificador)
-            ORDER BY TRIM(c.agente_verificador) ASC
+            GROUP BY
+                col.id,
+                col.nombre_resumido,
+                col.nombre_usuario,
+                col.nombre_completo,
+                col.puesto,
+                col.estatus,
+                col.id_emp_col
+            ORDER BY TRIM(col.nombre_resumido) ASC
             LIMIT :limit
             """
         ),
@@ -1235,6 +2287,27 @@ async def list_collection_managers(
     started_at = time.perf_counter()
     bridge_status = "disabled"
     bridge_error = None
+    active_local_managers: list[dict[str, Any]] | None = None
+    active_manager_keys: set[str] | None = None
+
+    if db is not None:
+        try:
+            active_local_managers = _local_collection_managers(
+                db,
+                user,
+                search=clean_search,
+                limit=normalized_limit,
+            )
+            active_manager_keys = _manager_key_set(active_local_managers)
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "collections_managers_active_catalog_failed",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "error_type": exc.__class__.__name__,
+                },
+            )
 
     if settings.SIGA_BRIDGE_ENABLED:
         try:
@@ -1243,7 +2316,7 @@ async def list_collection_managers(
                 search=clean_search,
                 limit=normalized_limit,
             )
-            managers = normalize_collection_managers(raw)
+            managers = normalize_collection_managers(raw, allowed_keys=active_manager_keys)
             logger.info(
                 "collections_managers_bridge_loaded",
                 extra={
@@ -1263,7 +2336,8 @@ async def list_collection_managers(
                     "source": "bridge",
                     "limit": normalized_limit,
                     "warnings": [],
-                    "source_field": "cuentas.agente_verificador",
+                    "source_field": "colaboradores.nombre_resumido",
+                    "active_filter": "colaboradores.estatus=1; puesto contains cobranza/gestor; id_emp_col=current_company",
                 },
             }
         except SigaBridgeError as exc:
@@ -1280,7 +2354,9 @@ async def list_collection_managers(
                 },
             )
 
-    managers = _local_collection_managers(db, user, search=clean_search, limit=normalized_limit)
+    managers = active_local_managers
+    if managers is None:
+        managers = _local_collection_managers(db, user, search=clean_search, limit=normalized_limit)
     logger.info(
         "collections_managers_local_loaded",
         extra={
@@ -1302,7 +2378,8 @@ async def list_collection_managers(
             "bridge_error": bridge_error,
             "limit": normalized_limit,
             "warnings": [] if managers else ["gestor_catalog_empty"],
-            "source_field": "cuentas.agente_verificador",
+            "source_field": "colaboradores.nombre_resumido",
+            "active_filter": "colaboradores.estatus=1; puesto contains cobranza/gestor; id_emp_col=current_company",
         },
     }
 
@@ -1327,7 +2404,8 @@ async def list_collections(
     bridge_error = None
     if settings.SIGA_BRIDGE_ENABLED:
         try:
-            raw = await get_siga_bridge_client().get_collections(
+            bridge_client = get_siga_bridge_client()
+            raw = await bridge_client.get_collections(
                 int(user.empresa_id),
                 cuenta=filters.account,
                 folio=filters.folio,
@@ -1362,6 +2440,9 @@ async def list_collections(
                         for item in items
                         if item.get("classification") == filters.status
                     ]
+                items = await enrich_collection_list_with_bridge_payment_summary(bridge_client, user, items)
+                items = _enrich_collection_list_with_local_payment_summary(db, user, items)
+                items = attach_conversation_links(db, user, items)
                 total = int(payload.get("total")) if payload.get("total") is not None else None
                 bridge_warnings = warnings + [
                     str(warning)
@@ -1419,6 +2500,7 @@ async def list_collections(
             )
 
     items, total = _local_list_collections(db, user, filters, collector=collector)
+    items = attach_conversation_links(db, user, items)
     response = _collections_response(
         filters,
         items=items,
@@ -1467,49 +2549,163 @@ async def get_collection_detail(
         collector=collector,
         include_payments=False,
     )
-    if not local_item:
-        return None
-    if local_item.get("is_paid") and not include_paid:
+    if local_item and local_item.get("is_paid") and not include_paid:
         local_item["siga_bridge"] = {
             **(local_item.get("siga_bridge") or {}),
             "enabled": bool(settings.SIGA_BRIDGE_ENABLED),
-            "status": "paid_requires_filter",
+            "status": "paid_detail_loaded",
             "source": "local_fallback",
             "available": False,
         }
-        return local_item
 
     if not settings.SIGA_BRIDGE_ENABLED:
-        local_item["payments"] = _local_payments(db, user, no_cuenta)
-        return local_item
+        if not local_item:
+            return None
+        local_item["payments"] = _local_payments_with_initial(db, user, no_cuenta, local_item)
+        local_item["payments_count"] = len(local_item["payments"])
+        return attach_conversation_links(db, user, [local_item])[0]
 
     try:
         client = get_siga_bridge_client()
-        account_payload = await client.get_account(
-            no_cuenta,
-            int(user.empresa_id),
-            bypass_cache=force_refresh,
-        )
-        payments_payload = await client.get_payments(
-            no_cuenta,
-            int(user.empresa_id),
-            limit=100,
-            bypass_cache=force_refresh,
-        )
+        collection_record: Mapping[str, Any] = {}
+        try:
+            collection_payload = await client.get_collections(
+                int(user.empresa_id),
+                cuenta=no_cuenta,
+                include_paid=True,
+                active_only=False,
+                limit=1,
+                bypass_cache=force_refresh,
+            )
+            collection_record = _collection_record_for_account(collection_payload, no_cuenta)
+        except SigaBridgeError as exc:
+            logger.warning(
+                "collections_bridge_detail_context_failed",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "no_cuenta_masked": _mask(no_cuenta),
+                    "error_type": exc.__class__.__name__,
+                    "status_code": getattr(exc, "status_code", None),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "collections_bridge_detail_context_unexpected",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "no_cuenta_masked": _mask(no_cuenta),
+                },
+            )
+        account_payload: Any = {}
+        try:
+            account_payload = await client.get_account(
+                no_cuenta,
+                int(user.empresa_id),
+                bypass_cache=force_refresh,
+            )
+        except SigaBridgeError as exc:
+            logger.warning(
+                "collections_bridge_detail_account_failed",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "no_cuenta_masked": _mask(no_cuenta),
+                    "error_type": exc.__class__.__name__,
+                    "status_code": getattr(exc, "status_code", None),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "collections_bridge_detail_account_unexpected",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "no_cuenta_masked": _mask(no_cuenta),
+                },
+            )
+        payments_payload: Any = {}
+        try:
+            payments_payload = await client.get_payments(
+                no_cuenta,
+                int(user.empresa_id),
+                limit=100,
+                bypass_cache=force_refresh,
+            )
+        except SigaBridgeError as exc:
+            logger.warning(
+                "collections_bridge_detail_payments_failed",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "no_cuenta_masked": _mask(no_cuenta),
+                    "error_type": exc.__class__.__name__,
+                    "status_code": getattr(exc, "status_code", None),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "collections_bridge_detail_payments_unexpected",
+                extra={
+                    "company_id": getattr(user, "empresa_id", None),
+                    "role": getattr(user, "role", None),
+                    "no_cuenta_masked": _mask(no_cuenta),
+                },
+            )
         account_data = _as_mapping(account_payload)
+        payment_data = _as_mapping(payments_payload)
+        payment_payload_has_list = _has_payment_records_payload(payments_payload)
+        raw_payment_items = _payment_records_from_payload(payments_payload)
         payment_items = normalize_payments(payments_payload)
+        if not payment_items and local_item:
+            payment_items = _local_payments(db, user, no_cuenta)
+        local_summary = (
+            local_item.get("financial_summary")
+            if local_item and isinstance(local_item.get("financial_summary"), dict)
+            else {}
+        )
+        if not collection_record and not account_data and not payment_data:
+            if not local_item:
+                return None
+            local_item["payments"] = _local_payments_with_initial(db, user, no_cuenta, local_item)
+            local_item["payments_count"] = len(local_item["payments"])
+            return attach_conversation_links(db, user, [local_item])[0]
+        account_object = _as_mapping(account_data.get("account"))
+        account_record = {
+            **collection_record,
+            **account_data,
+            **payment_data,
+            "payments": raw_payment_items,
+            "no_cuenta": no_cuenta,
+        }
+        if account_object:
+            account_record["account"] = account_object
+        if not _first_text(
+            account_record.get("initial_payment"),
+            account_record.get("pago_inicial"),
+            _as_mapping(account_record.get("account")).get("initial_payment"),
+            _as_mapping(account_record.get("payment_summary")).get("initial_payment"),
+        ) and local_summary.get("initial_payment"):
+            account_record["initial_payment"] = local_summary.get("initial_payment")
+        if not _first_text(account_record.get("sale_date"), account_record.get("fecha_venta")) and local_item and local_item.get("sale_date"):
+            account_record["sale_date"] = local_item.get("sale_date")
+        if not _first_text(account_record.get("product"), _as_mapping(account_record.get("account")).get("product")) and local_item and local_item.get("product"):
+            account_record["product"] = local_item.get("product")
         bridge_item = normalize_collection_record(
-            {
-                **account_data,
-                "payments": payment_items,
-            },
+            account_record,
             payments=payment_items,
             source="siga_bridge",
             bridge_status="ok",
+            prefer_payment_total=bool(payment_payload_has_list or payment_items),
         )
         if not bridge_item:
-            return local_item
-        return _merge_collection(bridge_item, local_item)
+            if not local_item:
+                return None
+            local_item["payments"] = _local_payments_with_initial(db, user, no_cuenta, local_item)
+            local_item["payments_count"] = len(local_item["payments"])
+            return attach_conversation_links(db, user, [local_item])[0]
+        return attach_conversation_links(db, user, [_merge_collection(bridge_item, local_item)])[0]
     except SigaBridgeError as exc:
         logger.warning(
             "collections_bridge_detail_failed",
@@ -1531,7 +2727,9 @@ async def get_collection_detail(
             },
         )
 
-    local_item["payments"] = _local_payments(db, user, no_cuenta)
+    if not local_item:
+        return None
+    local_item["payments"] = _local_payments_with_initial(db, user, no_cuenta, local_item)
     local_item["payments_count"] = len(local_item["payments"])
     local_item["siga_bridge"] = {
         **(local_item.get("siga_bridge") or {}),
@@ -1540,7 +2738,7 @@ async def get_collection_detail(
         "source": "local_fallback",
         "available": False,
     }
-    return local_item
+    return attach_conversation_links(db, user, [local_item])[0]
 
 
 async def get_collection_payments(
@@ -1561,10 +2759,11 @@ async def get_collection_payments(
         collector=collector,
         include_payments=False,
     )
-    if not local_item:
-        return None
-    if local_item.get("is_paid") and not include_paid:
-        return []
+    local_summary = (
+        local_item.get("financial_summary")
+        if local_item and isinstance(local_item.get("financial_summary"), dict)
+        else {}
+    )
     if settings.SIGA_BRIDGE_ENABLED:
         try:
             payments_payload = await get_siga_bridge_client().get_payments(
@@ -1573,6 +2772,22 @@ async def get_collection_payments(
                 limit=100,
             )
             payments = normalize_payments(payments_payload)
+            summary = _payment_summary_from_payload(payments_payload)
+            initial_payment = _first_money(
+                local_summary.get("initial_payment"),
+                summary.get("initial_payment"),
+                summary.get("pago_inicial"),
+                summary.get("enganche"),
+            )
+            sale_date = local_item.get("sale_date") if local_item else None
+            product = local_item.get("product") if local_item else None
+            payments = _with_initial_payment(
+                payments,
+                no_cuenta=no_cuenta,
+                initial_payment=initial_payment,
+                sale_date=sale_date,
+                product=product,
+            )
             if payments:
                 return payments
         except SigaBridgeError as exc:
@@ -1595,7 +2810,15 @@ async def get_collection_payments(
                     "no_cuenta_masked": _mask(no_cuenta),
                 },
             )
-    return _local_payments(db, user, no_cuenta)
+    if not local_item:
+        return None
+    return _with_initial_payment(
+        _local_payments(db, user, no_cuenta),
+        no_cuenta=no_cuenta,
+        initial_payment=local_summary.get("initial_payment"),
+        sale_date=local_item.get("sale_date"),
+        product=local_item.get("product"),
+    )
 
 
 def _mask(value: Any, *, visible: int = 4) -> str | None:

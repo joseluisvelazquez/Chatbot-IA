@@ -136,7 +136,9 @@ otro    = datos insuficientes o estado no mapeado
 
 `pagado` siempre gana prioridad. Actualmente los dias de atraso se mapean desde `cuentas.atrasos`; si SIGA expone un campo mas preciso, el cambio debe hacerse en el punto unico de mapeo del Bridge/servicio de cobranza.
 
-El detalle y refresh usan `action=account` y `action=payments` solo al abrir una fila concreta. No se consultan `account` ni `payments` por cada fila durante la carga inicial. Si Bridge falla, FastAPI conserva un fallback local de solo lectura con las mismas tablas SIGA mapeadas en SQLAlchemy y respeta `include_paid`, `active_only`, rol `cobranza` y filtro por gestor cuando existe alcance seguro.
+El detalle y refresh usan `action=account` y `action=payments` solo al abrir una fila concreta. No se consultan `account` ni `payments` por cada fila durante la carga inicial. Para evitar que la tabla muestre total pagado vacio cuando `action=collections` no trae pagos, FastAPI complementa solo el agregado `total_pagado/payments_count` desde `estados_cuenta` local y `cuentas.pago_inicial/enganche` dentro de la misma empresa. Si Bridge falla, FastAPI conserva un fallback local de solo lectura con las mismas tablas SIGA mapeadas en SQLAlchemy y respeta `include_paid`, `active_only`, rol `cobranza` y filtro por gestor cuando existe alcance seguro.
+
+El total pagado se normaliza como dinero realmente abonado por el cliente. El snapshot canonico del Bridge expone `payment.total_pagado` y `payment.total_pagado_source`. Primero se usan campos explicitos del resumen (`payment_summary.total_pagado`, `paid_total`, `total_paid`, etc.); si no existen, se suman pagos individuales validos desde `payments`, `pagos`, `recent_payments` o `abonos`. Al abrir el detalle de una cuenta, la lista visible de pagos manda sobre el resumen y el `pago_inicial/enganche` se agrega al historial como "Pago inicial" si no venia ya registrado. Movimientos cancelados, anulados, devoluciones, reversas y montos negativos no cuentan. No se suma `subsidio`, saldo ni pagos sugeridos. Si no hay fuente confiable, `total_pagado` queda en `null` y se registra un warning sanitizado.
 
 El catalogo de gestores usa:
 
@@ -144,7 +146,9 @@ El catalogo de gestores usa:
 GET /api/panel/collections/managers
 ```
 
-FastAPI llama `action=collection_managers`, que lee valores distintos de `cuentas.agente_verificador`; no hay gestores hardcodeados. Solo `admin`, `jefe_operativo` y `sistemas` pueden consultar este catalogo. Si Bridge falla, se intenta fallback local sobre el mismo campo.
+FastAPI llama `action=collection_managers`, pero el resultado publicado se filtra contra gestores activos de `colaboradores` cuando la base local esta disponible. La regla local es: `colaboradores.estatus = 1`, `id_emp_col = empresa_id` del usuario actual y `puesto` relacionado con cobranza/gestor. `cuentas.agente_verificador` se usa solo para calcular `accounts_count` y asociar el valor de filtro (`nombre_resumido`), no como autoridad de actividad. Solo `admin`, `jefe_operativo` y `sistemas` pueden consultar este catalogo. Si Bridge falla, se intenta fallback local con esa misma regla.
+
+Las cuentas de cobranza incluyen `has_conversation`, `conversation_session_id` y `conversation_url` cuando existe una conversacion confiable en `chat_sessions`. La prioridad de enlace es `session_id`, folio exacto, telefono normalizado a 10 digitos mexicanos y finalmente `no_cuenta` guardado en `extra_json`/snapshots del Bridge. Si varias sesiones coinciden, se usa la mas reciente por `last_message_at`, `updated_at` o `created_at`.
 
 El webhook dispara lookup de cliente por telefono en background despues del commit de la sesion para no agregar latencia al flujo de WhatsApp. Si existe `chat_sessions.extra_json`, guarda una cache secundaria en `siga_bridge.customer_lookup`; si la columna no existe en algun entorno, el fallo se registra y se omite sin romper el webhook.
 
