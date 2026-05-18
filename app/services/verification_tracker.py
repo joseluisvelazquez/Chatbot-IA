@@ -33,6 +33,7 @@ STEP_MAP = {
     ChatState.INFO_PLAN_3_MESES:      "plan3meses",
     ChatState.INFO_OTROS_PLANES:      "planes",
     ChatState.INFO_METODOS_PAGO:      "bancos",
+    ChatState.INFO_COMPROBANTE_ACCESO: "comprobanteAcceso",
 
     ChatState.INFO_BENEFICIOS:  "beneficios",
     ChatState.INFO_BENEFICIOS2: "beneficios",
@@ -53,6 +54,7 @@ STEP_DISPLAY_LABELS: dict[str, str] = {
     "plan3meses":  "Plan 3 meses",
     "planes":      "Otros planes",
     "bancos":      "Métodos de pago",
+    "comprobanteAcceso": "Datos de acceso para comprobante",
     "beneficios":  "Beneficios",
     "finalizado":  "Finalizado",
     "inicio":      "Inicio",
@@ -164,13 +166,28 @@ def track_verification(
 
     try:
         service = VerificationService(db)
-        result = service.mark_step_from_folio(
-            str(folio),
-            step,
-            value=value,
-            phone=session.phone,
-            event_id=getattr(session, "last_message_id", None),
-        )
+        try:
+            result = service.mark_step_from_folio(
+                str(folio),
+                step,
+                value=value,
+                phone=session.phone,
+                event_id=getattr(session, "last_message_id", None),
+            )
+        except VerificationTransitionError:
+            no_cuenta = service.resolve_no_cuenta_from_folio(str(folio))
+            if no_cuenta:
+                _mark_bridge_step_with_backfill(
+                    service,
+                    no_cuenta=str(no_cuenta),
+                    step=step,
+                    value=value,
+                    phone=session.phone,
+                    event_id=getattr(session, "last_message_id", None),
+                )
+                return
+            raise
+
         if result is not None:
             return
 

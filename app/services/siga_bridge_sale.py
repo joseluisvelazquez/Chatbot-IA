@@ -17,11 +17,28 @@ _VERIFICATION_KEYS = {
     "sales",
     "customer",
     "account",
+    "codigo_cliente",
+    "customer_code",
+    "ALMARE-1",
+    "almare-1",
+    "ALMARE_1",
+    "almare_1",
     "components",
     "payment_summary",
     "recent_payments",
     "source_table",
 }
+
+_CODIGO_CLIENTE_KEYS = (
+    "codigo_cliente",
+    "customer_code",
+    "cod_cliente",
+    "cod_cli",
+    "ALMARE-1",
+    "almare-1",
+    "ALMARE_1",
+    "almare_1",
+)
 
 
 class BridgeSale:
@@ -351,6 +368,29 @@ def _normalize_components_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _codigo_cliente_from_records(records: tuple[dict[str, Any] | None, ...]) -> str | None:
+    return _first_safe_text(records, _CODIGO_CLIENTE_KEYS)
+
+
+def extract_codigo_cliente_from_payload(payload: Any) -> str | None:
+    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), (dict, list)) else payload
+
+    if isinstance(data, list):
+        data = next((item for item in data if isinstance(item, dict)), None)
+
+    if not isinstance(data, dict):
+        return None
+
+    if normalize_bridge_verification_payload(payload):
+        snapshot = normalize_siga_verification_snapshot(payload)
+        return _safe_text(snapshot.get("codigo_cliente"))
+
+    account = _as_dict(data.get("account"))
+    customer = _as_dict(data.get("customer"))
+    sale = _as_dict(data.get("sale"))
+    return _codigo_cliente_from_records((account, customer, sale, data))
+
+
 def normalize_siga_verification_snapshot(
     payload: Any,
     *,
@@ -368,9 +408,16 @@ def normalize_siga_verification_snapshot(
             "found": False,
             "folio": None,
             "no_cuenta": None,
+            "codigo_cliente": None,
             "fecha_venta": None,
             "phone": None,
-            "customer": {"name": None, "address_text": None, "address_raw": None},
+            "customer": {
+                "name": None,
+                "codigo_cliente": None,
+                "customer_code": None,
+                "address_text": None,
+                "address_raw": None,
+            },
             "sale": {"product": None, "sale_date": None, "fecha_venta": None},
             "payment": {
                 "available": False,
@@ -413,6 +460,7 @@ def normalize_siga_verification_snapshot(
     sale_date = _date_text(
         _first_value(records, ("sale_date", "fecha_venta", "fecha", "created_at"))
     )
+    codigo_cliente = _codigo_cliente_from_records(records)
 
     return {
         "found": bridge_verification_found(data),
@@ -421,6 +469,7 @@ def normalize_siga_verification_snapshot(
             records,
             ("no_cuenta", "cuenta", "account", "account_number", "numero_cuenta"),
         ),
+        "codigo_cliente": codigo_cliente,
         "fecha_venta": sale_date,
         "phone": _normalize_phone(
             _first_value(records, ("phone", "telefono", "tel_1", "tel1", "celular"))
@@ -430,6 +479,8 @@ def normalize_siga_verification_snapshot(
                 records,
                 ("name", "nombre", "nombre_completo", "cliente", "customer_name"),
             ),
+            "codigo_cliente": codigo_cliente,
+            "customer_code": codigo_cliente,
             "address_text": address_text,
             "address_raw": address_raw if isinstance(address_raw, dict) else None,
         },
@@ -472,6 +523,7 @@ def bridge_sale_from_payload(payload: Any) -> BridgeSale | None:
         id_movimiento_bv=None,
         folio=folio or "",
         no_cuenta=no_cuenta or "",
+        codigo_cliente=_safe_text(snapshot.get("codigo_cliente")),
         nombre_completo=customer.get("name") or "",
         sku_bitacora_v=product_sku or product_name or "",
         descripcion=sale.get("product_description") or product_name or "",

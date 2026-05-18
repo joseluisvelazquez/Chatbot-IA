@@ -450,6 +450,15 @@ def process_message(
             
         if intent not in valid_button_ids:
             logger.info(f"Botón obsoleto ignorado: {intent} (estado actual: {current_state})")
+            if current_state == ChatState.INFO_COMPROBANTE_ACCESO:
+                reply, buttons, image_id = render_state(current_state, session, db)
+                return FlowResult(
+                    reply=reply,
+                    next_state=current_state,
+                    buttons=buttons,
+                    previous_state=new_previous_state,
+                    image_id=image_id,
+                )
             return FlowResult(
                 reply=None,
                 next_state=current_state,
@@ -474,6 +483,41 @@ def process_message(
             return re.sub(r'[^a-z0-9\s]', '', normalized).strip()
 
         text_norm = clean_for_match(text_clean)
+        information_confirmation_matched = False
+
+        def is_information_confirmation(txt):
+            if not txt:
+                return False
+
+            exact_confirmations = {
+                "no",
+                "no gracias",
+                "no tengo duda",
+                "no tengo dudas",
+                "no hay duda",
+                "no hay dudas",
+                "ninguna",
+                "ninguna duda",
+                "ninguna duda gracias",
+                "sin duda",
+                "sin dudas",
+                "todo claro",
+                "esta claro",
+                "quedo claro",
+                "me queda claro",
+                "entendido",
+            }
+            if txt in exact_confirmations:
+                return True
+
+            no_doubt_markers = ("no tengo", "no hay", "ninguna", "ningun", "sin")
+            if any(marker in txt for marker in no_doubt_markers) and (
+                "duda" in txt or "pregunta" in txt
+            ):
+                return True
+
+            clarity_markers = ("todo claro", "esta claro", "quedo claro", "me queda claro")
+            return any(marker in txt for marker in clarity_markers)
         
         button_matched = False
         state_buttons = list(FLOW.get(current_state, {}).get("buttons", []))
@@ -543,6 +587,10 @@ def process_message(
                 if is_doubt(text) and detected_intent not in ("human", "call", "start_verification"):
                     detected_intent = "doubt"
 
+        if get_state_type(current_state) == "information" and is_information_confirmation(text_norm):
+            detected_intent = "affirmative"
+            information_confirmation_matched = True
+
         # --------------------------------------
         # HARD RULES (máxima prioridad)
         # --------------------------------------
@@ -556,7 +604,8 @@ def process_message(
             if state_type == "confirmation":
                 detected_intent = "negative"   # inconsistencia
             elif state_type == "information":
-                detected_intent = "doubt"      # no entendió
+                detected_intent = "affirmative"  # no tiene dudas
+                information_confirmation_matched = True
             else:
                 detected_intent = "negative"
 
@@ -597,7 +646,10 @@ def process_message(
             use_ai = len(text.split()) >= 2  # Permitir IA si parece una corrección o detalle
 
         elif state_type == "information":
-            use_ai = True   # aquí sí es útil
+            use_ai = not information_confirmation_matched
+
+        elif state_type == "acknowledgement":
+            use_ai = False
 
         elif state_type == "inconsistency":
             use_ai = True   # siempre usar IA
@@ -1080,7 +1132,12 @@ def process_message(
     # FAQ (RESPUESTA DIRECTA SIN IA)
     # --------------------------------------
 
-    faq_response, faq_image_id = find_faq_answer(text, context.venta)
+    faq_response, faq_image_id = find_faq_answer(
+        text,
+        context.venta,
+        session=session,
+        bridge_verification=bridge_verification,
+    )
 
     if faq_response:
         current_state = ChatState(session.state)
@@ -1182,7 +1239,7 @@ def process_message(
     # DETECCIÓN DE FRUSTRACIÓN
     # --------------------------------------
     if detect_frustration(text):
-        session.ai_response_attempts = (session.ai_response_attempts or 0) + 1
+        session.ai_response_attempts = (getattr(session, "ai_response_attempts", 0) or 0) + 1
 
     # --------------------------------------
     # IA: INTENCIÓN NO DETECTADA (ai_out, ai_ambiguous)
@@ -1207,7 +1264,7 @@ def process_message(
     if action == "ai_doubt" and not (intent and intent.isupper()):
 
         MAX_AI_RESPONSES = 2
-        ai_attempts = session.ai_response_attempts or 0
+        ai_attempts = getattr(session, "ai_response_attempts", 0) or 0
 
         # "Si no pudo ayudarlo (supera intentos de frustración), escalar el caso"
         if ai_attempts >= MAX_AI_RESPONSES:
@@ -1322,6 +1379,20 @@ def process_message(
 
     if not next_state:
         next_state = ChatState.FUERA_DE_FLUJO
+
+    if action == "repeat" and next_state == current_state:
+        reply, buttons, image_id = render_state(
+            current_state,
+            session,
+            db
+        )
+        return FlowResult(
+            reply=reply,
+            next_state=current_state,
+            buttons=buttons,
+            previous_state=new_previous_state,
+            image_id=image_id
+        )
 
     # --------------------------------------
     # 10. Tracking

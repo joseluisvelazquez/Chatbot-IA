@@ -1,4 +1,4 @@
-from app.services.ai.ai_service import generate_ai_response, _extract_json
+from app.services.ai.ai_service import generate_raw_ai_response, _extract_json
 from app.core.context.conversation_context import ConversationContext
 from app.core.states.state_types import get_state_type
 from app.core.states.states import ChatState
@@ -178,7 +178,7 @@ Ejemplo:
 """
 
     try:
-        raw = generate_ai_response(prompt, context, session=session,mode="intent" )
+        raw = generate_raw_ai_response(prompt, task="intent")
 
         if not raw:
             return None

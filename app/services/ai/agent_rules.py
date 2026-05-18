@@ -34,6 +34,8 @@ AGENT_RULES = {
             "montos",
             "fechas de pago",
             "metodos de pago",
+            "comprobantes de pago",
+            "datos de acceso para comprobantes",
             "beneficios",
             "planes",
             "condiciones de compra",

@@ -1,6 +1,24 @@
 FAQ_DATA = [
 
     # -------------------------
+    # COMPROBANTES
+    # -------------------------
+    {
+        "keywords": [
+            "subir comprobante",
+            "enviar comprobante",
+            "cargar comprobante",
+            "donde subo comprobante",
+            "como subo mi comprobante",
+            "mxcomp comprobante",
+            "codigo cliente",
+            "datos de acceso comprobante"
+        ],
+        "response": "Debes enviar tu comprobante en https://mxcomp.mx/ usando el numero de cuenta y codigo de cliente que se te compartieron.",
+        "response_dinamica": "Debes enviar tu comprobante en https://mxcomp.mx/ usando estos datos: numero de cuenta *{numero_cuenta_referencia}* y codigo de cliente *{codigo_cliente}*."
+    },
+
+    # -------------------------
     # PRIMER PAGO
     # -------------------------
     {

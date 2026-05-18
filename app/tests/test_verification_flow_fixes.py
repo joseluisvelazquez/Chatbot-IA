@@ -91,3 +91,145 @@ def test_siga_account_url_uses_legacy_entry_page(monkeypatch):
 
     assert url == "https://siga.mxcomp.mx/cuentas.php"
     assert "60436" not in url
+
+
+def test_metodos_pago_advances_to_comprobante_access_state():
+    session = DummySession()
+    session.state = ChatState.INFO_METODOS_PAGO.value
+    session.previous_state = ChatState.INFO_METODOS_PAGO.value
+    session.extra_json = {
+        "siga_bridge": {
+            "verification_cache": {
+                "folio": "1111",
+                "snapshot": {
+                    "found": True,
+                    "folio": "1111",
+                    "no_cuenta": "60436",
+                    "codigo_cliente": "CLI-123",
+                    "customer": {"codigo_cliente": "CLI-123"},
+                    "sale": {"folio": "1111", "no_cuenta": "60436"},
+                },
+            }
+        }
+    }
+
+    result = flow_engine.process_message(
+        session=session,
+        text="",
+        intent="PAGOS_OK",
+        db=None,
+    )
+
+    assert result.next_state == ChatState.INFO_COMPROBANTE_ACCESO
+    assert "Número de cuenta: *A60436*" in result.reply
+    assert "Código de cliente: *CLI-123*" in result.reply
+    assert result.buttons == [{"id": "COMPROBANTE_ACCESO_OK", "label": "✅ Entendido"}]
+
+
+def test_info_pagos_no_doubt_text_advances_without_ai(monkeypatch):
+    session = DummySession()
+    session.state = ChatState.INFO_PAGOS.value
+    session.previous_state = ChatState.INFO_PAGOS.value
+    session.extra_json = {
+        "siga_bridge": {
+            "verification_cache": {
+                "folio": "1111",
+                "snapshot": {
+                    "found": True,
+                    "folio": "1111",
+                    "no_cuenta": "60436",
+                    "sale": {"folio": "1111", "no_cuenta": "60436"},
+                },
+            }
+        }
+    }
+
+    def fail_ai(*_args, **_kwargs):
+        raise AssertionError("no-doubt confirmation must not invoke AI")
+
+    monkeypatch.setattr(flow_engine, "interpret_intent_with_ai", fail_ai)
+    monkeypatch.setattr(flow_engine, "generate_ai_response", fail_ai)
+
+    result = flow_engine.process_message(
+        session=session,
+        text="no tengo dudas",
+        db=None,
+    )
+
+    assert result.next_state == ChatState.INFO_METODOS_PAGO
+
+
+def test_info_pagos_plain_no_advances_as_no_doubts(monkeypatch):
+    session = DummySession()
+    session.state = ChatState.INFO_PAGOS.value
+    session.previous_state = ChatState.INFO_PAGOS.value
+
+    def fail_ai(*_args, **_kwargs):
+        raise AssertionError("plain no in info state must not invoke AI")
+
+    monkeypatch.setattr(flow_engine, "interpret_intent_with_ai", fail_ai)
+    monkeypatch.setattr(flow_engine, "generate_ai_response", fail_ai)
+
+    result = flow_engine.process_message(
+        session=session,
+        text="no",
+        db=None,
+    )
+
+    assert result.next_state == ChatState.INFO_METODOS_PAGO
+
+
+def test_comprobante_access_button_advances_to_plan_3_meses():
+    session = DummySession()
+    session.state = ChatState.INFO_COMPROBANTE_ACCESO.value
+    session.previous_state = ChatState.INFO_COMPROBANTE_ACCESO.value
+
+    result = flow_engine.process_message(
+        session=session,
+        text="",
+        intent="COMPROBANTE_ACCESO_OK",
+        db=None,
+    )
+
+    assert result.next_state == ChatState.INFO_PLAN_3_MESES
+
+
+def test_comprobante_access_doubt_uses_ai_without_inconsistency(monkeypatch):
+    session = DummySession()
+    session.state = ChatState.INFO_COMPROBANTE_ACCESO.value
+    session.previous_state = ChatState.INFO_COMPROBANTE_ACCESO.value
+    session.extra_json = {
+        "siga_bridge": {
+            "verification_cache": {
+                "folio": "1111",
+                "snapshot": {
+                    "found": True,
+                    "folio": "1111",
+                    "no_cuenta": "60436",
+                    "codigo_cliente": "CLI-123",
+                    "customer": {"codigo_cliente": "CLI-123"},
+                    "sale": {"folio": "1111", "no_cuenta": "60436"},
+                },
+            }
+        }
+    }
+
+    def fake_ai(*_args, **_kwargs):
+        return "Puedes usar esos datos para ingresar al sitio de comprobantes."
+
+    def fail_inconsistency(*_args, **_kwargs):
+        raise AssertionError("comprobante access doubts must not create inconsistencies")
+
+    monkeypatch.setattr(flow_engine, "find_faq_answer", lambda *_args, **_kwargs: (None, None))
+    monkeypatch.setattr(flow_engine, "generate_ai_response", fake_ai)
+    monkeypatch.setattr(flow_engine, "analyze_inconsistency", fail_inconsistency)
+
+    result = flow_engine.process_message(
+        session=session,
+        text="Tengo una duda",
+        db=None,
+    )
+
+    assert result.next_state == ChatState.MENU_AYUDA
+    assert "Puedes usar esos datos" in result.reply
+    assert not result.inconsistencia_patch

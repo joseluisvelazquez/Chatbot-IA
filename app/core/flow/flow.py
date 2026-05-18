@@ -23,7 +23,8 @@ NEXT_STATE_MAP = {
     ChatState.CONFIRMAR_ESTADO_PRODUCTO: ChatState.CONFIRMAR_PAGO_INICIAL,
     ChatState.CONFIRMAR_PAGO_INICIAL:    ChatState.INFO_PAGOS,
     ChatState.INFO_PAGOS:                ChatState.INFO_METODOS_PAGO,
-    ChatState.INFO_METODOS_PAGO:         ChatState.INFO_PLAN_3_MESES,
+    ChatState.INFO_METODOS_PAGO:         ChatState.INFO_COMPROBANTE_ACCESO,
+    ChatState.INFO_COMPROBANTE_ACCESO:   ChatState.INFO_PLAN_3_MESES,
     ChatState.INFO_PLAN_3_MESES:         ChatState.INFO_OTROS_PLANES,
     ChatState.INFO_OTROS_PLANES:         ChatState.INFO_BENEFICIOS,
     ChatState.INFO_BENEFICIOS:           ChatState.FINALIZADO,
@@ -311,8 +312,19 @@ FLOW = {
             {"id": "PAGOS_DUDA", "label": "❓ Tengo dudas"},
         ],
         "options": {
-            "PAGOS_OK": ChatState.INFO_PLAN_3_MESES,
+            "PAGOS_OK": ChatState.INFO_COMPROBANTE_ACCESO,
             "PAGOS_DUDA": ChatState.DUDA,
+            "affirmative": ChatState.INFO_COMPROBANTE_ACCESO,
+        },
+    },
+
+    ChatState.INFO_COMPROBANTE_ACCESO: {
+        "text": msg.INFO_COMPROBANTE_ACCESO,
+        "buttons": [
+            {"id": "COMPROBANTE_ACCESO_OK", "label": "✅ Entendido"},
+        ],
+        "options": {
+            "COMPROBANTE_ACCESO_OK": ChatState.INFO_PLAN_3_MESES,
             "affirmative": ChatState.INFO_PLAN_3_MESES,
         },
     },

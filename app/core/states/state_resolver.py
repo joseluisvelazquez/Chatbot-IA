@@ -42,6 +42,12 @@ def resolve_next_state(current_state, action, detected_intent=None, previous_sta
         return current_state
 
     # --------------------------------------
+    # REPETIR ESTADO SIN AVANZAR
+    # --------------------------------------
+    if action == "repeat":
+        return current_state
+
+    # --------------------------------------
     # INCONSISTENCIA
     # --------------------------------------
     if action == "inconsistency":

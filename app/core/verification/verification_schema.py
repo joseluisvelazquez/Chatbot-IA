@@ -12,6 +12,7 @@ DEFAULT_VERIFICATION_PROGRESS: Dict[str, int] = {
     "pagoInicial": 0,
     "pagos": 0,
     "bancos": 0,
+    "comprobanteAcceso": 0,
     "plan3meses": 0,
     "planes": 0,
     "beneficios": 0,

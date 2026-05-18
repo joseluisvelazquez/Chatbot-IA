@@ -26,10 +26,20 @@ STATE_CONFIRMATION = {
 STATE_INFORMATION = {
     ChatState.INFO_PAGOS,
     ChatState.INFO_METODOS_PAGO,
+    ChatState.INFO_COMPROBANTE_ACCESO,
     ChatState.INFO_PLAN_3_MESES,
     ChatState.INFO_OTROS_PLANES,
     ChatState.INFO_BENEFICIOS,
     ChatState.INFO_BENEFICIOS2,
+}
+
+
+# ---------------------------------------------------------
+# Estados de acuse simple
+# ---------------------------------------------------------
+# No generan dudas, inconsistencias ni IA.
+
+STATE_ACKNOWLEDGEMENT = {
 }
 
 
@@ -97,6 +107,9 @@ def get_state_type(state: ChatState) -> str:
     if state in STATE_INFORMATION:
         return "information"
 
+    if state in STATE_ACKNOWLEDGEMENT:
+        return "acknowledgement"
+
     if state in STATE_SELECTION:
         return "selection"
 
@@ -120,7 +133,7 @@ def is_persistent_state(state: ChatState) -> bool:
     del cual el usuario NO debería ser redirigido accidentalmente al salir de un
     estado de servicio (ej. MENU_AYUDA, DUDA).
     """
-    return get_state_type(state) in ("confirmation", "information") or is_terminal_state(state)
+    return get_state_type(state) in ("confirmation", "information", "acknowledgement") or is_terminal_state(state)
 
 def is_terminal_state(state: ChatState) -> bool:
     """

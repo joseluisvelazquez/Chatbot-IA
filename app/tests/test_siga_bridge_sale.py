@@ -2,9 +2,12 @@ import asyncio
 
 from app.core.states.state_renderer import render_state
 from app.core.states.states import ChatState
+from app.core.flow.flow import NEXT_STATE_MAP
+from app.core.verification.verification_schema import VERIFICATION_STEP_ORDER
 from app.pricing.payment_plans import calcular_info_pagos, calcular_info_plan_3_meses
-from app.services.verification_panel_service import compute_verification
-from app.services.verification_tracker import track_verification
+from app.services.verification_panel_service import compute_verification, resolve_panel_current_step
+from app.services.verification_tracker import STEP_DISPLAY_LABELS, STEP_MAP, track_verification
+from app.services.siga_bridge_integration import ensure_comprobante_access_data
 from app.services.siga_bridge_cache import (
     get_cached_verification,
     get_or_fetch_verification,
@@ -144,6 +147,15 @@ def test_normalizer_accepts_v1_wrapper_and_builds_snapshot():
     assert snapshot["no_cuenta"] == "60436"
     assert snapshot["customer"]["name"] == "CLIENTE DEMO"
     assert snapshot["source"]["table"] == "bitacora_ventas"
+
+
+def test_normalizer_maps_almare_1_to_codigo_cliente():
+    snapshot = normalize_siga_verification_snapshot(
+        verification_payload(account={"no_cuenta": "60436", "ALMARE-1": "CLI-123"})
+    )
+
+    assert snapshot["codigo_cliente"] == "CLI-123"
+    assert snapshot["customer"]["codigo_cliente"] == "CLI-123"
 
 
 def test_normalizer_preserves_fecha_venta_in_snapshot():
@@ -290,6 +302,91 @@ def test_renderer_bridge_pagos_uses_fecha_venta_for_first_payment():
 
     assert "7 de mayo del 2026" in reply
     assert "Por ahora no tengo disponible el detalle de tu plan de pagos" not in reply
+
+
+def test_renderer_metodos_pago_omits_comprobante_upload_block():
+    session = DummySession()
+    session.extra_json = {}
+    payload = verification_payload()
+    upsert_cached_verification(session, "16809", payload, raw=payload)
+
+    reply, _buttons, _image_id = render_state(ChatState.INFO_METODOS_PAGO, session, db=None)
+
+    assert "https://mxcomp.mx/" not in reply
+    assert "subir tu comprobante" not in reply
+    assert "*A60436*" in reply
+    assert "métodos de pago" in reply
+
+
+def test_renderer_comprobante_access_uses_cuenta_and_codigo_cliente():
+    session = DummySession()
+    session.extra_json = {}
+    payload = verification_payload(account={"no_cuenta": "60436", "ALMARE-1": "CLI-123"})
+    upsert_cached_verification(session, "16809", payload, raw=payload)
+
+    reply, buttons, _image_id = render_state(ChatState.INFO_COMPROBANTE_ACCESO, session, db=None)
+
+    assert "https://mxcomp.mx/" in reply
+    assert "*Datos de acceso:*" in reply
+    assert "Número de cuenta: *A60436*" in reply
+    assert "Código de cliente: *CLI-123*" in reply
+    assert buttons == [{"id": "COMPROBANTE_ACCESO_OK", "label": "✅ Entendido"}]
+
+
+def test_renderer_comprobante_access_does_not_duplicate_account_prefix():
+    session = DummySession()
+    session.extra_json = {}
+    payload = verification_payload(
+        sale={"folio": "16809", "no_cuenta": "A60436"},
+        account={"no_cuenta": "A60436", "ALMARE-1": "CLI-123"},
+    )
+    upsert_cached_verification(session, "16809", payload, raw=payload)
+
+    reply, _buttons, _image_id = render_state(ChatState.INFO_COMPROBANTE_ACCESO, session, db=None)
+
+    assert "Número de cuenta: *A60436*" in reply
+    assert "Número de cuenta: *AA60436*" not in reply
+
+
+def test_renderer_comprobante_access_fallback_is_controlled_when_codigo_missing():
+    session = DummySession()
+    session.extra_json = {}
+    payload = verification_payload()
+    upsert_cached_verification(session, "16809", payload, raw=payload)
+
+    reply, buttons, _image_id = render_state(ChatState.INFO_COMPROBANTE_ACCESO, session, db=None)
+
+    assert "Por ahora no tengo disponibles los datos de acceso" in reply
+    assert "traceback" not in reply.lower()
+    assert buttons == [{"id": "COMPROBANTE_ACCESO_OK", "label": "✅ Entendido"}]
+
+
+def test_ensure_comprobante_access_data_fetches_codigo_from_account(monkeypatch):
+    session = DummySession()
+    session.extra_json = {}
+    monkeypatch.setattr("app.services.siga_bridge_integration.settings.SIGA_BRIDGE_ENABLED", True)
+
+    class BridgeClient:
+        async def get_account(self, cuenta, company_id=None, bypass_cache=False):
+            assert cuenta == "60436"
+            return {"account": {"no_cuenta": "60436", "ALMARE-1": "CLI-123"}}
+
+    monkeypatch.setattr(
+        "app.services.siga_bridge_integration.get_siga_bridge_client",
+        lambda: BridgeClient(),
+    )
+
+    snapshot = run(
+        ensure_comprobante_access_data(
+            session,
+            "16809",
+            company_id=1,
+            bridge_verification=verification_payload(),
+        )
+    )
+
+    assert snapshot["codigo_cliente"] == "CLI-123"
+    assert get_cached_verification(session, "16809")["codigo_cliente"] == "CLI-123"
 
 
 def test_renderer_bridge_plan_3_meses_uses_fecha_venta_base():
@@ -454,3 +551,20 @@ def test_panel_progress_finalizado_counts_as_100_percent():
     assert data["current_step"] == "finalizado"
     assert data["progress_count"] == data["total_steps"]
     assert data["is_completed"] is True
+
+
+def test_comprobante_access_step_is_in_funnel_and_panel_order():
+    assert NEXT_STATE_MAP[ChatState.INFO_METODOS_PAGO] == ChatState.INFO_COMPROBANTE_ACCESO
+    assert NEXT_STATE_MAP[ChatState.INFO_COMPROBANTE_ACCESO] == ChatState.INFO_PLAN_3_MESES
+    assert (
+        VERIFICATION_STEP_ORDER.index("bancos")
+        < VERIFICATION_STEP_ORDER.index("comprobanteAcceso")
+        < VERIFICATION_STEP_ORDER.index("plan3meses")
+    )
+    assert STEP_MAP[ChatState.INFO_COMPROBANTE_ACCESO] == "comprobanteAcceso"
+    assert STEP_DISPLAY_LABELS["comprobanteAcceso"] == "Datos de acceso para comprobante"
+
+    session = DummySession()
+    session.state = ChatState.INFO_COMPROBANTE_ACCESO.value
+
+    assert resolve_panel_current_step(session) == "comprobanteAcceso"

@@ -1,6 +1,9 @@
 from app.core.flow.flow import FLOW
 from app.core.states.states import ChatState
+from app.content import messages as content_messages
 from app.content.message_builder import MessageBuilder
+
+import logging
 
 from app.siga.siga_repository import (
     obtener_venta_por_folio,
@@ -23,10 +26,73 @@ from app.core.states.state_handlers import COMPONENTES_MAP, _get_componentes_ya_
 from app.services.siga_bridge_sale import (
     bridge_address_from_session,
     bridge_sale_from_session,
+    get_cached_bridge_verification_payload,
     is_bridge_sale,
+    normalize_siga_verification_snapshot,
 )
 
 from app.utils.product_mapping import get_product_info_for_sale
+
+logger = logging.getLogger(__name__)
+
+
+def _mask(value, *, visible: int = 4) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= visible:
+        return "***"
+    return f"***{text[-visible:]}"
+
+
+def _has_render_value(value) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    return bool(text) and text.lower() not in {"-", "null", "none", "undefined", "no disponible"}
+
+
+def _snapshot_from_session(session) -> dict | None:
+    if not getattr(session, "folio", None):
+        return None
+    payload = get_cached_bridge_verification_payload(session, session.folio)
+    if not isinstance(payload, dict):
+        return None
+    snapshot = normalize_siga_verification_snapshot(payload)
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _comprobante_access_values(session, venta) -> tuple[str | None, str | None]:
+    numero_cuenta = construir_no_cuenta(venta) if venta else None
+    codigo_cliente = getattr(venta, "codigo_cliente", None) if venta else None
+
+    snapshot = getattr(venta, "_bridge_payload", None) if venta else None
+    if not isinstance(snapshot, dict):
+        snapshot = _snapshot_from_session(session)
+
+    if isinstance(snapshot, dict):
+        if not _has_render_value(numero_cuenta):
+            numero_cuenta = snapshot.get("no_cuenta")
+        if not _has_render_value(codigo_cliente):
+            codigo_cliente = snapshot.get("codigo_cliente")
+
+    return numero_cuenta, codigo_cliente
+
+
+def _render_comprobante_acceso(session, venta) -> str:
+    numero_cuenta, codigo_cliente = _comprobante_access_values(session, venta)
+    reply = MessageBuilder.info_comprobante_acceso(numero_cuenta, codigo_cliente)
+    if reply == content_messages.INFO_COMPROBANTE_ACCESO_FALLBACK:
+        logger.warning(
+            "comprobante_access_data_unavailable",
+            extra={
+                "session_id": getattr(session, "id", None),
+                "folio_masked": _mask(getattr(session, "folio", None)),
+                "has_numero_cuenta": _has_render_value(numero_cuenta),
+                "has_codigo_cliente": _has_render_value(codigo_cliente),
+            },
+        )
+    return reply
 
 
 def render_state(next_state, session, db):
@@ -60,6 +126,9 @@ def render_state(next_state, session, db):
     if next_state in [ChatState.CONFIRMAR_FOLIO_DEVOLUCION, ChatState.CONFIRMAR_FOLIO_DESCUENTO]:
         from app.content import messages as msg
         reply = msg.CONFIRMAR_FOLIO_DETECTADO.format(folio=session.folio)
+
+    if next_state == ChatState.INFO_COMPROBANTE_ACCESO:
+        reply = _render_comprobante_acceso(session, venta)
 
     if not venta:
         return reply, buttons, image_id
@@ -133,6 +202,9 @@ def render_state(next_state, session, db):
             construir_no_cuenta(venta)
         )
         image_id = settings.get_asset_url(settings.METODOS_PAGO_IMAGE_ID)
+
+    elif next_state == ChatState.INFO_COMPROBANTE_ACCESO:
+        reply = _render_comprobante_acceso(session, venta)
 
     elif next_state == ChatState.INFO_PLAN_3_MESES:
         calculos_3m = calcular_info_plan_3_meses(venta)

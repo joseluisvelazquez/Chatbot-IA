@@ -11,6 +11,13 @@ def route_intent(state, intent):
 
     state_type = get_state_type(state)
 
+    if state_type == "acknowledgement":
+
+        if intent == "COMPROBANTE_ACCESO_OK":
+            return "advance"
+
+        return "repeat"
+
     # =================================================
     # NORMALIZACIÓN GLOBAL (ANTES DE TODO)
     # =================================================

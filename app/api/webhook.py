@@ -14,6 +14,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.requests import ClientDisconnect
 
 from app.adapters.meta_webhook import parse_meta_payload
 from app.adapters.whatsapp_client import send_whatsapp_message
@@ -32,6 +33,7 @@ from app.services.message_service import get_message_by_message_id, save_message
 from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.session_service import get_or_create_session, update_session
 from app.services.siga_bridge_integration import (
+    ensure_comprobante_access_data,
     lookup_customer_for_incoming_phone,
     lookup_verification_for_folio,
 )
@@ -286,7 +288,12 @@ async def verify(request: Request):
 
 @router.post("/webhook")
 async def webhook(request: Request, db: Session = Depends(get_db)):
-    raw_body = await request.body()
+    try:
+        raw_body = await request.body()
+    except ClientDisconnect:
+        logger.info("webhook_client_disconnected_before_body")
+        return {"status": "client_disconnected"}
+
     if not verify_meta_signature(raw_body, request.headers.get("x-hub-signature-256")):
         logger.warning("webhook_signature_invalid")
         return PlainTextResponse("invalid signature", status_code=403)
@@ -570,6 +577,21 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                         "message_id": message_id,
                     },
                 )
+
+        if (
+            settings.SIGA_BRIDGE_ENABLED
+            and chat.folio
+            and chat.state in {
+                ChatState.INFO_METODOS_PAGO.value,
+                ChatState.INFO_COMPROBANTE_ACCESO.value,
+            }
+        ):
+            bridge_verification = await ensure_comprobante_access_data(
+                chat,
+                str(chat.folio),
+                company_id=1,
+                bridge_verification=bridge_verification,
+            ) or bridge_verification
 
         result = process_message(
             session=chat,

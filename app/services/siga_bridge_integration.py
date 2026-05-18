@@ -20,11 +20,13 @@ from app.services.siga_bridge import (
 from app.services.siga_bridge_sale import (
     bridge_sale_summary,
     bridge_verification_found,
+    extract_codigo_cliente_from_payload,
     normalize_siga_verification_snapshot,
 )
 from app.services.siga_bridge_cache import (
     apply_siga_snapshot_to_panel_item,
     get_or_fetch_verification,
+    upsert_cached_verification,
 )
 
 logger = logging.getLogger(__name__)
@@ -280,6 +282,96 @@ async def lookup_verification_for_folio(
         },
     )
     return data
+
+
+def _merge_codigo_cliente(snapshot: dict[str, Any], codigo_cliente: str | None) -> dict[str, Any]:
+    if not codigo_cliente:
+        return snapshot
+
+    enriched = dict(snapshot)
+    enriched["codigo_cliente"] = str(codigo_cliente)
+    customer = dict(enriched.get("customer") or {})
+    customer["codigo_cliente"] = str(codigo_cliente)
+    customer["customer_code"] = str(codigo_cliente)
+    enriched["customer"] = customer
+    return enriched
+
+
+async def ensure_comprobante_access_data(
+    session: Any,
+    folio: str,
+    *,
+    company_id: int | None = None,
+    bridge_verification: Any | None = None,
+) -> dict[str, Any] | None:
+    if not settings.SIGA_BRIDGE_ENABLED:
+        return None
+
+    normalized_folio = str(folio or "").strip()
+    if not normalized_folio:
+        return None
+
+    snapshot = (
+        normalize_siga_verification_snapshot(bridge_verification)
+        if bridge_verification_found(bridge_verification)
+        else await get_or_fetch_verification(
+            session,
+            normalized_folio,
+            company_id=company_id,
+        )
+    )
+    if not isinstance(snapshot, dict):
+        return None
+
+    if snapshot.get("codigo_cliente"):
+        return upsert_cached_verification(
+            session,
+            normalized_folio,
+            snapshot,
+            raw=bridge_verification or snapshot,
+        )
+
+    no_cuenta = snapshot.get("no_cuenta")
+    if not no_cuenta:
+        logger.warning(
+            "siga_bridge_comprobante_access_missing_account",
+            extra={
+                "company_id": company_id,
+                "session_id": getattr(session, "id", None),
+                "folio_masked": _mask(normalized_folio),
+            },
+        )
+        return snapshot
+
+    client = get_siga_bridge_client()
+    account_data, error = await _safe_bridge_call(
+        "comprobante_access_account",
+        lambda: client.get_account(str(no_cuenta), company_id),
+        company_id=company_id,
+    )
+    if error:
+        return snapshot
+
+    codigo_cliente = extract_codigo_cliente_from_payload(account_data)
+    if not codigo_cliente:
+        logger.warning(
+            "siga_bridge_comprobante_access_missing_codigo",
+            extra={
+                "company_id": company_id,
+                "session_id": getattr(session, "id", None),
+                "folio_masked": _mask(normalized_folio),
+                "no_cuenta_masked": _mask(no_cuenta),
+            },
+        )
+        return snapshot
+
+    enriched = _merge_codigo_cliente(snapshot, codigo_cliente)
+    return upsert_cached_verification(
+        session,
+        normalized_folio,
+        enriched,
+        raw={"source": "account"},
+    )
 
 
 async def lookup_customer_for_incoming_phone(

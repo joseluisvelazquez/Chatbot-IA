@@ -57,9 +57,20 @@ INFO_PAGOS = (
 INFO_METODOS_PAGO = (
     "🏦 Aquí te dejo las opciones para realizar tus pagos.\n\n"
     "💳 No olvides incluir este número *A{numero_cuenta}* como concepto o referencia.\n\n"
-    "Cada que hagas uno, deberás subir tu comprobante en el siguiente sitio 👇🏻\n"
-    "https://mxcomp.mx/\n\n"
     "¿Está claro o tienes alguna duda respecto a los métodos de pago?"
+)
+
+INFO_COMPROBANTE_ACCESO = (
+    "Cada que hagas uno, deberás enviar tu comprobante por el siguiente sitio 👇\n"
+    "https://mxcomp.mx/\n\n"
+    "*Datos de acceso:*\n"
+    "Número de cuenta: *{numero_cuenta}*\n"
+    "Código de cliente: *{codigo_cliente}*"
+)
+
+INFO_COMPROBANTE_ACCESO_FALLBACK = (
+    "Por ahora no tengo disponibles los datos de acceso para subir tu comprobante.\n\n"
+    "Para continuar con tu verificación, selecciona *Entendido*."
 )
 
 INFO_PLAN_3_MESES_DESCUENTO = (

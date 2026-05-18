@@ -77,6 +77,13 @@ def build_prompt(user_text: str, context: ConversationContext) -> str:
     Si responde con dudas o confusión, debes aclarar la información de forma simple.
     """
 
+        if str(context.state).endswith("INFO_COMPROBANTE_ACCESO"):
+            expected_behavior += """
+    El usuario esta viendo los datos para enviar comprobantes.
+    Si pregunta por comprobantes, debes indicar que se envian en https://mxcomp.mx/ usando el numero de cuenta y codigo de cliente mostrados en la verificacion.
+    Nunca digas que debe adjuntar el comprobante en este chat.
+    """
+
     elif stype == "inconsistency":
         expected_behavior = """
     El usuario está reportando una inconsistencia.
@@ -126,7 +133,8 @@ REGLAS IMPORTANTES
 
 - Solo puedes responder sobre: {", ".join(rules["scope"]["allowed_topics"])}
 - No inventes información bajo ninguna circunstancia
-- Si no tienes suficiente información, debes escalar usando EXACTAMENTE este mensaje:
+- Si no tienes suficiente informacion para una duda normal del flujo, responde que no tienes ese dato en este momento.
+- Usa el mensaje de escalamiento EXACTO solo si el cliente pide asesor/llamada o si el caso requiere revision humana:
   "{escalation_msg}"
 - Si el tema está fuera del alcance, responde:
   "{out_of_scope_msg}"

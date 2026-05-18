@@ -1,9 +1,17 @@
 import httpx
+import mimetypes
+from pathlib import Path
+from urllib.parse import urlparse
 from app.adapters.meta_parser import build_meta_buttons
 from app.config.settings import settings
+from app.config.paths import MEDIA_DIR
 import logging
 
 logger = logging.getLogger(__name__)
+
+META_INTERACTIVE_BODY_LIMIT = 1024
+BUTTON_PROMPT_TEXT = "Selecciona una opción para continuar:"
+IMAGE_LINK_TIMEOUT = 5
 
 HEADERS = {
     "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
@@ -15,6 +23,177 @@ HEADERS = {
 
 
 # Esta función se encarga de enviar la petición a Meta, y loguear la respuesta. Si Meta devuelve un error, se loguea pero no se trunca el bot, para evitar que problemas temporales con Meta afecten la experiencia del usuario.
+def _masked_phone(phone) -> str | None:
+    text = str(phone or "")
+    return text[-4:] if text else None
+
+
+def _response_failed(response) -> bool:
+    return response is None or getattr(response, "status_code", 0) >= 400
+
+
+def _meta_error_context(response) -> dict:
+    if response is None:
+        return {}
+    try:
+        body = response.json()
+    except Exception:
+        return {}
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return {}
+    return {
+        "error_code": error.get("code"),
+        "error_subcode": error.get("error_subcode"),
+        "error_type": error.get("type"),
+    }
+
+
+def _format_button_fallback(text: str | None, buttons: list | None) -> str:
+    labels = [
+        str(button.get("label") or "").strip()
+        for button in (buttons or [])
+        if isinstance(button, dict) and str(button.get("label") or "").strip()
+    ]
+    if not labels:
+        return text or ""
+    options = "\n".join(f"• {label}" for label in labels)
+    return f"{text or BUTTON_PROMPT_TEXT}\n\nOpciones:\n{options}"
+
+
+def _looks_like_asset_filename(value: str | None) -> bool:
+    if not value:
+        return False
+    parsed = urlparse(str(value))
+    if parsed.scheme or parsed.netloc:
+        return False
+    lower = str(value).strip().lower()
+    return lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
+
+
+def _normalize_image_source(image_id: str | None) -> str | None:
+    if not image_id:
+        return None
+    text = str(image_id).strip()
+    if not text:
+        return None
+    if _looks_like_asset_filename(text):
+        return settings.get_asset_url(text)
+    return text
+
+
+def _local_media_path_for_source(image_source: str | None) -> Path | None:
+    if not image_source:
+        return None
+
+    source = str(image_source).strip()
+    parsed = urlparse(source)
+    path_text = parsed.path if parsed.scheme or parsed.netloc else source
+    marker = "/media/"
+    if marker in path_text:
+        relative = path_text.split(marker, 1)[1]
+    elif not (parsed.scheme or parsed.netloc) and _looks_like_asset_filename(path_text):
+        relative = f"imagenes_verificacion/{Path(path_text).name}"
+    else:
+        return None
+
+    base = Path(MEDIA_DIR).resolve()
+    candidate = (base / relative.lstrip("/")).resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
+async def _upload_local_media_to_meta(image_source: str | None) -> str | None:
+    local_path = _local_media_path_for_source(image_source)
+    if not local_path:
+        return None
+
+    mime_type = mimetypes.guess_type(local_path.name)[0] or "image/jpeg"
+    url = f"{settings.BASE_URL}/{settings.PHONE_NUMBER_ID}/media"
+    headers = {"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"}
+
+    logger.info(
+        "whatsapp_media_upload_request",
+        extra={"media_name": local_path.name, "mime_type": mime_type},
+    )
+
+    try:
+        with local_path.open("rb") as file_obj:
+            files = {"file": (local_path.name, file_obj, mime_type)}
+            data = {"messaging_product": "whatsapp", "type": mime_type}
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(url, headers=headers, data=data, files=files)
+    except (OSError, httpx.HTTPError) as exc:
+        logger.warning(
+            "whatsapp_media_upload_exception",
+            extra={"media_name": local_path.name, "error_type": type(exc).__name__},
+        )
+        return None
+
+    if response.status_code >= 400:
+        logger.warning(
+            "whatsapp_media_upload_failed",
+            extra={
+                "status_code": response.status_code,
+                "media_name": local_path.name,
+                **_meta_error_context(response),
+            },
+        )
+        return None
+
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    media_id = payload.get("id") if isinstance(payload, dict) else None
+    if not media_id:
+        logger.warning("whatsapp_media_upload_missing_id", extra={"media_name": local_path.name})
+        return None
+    return str(media_id)
+
+
+async def _image_link_is_reachable(image_url: str) -> bool:
+    if not image_url.lower().startswith(("http://", "https://")):
+        return True
+
+    try:
+        async with httpx.AsyncClient(timeout=IMAGE_LINK_TIMEOUT, follow_redirects=True) as client:
+            response = await client.head(image_url)
+            if response.status_code == 405:
+                response = await client.get(
+                    image_url,
+                    headers={"Range": "bytes=0-0"},
+                )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "whatsapp_image_link_check_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return False
+
+    if response.status_code >= 400:
+        logger.warning(
+            "whatsapp_image_link_unreachable",
+            extra={"status_code": response.status_code},
+        )
+        return False
+
+    content_type = response.headers.get("content-type", "")
+    if content_type and "image/" not in content_type.lower():
+        logger.warning(
+            "whatsapp_image_link_invalid_content_type",
+            extra={"content_type": content_type[:80]},
+        )
+        return False
+
+    return True
+
+
 async def _send(payload: dict):
 
     url = f"{settings.BASE_URL}/{settings.PHONE_NUMBER_ID}/messages"
@@ -22,12 +201,23 @@ async def _send(payload: dict):
         "whatsapp_send_request",
         extra={
             "message_type": payload.get("type"),
-            "phone_last4": str(payload.get("to") or "")[-4:] if payload.get("to") else None,
+            "phone_last4": _masked_phone(payload.get("to")),
         },
     )
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(url, headers=HEADERS, json=payload)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(url, headers=HEADERS, json=payload)
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "whatsapp_send_exception",
+            extra={
+                "message_type": payload.get("type"),
+                "phone_last4": _masked_phone(payload.get("to")),
+                "error_type": type(exc).__name__,
+            },
+        )
+        return None
 
     # si Meta falla, no truenes el bot
     if response.status_code >= 400:
@@ -36,6 +226,8 @@ async def _send(payload: dict):
             extra={
                 "status_code": response.status_code,
                 "message_type": payload.get("type"),
+                "phone_last4": _masked_phone(payload.get("to")),
+                **_meta_error_context(response),
             },
         )
 
@@ -116,7 +308,8 @@ async def send_document(phone: str, url: str, filename="archivo.pdf"):
 
 
 async def send_buttons_with_image(phone: str, text: str, buttons: list, image_id: str):
-    header_image = {"link": image_id} if image_id.startswith("http") else {"id": image_id}
+    image_source = _normalize_image_source(image_id)
+    header_image = {"link": image_source} if image_source and image_source.startswith("http") else {"id": image_source}
 
     return await _send(
         {
@@ -148,24 +341,84 @@ async def send_whatsapp_message(phone, text=None, buttons=None, document_url=Non
     # print("Botones:", buttons)
     # print("Documento:", document_url)
 
+    last_response = None
+
     # documento primero
     if document_url:
-        await send_document(phone, document_url)
+        last_response = await send_document(phone, document_url)
+
+    image_source = _normalize_image_source(image_id)
 
     # botones con imagen
-    if image_id and buttons:
-        await send_buttons_with_image(phone, text, buttons[:3], image_id)
+    if image_source and buttons:
+        if image_source.startswith("http") and not await _image_link_is_reachable(image_source):
+            uploaded_media_id = await _upload_local_media_to_meta(image_source)
+            if uploaded_media_id:
+                logger.info(
+                    "whatsapp_image_uploaded_after_unreachable_link",
+                    extra={"phone_last4": _masked_phone(phone)},
+                )
+                image_source = uploaded_media_id
+            else:
+                logger.warning(
+                    "whatsapp_image_skipped_unreachable",
+                    extra={"phone_last4": _masked_phone(phone)},
+                )
+                image_source = None
+
+    if image_source and buttons:
+        if text and len(text) > META_INTERACTIVE_BODY_LIMIT:
+            text_response = await send_text(phone, text)
+            if _response_failed(text_response):
+                return text_response
+            return await send_buttons_with_image(phone, BUTTON_PROMPT_TEXT, buttons[:3], image_source)
+        response = await send_buttons_with_image(phone, text, buttons[:3], image_source)
+        if _response_failed(response):
+            logger.warning(
+                "whatsapp_image_interactive_fallback_without_image",
+                extra={"phone_last4": _masked_phone(phone), "has_image": True},
+            )
+            if len(buttons) > 3:
+                response = await send_list(phone, text, buttons)
+            else:
+                response = await send_buttons(phone, text, buttons)
+            if _response_failed(response):
+                logger.warning(
+                    "whatsapp_interactive_fallback_to_text",
+                    extra={"phone_last4": _masked_phone(phone), "has_image": True},
+                )
+                return await send_text(phone, _format_button_fallback(text, buttons))
+            return response
+        return response
 
     # botones sin imagen
     elif buttons:
+        if text and len(text) > META_INTERACTIVE_BODY_LIMIT:
+            text_response = await send_text(phone, text)
+            if _response_failed(text_response):
+                return text_response
+            if len(buttons) > 3:
+                return await send_list(phone, BUTTON_PROMPT_TEXT, buttons)
+            return await send_buttons(phone, BUTTON_PROMPT_TEXT, buttons)
+
         if len(buttons) > 3:
-            await send_list(phone, text, buttons)
+            response = await send_list(phone, text, buttons)
         else:
-            await send_buttons(phone, text, buttons)
+            response = await send_buttons(phone, text, buttons)
+
+        if _response_failed(response):
+            logger.warning(
+                "whatsapp_interactive_fallback_to_text",
+                extra={"phone_last4": _masked_phone(phone), "has_image": False},
+            )
+            return await send_text(phone, _format_button_fallback(text, buttons))
+        return response
 
     # solo texto
     elif text:
-        await send_text(phone, text)
+        return await send_text(phone, text)
+
+    return last_response
 
 
 async def send_whatsapp_media(phone, media_url, media_type, filename=None, caption=None):

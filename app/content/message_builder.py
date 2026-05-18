@@ -4,6 +4,23 @@ from app.pricing.payment_plans import PLANES_POR_MESES
 from decimal import Decimal
 from app.pricing.payment_plans import _redondear_entero_amigable
 
+
+def _clean_access_value(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"-", "null", "none", "undefined", "no disponible"}:
+        return None
+    return text
+
+
+def format_account_reference(numero_cuenta) -> str | None:
+    text = _clean_access_value(numero_cuenta)
+    if not text:
+        return None
+    return text if text.upper().startswith("A") else f"A{text}"
+
+
 class MessageBuilder:
 
     @staticmethod
@@ -41,7 +58,21 @@ class MessageBuilder:
     
     @staticmethod
     def info_metodos_pago(numero_cuenta: str) -> str:
-        return messages.INFO_METODOS_PAGO.format(numero_cuenta=numero_cuenta)
+        clean = _clean_access_value(numero_cuenta)
+        if clean and clean.upper().startswith("A") and len(clean) > 1:
+            clean = clean[1:]
+        return messages.INFO_METODOS_PAGO.format(numero_cuenta=clean or numero_cuenta)
+
+    @staticmethod
+    def info_comprobante_acceso(numero_cuenta: str, codigo_cliente: str | None) -> str:
+        cuenta = format_account_reference(numero_cuenta)
+        codigo = _clean_access_value(codigo_cliente)
+        if not cuenta or not codigo:
+            return messages.INFO_COMPROBANTE_ACCESO_FALLBACK
+        return messages.INFO_COMPROBANTE_ACCESO.format(
+            numero_cuenta=cuenta,
+            codigo_cliente=codigo,
+        )
 
     @staticmethod
     def info_plan_3_meses(saldo_3_meses: str, fecha_limite_3_meses: str, importe_semanal_3m: str, subsidio: str | None = None) -> str:

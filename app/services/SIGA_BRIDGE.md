@@ -76,6 +76,8 @@ GET /api/panel/siga-bridge/metrics
 
 Estos endpoints son probes internos. No reemplazan todavia la logica actual del panel y no realizan escrituras en SIGA.
 
+Para el flujo de comprobantes, las respuestas `verification` o `account` deben exponer el dato de `cuentas`.`ALMARE-1` como campo adicional normalizado `codigo_cliente`. El backend conserva compatibilidad con respuestas que ya usen `customer_code`, `cod_cli` o el nombre original `ALMARE-1`, pero no consulta directamente la base de datos de SIGA para obtenerlo.
+
 ## Integracion progresiva
 
 Con `SIGA_BRIDGE_ENABLED=true`, el drawer de verificaciones abre primero con datos locales y luego refresca el detalle con lecturas `customer`, `account` y `payments`. Si Bridge falla, el panel conserva los datos locales.
