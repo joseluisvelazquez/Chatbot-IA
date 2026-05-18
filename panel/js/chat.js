@@ -613,6 +613,7 @@ const BUTTON_LABELS = {
     PRODESTADOSI: "📦 Producto en buen estado",
     PAGO_SI: "💰 Confirmó pago",
     PAGOS_OK: "💳 Entendió pagos",
+    COMPROBANTE_ACCESO_OK: "Entendió datos de comprobante",
     PLAN3_OK: "📆 Aceptó plan 3 meses",
     PLANES_OK: "📊 Revisó planes",
     BEN_OK: "🎉 Confirmó beneficios"

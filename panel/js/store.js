@@ -410,7 +410,35 @@ function normalizeFunnel(items = []) {
         })).filter(item => item.step)
         : []
 
-    return recalculateFunnel(funnel)
+    return recalculateFunnel(sortFunnel(funnel))
+}
+
+const FUNNEL_STEP_ORDER = [
+    "folio",
+    "nombre",
+    "domicilio",
+    "fecha",
+    "producto",
+    "componentes",
+    "pagoInicial",
+    "pagos",
+    "bancos",
+    "comprobanteAcceso",
+    "plan3meses",
+    "planes",
+    "beneficios",
+    "finalizado",
+]
+
+function sortFunnel(funnel) {
+    const index = new Map(FUNNEL_STEP_ORDER.map((step, idx) => [step, idx]))
+    funnel.sort((a, b) => {
+        const aIdx = index.has(a.step) ? index.get(a.step) : Number.MAX_SAFE_INTEGER
+        const bIdx = index.has(b.step) ? index.get(b.step) : Number.MAX_SAFE_INTEGER
+        if (aIdx !== bIdx) return aIdx - bIdx
+        return String(a.step).localeCompare(String(b.step))
+    })
+    return funnel
 }
 
 function recalculateFunnel(funnel) {
@@ -459,7 +487,7 @@ function applyFunnelDeltas(payload = {}) {
 
     if (!changed) return false
 
-    recalculateFunnel(state.dashboard.funnel)
+    recalculateFunnel(sortFunnel(state.dashboard.funnel))
     state.dashboard._funnelVersion++
     return true
 }

@@ -42,6 +42,7 @@ const STEP_DISPLAY_LABELS = {
     plan3meses: "Plan 3 meses",
     planes: "Otros planes",
     bancos: "Métodos de pago",
+    comprobanteAcceso: "Datos de acceso para comprobante",
     beneficios: "Beneficios",
     finalizado: "Finalizado",
     inicio: "Inicio",

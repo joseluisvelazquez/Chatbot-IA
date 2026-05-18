@@ -9,6 +9,34 @@ import { dispatch, subscribeStore, getState } from "./store.js"
 let funnelChartInstance = null;
 let unsubscribeDashboardStore = null
 
+const DASHBOARD_STATE_LABELS = {
+    folio: "Folio",
+    nombre: "Nombre",
+    domicilio: "Domicilio",
+    fecha: "Fecha venta",
+    producto: "Producto",
+    componentes: "Componentes",
+    pagoInicial: "Pago inicial",
+    pagos: "Pagos",
+    bancos: "Métodos de pago",
+    comprobanteAcceso: "Datos de acceso para comprobante",
+    plan3meses: "Plan 3 meses",
+    planes: "Otros planes",
+    beneficios: "Beneficios",
+    finalizado: "Finalizado",
+    INFO_PAGOS: "Pagos",
+    INFO_METODOS_PAGO: "Métodos de pago",
+    INFO_COMPROBANTE_ACCESO: "Datos de acceso para comprobante",
+    INFO_PLAN_3_MESES: "Plan 3 meses",
+    INFO_OTROS_PLANES: "Otros planes",
+    INFO_BENEFICIOS: "Beneficios",
+    FINALIZADO: "Finalizado",
+}
+
+function dashboardLabel(key) {
+    return DASHBOARD_STATE_LABELS[key] || key || "-"
+}
+
 function hasAllowedCompany() {
     return [1, 8].includes(Number(window.currentUser?.empresa_id));
 }
@@ -60,7 +88,7 @@ function renderFunnelFromState(appState) {
 
     if (!data.length) return;
 
-    const labels = data.map(item => item.step ?? "-");
+    const labels = data.map(item => dashboardLabel(item.step));
     const values = data.map(item => item.total ?? 0);
 
     if (funnelChartInstance && funnelChartInstance.canvas !== canvas) {
@@ -113,8 +141,12 @@ async function loadStateTimes() {
             tr.className =
                 "border-b border-gray-100 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/40 transition";
 
+            const transitionLabel = row.from_state || row.to_state
+                ? `${dashboardLabel(row.from_state)} → ${dashboardLabel(row.to_state)}`
+                : (row.transition ?? "-");
+
             tr.innerHTML = `
-                <td data-label="Transicion" class="px-4 py-4">${row.transition ?? "-"}</td>
+                <td data-label="Transicion" class="px-4 py-4">${transitionLabel}</td>
                 <td data-label="Promedio" class="px-4 py-4">${row.avg_minutes ?? 0}</td>
                 <td data-label="Maximo" class="px-4 py-4">${row.max_minutes ?? 0}</td>
                 <td data-label="Minimo" class="px-4 py-4">${row.min_minutes ?? 0}</td>
