@@ -45,7 +45,7 @@ El valor base del contrato es de $16,999.00.
 
 | Plan de Pago | Plazo | Pagos Semanales | Pago Inicial | Importe Total |
 | :--- | :--- | :--- | :--- | :--- |
-| Base (Sin descuento) | 78 semanas | $215.00 | $229.00 | $16,999.00 |
+| Base (Sin descuento) | 18 meses (78 pagos) | $215.00 | $229.00 | $16,999.00 |
 | 10% Descuento | 15 meses (65 pagos) | $230.00 | $349.00 | $15,299.00 |
 | 20% Descuento | 12 meses (52 pagos) | $253.00 | $443.00 | $13,599.00 |
 | 30% Descuento | 9 meses (39 pagos) | $292.00 | $511.00 | $11,899.00 |

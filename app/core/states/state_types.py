@@ -134,6 +134,15 @@ def is_terminal_state(state: ChatState) -> bool:
         ChatState.DEVOLUCION_FINALIZADA
     }
 
+TERMINAL_STATES_FOR_LOCK = {
+    ChatState.FINALIZADO,
+    ChatState.ACLARACION,
+    ChatState.LLAMADA,
+    ChatState.DEVOLUCION_FINALIZADA,
+    ChatState.FUERA_DE_FLUJO,
+    ChatState.ESPERA,
+}
+
 def get_menu_ayuda_buttons(previous_state: str) -> list:
     """
     Retorna los botones del menú de ayuda, excluyendo la opción de "Ir a verificación"

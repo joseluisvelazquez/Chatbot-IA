@@ -38,6 +38,7 @@ from app.services.siga_bridge_sale import (
     bridge_verification_found,
     get_cached_bridge_verification_payload,
 )
+from app.db.models import ChatSessions
 
 logger = logging.getLogger(__name__)
 
@@ -218,27 +219,49 @@ def process_message(
     # Si mandó folio para iniciar
     # --------------------------------------
     def _check_verification_complete(folio: str) -> FlowResult | None:    
+        # 1. Intentar resolver el número de cuenta asociado al folio
         no_cuenta = (
             VerificationService(db).resolve_no_cuenta_from_folio(folio) if db else None
             or _no_cuenta_from_bridge(session, folio, bridge_verification)
         )
+        
+        # 2. Bloqueo si ya está finalizada en el historial (VerificacionCuenta)
         verificacion = obtener_verificacion_por_no_cuenta(db, no_cuenta) if db and no_cuenta else None
-        logger.info(
-            "chatbot_verification_complete_check",
-            extra={
-                "folio": folio,
-                "no_cuenta": no_cuenta,
-                "has_local_verification": verificacion is not None,
-            },
-        )
-
-        if no_cuenta and verificacion and (session.phone not in settings.TEST_PHONE_ONLY):
-
+        
+        if no_cuenta and verificacion:
             if verification_service.is_verification_complete(verificacion.json):
+                menu_buttons = [
+                    b for b in FLOW[ChatState.MENU_AYUDA].get("buttons", [])
+                    if b.get("id") != "MENU_VERIFICACION"
+                ]
                 return FlowResult(
                     reply="✅ Esta cuenta ya fue verificada anteriormente.",
+                    next_state=ChatState.FINALIZADO,
+                    buttons=menu_buttons,
+                    previous_state=None,
+                )
+
+        # 3. Bloqueo si otro teléfono ya lo está verificando en este momento (Simultáneo)
+        if db and folio:
+            from app.core.states.state_types import TERMINAL_STATES_FOR_LOCK
+            
+            # Buscamos otra sesión activa (no terminada) con el mismo folio
+            other_session = (
+                db.query(ChatSessions)
+                .filter(
+                    ChatSessions.folio == folio,
+                    ChatSessions.phone != session.phone,
+                    ChatSessions.state.notin_(TERMINAL_STATES_FOR_LOCK)
+                )
+                .first()
+            )
+            
+            if other_session:
+                phone_masked = f"***{other_session.phone[-4:]}" if other_session.phone else "desconocido"
+                return FlowResult(
+                    reply=f"⚠️ El folio *{folio}* ya está siendo verificado desde otro número de teléfono (terminación {phone_masked}).\n\nPor favor, espera a que termine o usa otro folio.",
                     next_state=ChatState.MENU_AYUDA,
-                    buttons= FLOW[ChatState.MENU_AYUDA].get("buttons", []),
+                    buttons=FLOW[ChatState.MENU_AYUDA].get("buttons", []),
                     previous_state=None,
                 )
     # --------------------------------------
@@ -623,6 +646,63 @@ def process_message(
 
         if not button_matched:
             action = route_intent(current_state, detected_intent)
+
+    # ==========================================
+    # DETECTAR SI TIENE VERIFICACIÓN ACTIVA Y TRATA DE CAMBIAR DE FOLIO
+    # ==========================================
+    ACTIVE_VERIFICATION_STATES = {
+        ChatState.INICIO,
+        ChatState.INICIO2,
+        ChatState.CONFIRMAR_NOMBRE,
+        ChatState.CONFIRMAR_DOMICILIO,
+        ChatState.CONFIRMAR_FECHA,
+        ChatState.CONFIRMAR_PRODUCTO,
+        ChatState.CONFIRMAR_ESTADO_PRODUCTO,
+        ChatState.CONFIRMAR_COMPONENTES,
+        ChatState.CONFIRMAR_PAGO_INICIAL,
+        ChatState.INFO_PAGOS,
+        ChatState.INFO_METODOS_PAGO,
+        ChatState.INFO_PLAN_3_MESES,
+        ChatState.INFO_OTROS_PLANES,
+        ChatState.INFO_BENEFICIOS,
+        ChatState.INFO_BENEFICIOS2,
+        ChatState.COMPONENTES_FALTANTES,
+        ChatState.COMPONENTES_CONFIRMAR_FALTANTES,
+        ChatState.VERIFICAR_FOTO_COMPONENTE,
+        ChatState.INCONSISTENCIA,
+    }
+
+    folio_detectado = extraer_folio(text)
+    folio_intento = folio_detectado or folio
+    detected_folio_is_new = bool(folio_intento and str(folio_intento) != str(session.folio))
+
+    if session.folio and current_state in ACTIVE_VERIFICATION_STATES:
+        if detected_folio_is_new:
+            next_state = ChatState.MENU_AYUDA
+            _log()
+            return FlowResult(
+                reply=messages.VERIFICACION_ACTIVA,
+                next_state=ChatState.MENU_AYUDA,
+                buttons=[
+                    {"id": "MENU_VERIFICACION", "label": "📄 Ir a verificación"},
+                    {"id": "MENU_DUDA", "label": "❓ Hacer una pregunta"},
+                ],
+                previous_state=current_state.value
+            )
+        elif folio_intento and str(folio_intento) == str(session.folio):
+            # Mismo folio ingresado de nuevo en medio de verificación activa
+            # Simplemente le recordamos y volvemos a renderizar la pregunta actual del estado
+            reply_state, buttons, image_id = render_state(current_state, session, db)
+            reply = f"{messages.VERIFICACION_MISMO_FOLIO}\n\n{reply_state}"
+            next_state = current_state
+            _log()
+            return FlowResult(
+                reply=reply,
+                next_state=current_state,
+                buttons=buttons,
+                image_id=image_id,
+                previous_state=previous_state
+            )
 
     # --------------------------------------
     # 2. Detectar folio automático

@@ -184,3 +184,12 @@ SALA_ESPERA = (
 )
 
 MULTIPLES_FOLIOS_PENDIENTES = "¡Hola! Veo que tienes {cantidad} compras pendientes por verificar con nosotros. Por favor, selecciona el folio con el que deseas continuar:"
+
+VERIFICACION_ACTIVA = (
+    "⚠️ Ya tienes una verificación activa en curso.\n\n"
+    "Por favor, termina tu proceso actual antes de iniciar la verificación de otro folio."
+)
+
+VERIFICACION_MISMO_FOLIO = (
+    "🔁 Ya estamos verificando este folio. Continuemos con el proceso:"
+)

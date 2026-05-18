@@ -218,6 +218,12 @@ export async function resumeBotControlApi(sessionId) {
     });
 }
 
+export async function verifyByCallApi(sessionId) {
+    return apiRequest(`/panel/conversations/${sessionId}/verify-by-call`, {
+        method: "POST",
+    });
+}
+
 export async function uploadPanelFile(file) {
     const formData = new FormData();
     formData.append("file", file);

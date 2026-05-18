@@ -1694,10 +1694,54 @@ async def resume_bot_control(
         detail="Sesion no encontrada"
     )
 
+    from app.utils.timezone import mexico_now_naive
+    from datetime import timedelta
+
+    # 🛡️ VALIDACION: Ventana de 24 horas expirada
+    if session.last_customer_message_at and session.last_customer_message_at < mexico_now_naive() - timedelta(days=1):
+        raise HTTPException(
+            status_code=400,
+            detail="No es posible que el chatbot tome el control porque la ventana de atención de 24 horas cerró."
+        )
+
     from app.core.states.states import ChatState
+
+    # 🗺️ Mapeo de descripciones legibles para el asesor
+    STATE_DESCRIPTIONS = {
+        ChatState.INICIO.value: "Confirmación de nombre (Inicio)",
+        ChatState.INICIO2.value: "Confirmación de nombre",
+        ChatState.CONFIRMAR_NOMBRE.value: "Confirmación de nombre",
+        ChatState.CONFIRMAR_DOMICILIO.value: "Confirmación de domicilio",
+        ChatState.CONFIRMAR_FECHA.value: "Confirmación de fecha de venta",
+        ChatState.CONFIRMAR_PRODUCTO.value: "Confirmación de producto",
+        ChatState.CONFIRMAR_ESTADO_PRODUCTO.value: "Confirmación de estado del producto",
+        ChatState.CONFIRMAR_COMPONENTES.value: "Confirmación de componentes recibidos",
+        ChatState.CONFIRMAR_PAGO_INICIAL.value: "Confirmación de pago inicial",
+        ChatState.INFO_PAGOS.value: "Información de pagos",
+        ChatState.INFO_METODOS_PAGO.value: "Información de métodos de pago",
+        ChatState.INFO_PLAN_3_MESES.value: "Información de plan de 3 meses",
+        ChatState.INFO_OTROS_PLANES.value: "Información de otros planes",
+        ChatState.INFO_BENEFICIOS.value: "Información de beneficios",
+        ChatState.INFO_BENEFICIOS2.value: "Información de beneficios",
+        ChatState.FINALIZADO.value: "Verificación finalizada con éxito",
+        ChatState.ESPERANDO_REGISTRO.value: "Espera de registro de venta",
+        ChatState.RECORDATORIO.value: "Recordatorio automático por inactividad",
+        ChatState.RECORDATORIO_1H.value: "Recordatorio automático (1 hora)",
+        ChatState.RECORDATORIO_2H.value: "Recordatorio automático (2 horas)",
+        ChatState.RECORDATORIO_24H.value: "Recordatorio automático (24 horas)",
+        ChatState.ESPERA.value: "Espera de folio por parte del cliente",
+        ChatState.MENU_AYUDA.value: "Menú de ayuda inicial",
+        ChatState.FUERA_DE_FLUJO.value: "Resolución de dudas generales",
+        ChatState.COMPONENTES_FALTANTES.value: "Registro de componentes faltantes",
+        ChatState.COMPONENTES_CONFIRMAR_FALTANTES.value: "Confirmación de lista de faltantes",
+        ChatState.VERIFICAR_FOTO_COMPONENTE.value: "Verificación de fotos de componentes",
+        ChatState.INCONSISTENCIA.value: "Registro de inconsistencia en datos",
+    }
+
+    state_friendly = STATE_DESCRIPTIONS.get(session.state, session.state)
     
     if session.state not in (ChatState.ACLARACION.value, ChatState.LLAMADA.value):
-        raise HTTPException(400, f"El chatbot ya tiene el control (Estado: {session.state})")
+        raise HTTPException(400, f"El chatbot ya tiene el control de la conversación (Etapa actual: {state_friendly})")
 
     # ——————————————————————————————————————————————————————————————
     # Determinar el estado correcto al que volver
@@ -1876,3 +1920,111 @@ async def resume_bot_control(
         })
         
     return {"status": "success", "message": "El chatbot ha retomado el control", "next_state": next_state.value}
+
+# =========================================
+# Verificacion Manual por Llamada (Asesor)
+# =========================================
+@router.post("/conversations/{session_id}/verify-by-call")
+async def verify_by_call(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user)
+):
+    require_company_scope(user)
+    
+    session = get_scoped_session_or_404(
+        db,
+        user,
+        session_id,
+        detail="Sesion no encontrada"
+    )
+
+    from app.core.states.states import ChatState
+    from app.utils.timezone import mexico_now_naive
+    from sqlalchemy import func
+    from app.db.models import Inconsistencias, VerificacionCuenta
+    from app.services.reminder_service import cancel_pending_inactivity_reminders
+    from app.services.verification_service import VerificationService, log_flow_event
+    from app.core.verification.verification_schema import VERIFICATION_STEP_ORDER
+    from app.services.verification_panel_service import build_verification_snapshot
+    from app.websockets.manager import manager
+
+    if session.state not in (ChatState.LLAMADA.value, ChatState.ACLARACION.value):
+        pass # Permitimos la verificacion manual en estados inactivos si el asesor lo requiere.
+
+    # 1. Registrar transicion de estado en FlowEvent
+    log_flow_event(
+        db=db,
+        session=session,
+        from_state=session.state,
+        to_state=ChatState.FINALIZADO.value,
+        trigger_text="Verificación manual por llamada por el asesor",
+        event_type="panel_action"
+    )
+
+    # 2. Actualizar ChatSessions a FINALIZADO
+    session.previous_state = session.state
+    session.state = ChatState.FINALIZADO.value
+    session.updated_at = mexico_now_naive()
+
+    # 3. Cancelar los recordatorios pendientes de inactividad
+    if session.phone:
+        cancel_pending_inactivity_reminders(db, session.phone)
+
+    # 4. Actualizar VerificacionCuenta (13 pasos en 1)
+    if session.folio:
+        service = VerificationService(db)
+        no_cuenta = service.resolve_no_cuenta_from_folio(str(session.folio), user.empresa_id)
+        if no_cuenta:
+            verification = (
+                db.query(VerificacionCuenta)
+                .filter(VerificacionCuenta.no_cuenta == no_cuenta)
+                .first()
+            )
+            if not verification:
+                verification = VerificacionCuenta(
+                    no_cuenta=no_cuenta,
+                    json={},
+                    version=0
+                )
+                db.add(verification)
+                db.flush()
+            
+            verification.json = {k: 1 for k in VERIFICATION_STEP_ORDER}
+            verification.version += 1
+
+            # 5. Cerrar inconsistencias asociadas a este folio
+            open_incs = db.query(Inconsistencias).filter(
+                Inconsistencias.folio == session.folio,
+                func.upper(Inconsistencias.estatus) == "ABIERTA"
+            ).all()
+            for inc in open_incs:
+                inc.estatus = "RESUELTA"
+                inc.resolved_by_panel = True
+
+    db.commit()
+    db.refresh(session)
+
+    # 6. Broadcast via WebSockets para actualizar el UI sin recargar
+    snapshot = build_verification_snapshot(db, session)
+    if snapshot:
+        await manager.send_to_all({
+            "type": "verification_update",
+            "payload": snapshot,
+        })
+        
+        from app.router.panel_router import redact_siga_details_for_role
+        public_snapshot = redact_siga_details_for_role(dict(snapshot), None)
+        await manager.send_to_all({
+            "type": "verification_updated",
+            "session_id": session.id,
+            "folio": public_snapshot.get("folio"),
+            "no_cuenta": public_snapshot.get("no_cuenta"),
+            "status": public_snapshot.get("status"),
+            "updated_at": public_snapshot.get("last_activity"),
+            "source": "panel",
+            "payload": public_snapshot,
+        })
+
+    return {"status": "success", "message": "Verificado exitosamente por llamada"}
+

@@ -1,4 +1,4 @@
-import { fetchVerifications, getVerificationBySession, updateInconsistenciaPanelResolution } from "./api.js";
+import { fetchVerifications, getVerificationBySession, updateInconsistenciaPanelResolution, verifyByCallApi } from "./api.js";
 import { navigateTo, setSelectedSession } from "./app.js";
 import { dispatch, getState, subscribeStore } from "./store.js";
 
@@ -1088,17 +1088,32 @@ function updateDrawer(item) {
                 `
                 : "";
 
-            footer.innerHTML = `
-                <div class="flex flex-col gap-2 sm:flex-row">
+            const verifyByCallButton = (item.session_state === "LLAMADA" || item.session_state === "ACLARACION")
+                ? `
                     <button
-                        id="goToChat"
+                        id="verifyByCallFooterBtn"
                         type="button"
-                        class="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+                        class="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-emerald-600 shadow-sm"
                     >
-                        Abrir conversacion
+                        ✔️ Verificar por llamada
                     </button>
-                    ${refreshButton}
-                    ${sigaButton}
+                `
+                : "";
+
+            footer.innerHTML = `
+                <div class="flex flex-col gap-2">
+                    <div class="flex flex-col gap-2 sm:flex-row">
+                        <button
+                            id="goToChat"
+                            type="button"
+                            class="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+                        >
+                            Abrir conversacion
+                        </button>
+                        ${refreshButton}
+                        ${sigaButton}
+                    </div>
+                    ${verifyByCallButton ? `<div class="flex">${verifyByCallButton}</div>` : ""}
                 </div>
             `;
 
@@ -1132,6 +1147,72 @@ function updateDrawer(item) {
             if (sigaBtn) {
                 sigaBtn.onclick = () => {
                     window.goToSiga(sigaUrl);
+                };
+            }
+
+            const verifyByCallBtn = document.getElementById("verifyByCallFooterBtn");
+            if (verifyByCallBtn) {
+                verifyByCallBtn.onclick = async () => {
+                    const confirmed = await new Promise((resolve) => {
+                        const overlay = document.createElement("div");
+                        overlay.className = "fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm transition-opacity";
+
+                        const modal = document.createElement("div");
+                        modal.className = "bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4 transform scale-95 transition-transform";
+
+                        modal.innerHTML = `
+                            <div class="flex items-center gap-3 mb-4 text-emerald-600 dark:text-emerald-500">
+                                <h3 class="text-lg font-bold text-slate-900 dark:text-white">Verificación por Llamada</h3>
+                            </div>
+                            <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">
+                                ¿Deseas marcar esta venta como verificada manualmente por llamada telefónica?
+                            </p>
+                            <div class="flex justify-end gap-3">
+                                <button id="cancelCallBtn" class="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors">
+                                    Cancelar
+                                </button>
+                                <button id="confirmCallBtn" class="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors flex items-center shadow-sm">
+                                    Confirmar
+                                </button>
+                            </div>
+                        `;
+
+                        overlay.appendChild(modal);
+                        document.body.appendChild(overlay);
+
+                        requestAnimationFrame(() => {
+                            modal.classList.remove("scale-95");
+                            modal.classList.add("scale-100");
+                        });
+
+                        const cleanup = (result) => {
+                            overlay.classList.add("opacity-0");
+                            setTimeout(() => {
+                                if (document.body.contains(overlay)) document.body.removeChild(overlay);
+                                resolve(result);
+                            }, 200);
+                        };
+
+                        modal.querySelector("#cancelCallBtn").addEventListener("click", () => cleanup(false));
+                        modal.querySelector("#confirmCallBtn").addEventListener("click", () => cleanup(true));
+                        overlay.addEventListener("click", (e) => {
+                            if (e.target === overlay) cleanup(false);
+                        });
+                    });
+
+                    if (!confirmed) return;
+
+                    verifyByCallBtn.disabled = true;
+                    verifyByCallBtn.textContent = "Verificando...";
+
+                    try {
+                        await verifyByCallApi(item.session_id);
+                        closeVerificationDrawer();
+                    } catch (error) {
+                        alert("Error al verificar por llamada: " + error.message);
+                        verifyByCallBtn.disabled = false;
+                        verifyByCallBtn.innerHTML = "✔️ Verificar por llamada";
+                    }
                 };
             }
         }
