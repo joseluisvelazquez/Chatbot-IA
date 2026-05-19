@@ -83,6 +83,18 @@ function toSessionId(value) {
     return Number.isFinite(id) && id > 0 ? id : null
 }
 
+function timestampValue(value) {
+    if (!value) return null
+    const time = new Date(value).getTime()
+    return Number.isFinite(time) ? time : null
+}
+
+function isIncomingConversationOlder(current = {}, incoming = {}) {
+    const currentTime = timestampValue(current.last_message_at)
+    const incomingTime = timestampValue(incoming.last_message_at)
+    return currentTime != null && incomingTime != null && incomingTime < currentTime
+}
+
 function normalizeConversation(session = {}) {
     const id = toSessionId(session.id ?? session.session_id)
     if (!id) return null
@@ -90,8 +102,9 @@ function normalizeConversation(session = {}) {
     const current = state.conversations.byId[id] || {}
     const phone = session.phone ?? current.phone ?? null
     const name = session.name ?? current.name ?? null
+    const incomingOlder = isIncomingConversationOlder(current, session)
 
-    return {
+    const normalized = {
         ...current,
         ...session,
         id,
@@ -99,6 +112,14 @@ function normalizeConversation(session = {}) {
         name,
         display_name: name || phone || "Cliente sin nombre",
     }
+
+    if (incomingOlder) {
+        normalized.last_message = current.last_message
+        normalized.last_message_at = current.last_message_at
+        normalized.unread_count = current.unread_count
+    }
+
+    return normalized
 }
 
 function upsertConversation(session) {

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from app.adapters.whatsapp_client import send_whatsapp_media
 from app.db.models import Message
 from app.utils.timezone import mexico_now_naive
+from app.services.ws_events import build_new_message_event
 
 logger = logging.getLogger(__name__)
 
@@ -51,15 +52,31 @@ async def send_message(
     
 
     # guardar mensaje
-    save_message(
+    msg = save_message(
         db=db,
         session_id=session_id,
         phone=chat.phone,
         direction="agent",
         content=message
     )
+    now = mexico_now_naive()
+    chat.last_message = message
+    chat.last_message_at = now
+    chat.unread_count = 0
     
     db.commit()
+    db.refresh(msg)
+    from app.websockets.manager import manager
+
+    await manager.send_to_all(build_new_message_event(chat, msg))
+    await manager.send_to_all({
+        "type": "dashboard_update",
+        "payload": {
+            "messages_in_delta": 0,
+            "messages_out_delta": 1,
+            "session_id": chat.id,
+        },
+    })
     
 
     return {"status": "sent"}
@@ -113,20 +130,7 @@ async def send_file_message(
     # -----------------------
     from app.websockets.manager import manager
 
-    await manager.send_to_all({
-        "type": "new_message",
-        "session_id": chat.id,
-        "message": {
-            "id": msg.id,
-            "content": msg.content,
-            "direction": "agent",
-            "type": payload.type,
-            "media_url": payload.media_url,
-            "file_name": payload.file_name,
-            "created_at": msg.created_at.isoformat() if msg.created_at else now.isoformat(),
-        },
-        "unread_count": chat.unread_count
-    })
+    await manager.send_to_all(build_new_message_event(chat, msg))
 
     # -----------------------
     # 📤 WHATSAPP

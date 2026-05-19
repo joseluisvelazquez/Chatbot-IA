@@ -11,10 +11,39 @@ let lastDrawerSessionId = null;
 let lastDrawerSignature = "";
 let verificationRequestId = 0;
 let isRenderingVerifications = false;
+let verificationRealtimeBound = false;
 
 const verificationRowCache = new Map();
 const pendingInconsistenciaUpdates = new Set();
 const pendingVerificationDetailRequests = new Map();
+
+function setupVerificationRealtimeRecovery() {
+    if (verificationRealtimeBound) return;
+
+    window.addEventListener("panel:ws-reconnected", () => {
+        if (!document.getElementById("verificationTableBody")) return;
+        void loadVerifications(currentVerificationStatus);
+    });
+
+    window.addEventListener("panel:ws-message", (event) => {
+        const data = event.detail || {};
+        if (!["siga_snapshot_updated", "inconsistency_created", "inconsistency_updated"].includes(data.type)) {
+            return;
+        }
+
+        const sessionId = data.session_id || data.payload?.session_id;
+        if (!sessionId || String(sessionId) !== String(lastDrawerSessionId || "")) {
+            return;
+        }
+
+        const item = getState().verifications.bySessionId[String(sessionId)];
+        if (item) {
+            void refreshVerificationDetail(item);
+        }
+    });
+
+    verificationRealtimeBound = true;
+}
 
 const SEVERITY_ORDER = {
     critica: 3,
@@ -1492,6 +1521,7 @@ export function initVerificationsPage() {
     try {
         bindVerificationFilters();
         bindDrawerCloseEvents();
+        setupVerificationRealtimeRecovery();
 
         lastRenderedVerificationVersion = -1;
         lastRenderedVerificationFilter = null;

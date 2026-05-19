@@ -41,15 +41,6 @@ async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
         
         # Notificar al panel del cambio a LLAMADA
         try:
-            from app.websockets.manager import manager
-            from app.services.verification_panel_service import build_verification_snapshot
-            snapshot = build_verification_snapshot(db, session)
-            await manager.send_to_all({
-                "type": "verification_updated",
-                "session_id": session.id,
-                "payload": snapshot
-            })
-
             # 🔔 Notificar a asesores por WhatsApp
             from app.services.notification_service import notify_advisors_new_case
             from app.services.verification_service import VerificationService
@@ -59,9 +50,9 @@ async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
             await notify_advisors_new_case(session, "El cliente no ha respondido los mensajes y se requiere contacto manual.", no_cuenta=no_cuenta_val)
         except Exception:
             pass
-        return
+        return True
     else:
-        return
+        return False
 
     node = FLOW[state]
     text = node["text"]
@@ -77,22 +68,20 @@ async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
     session.state = state.value
 
     await send_whatsapp_message(session.phone, text, buttons)
+    return True
 
-    # 📢 Notificar al panel en tiempo real
+
+async def broadcast_reminder_update(db: Session, session: ChatSessions) -> None:
     try:
-        from app.websockets.manager import manager
         from app.services.verification_panel_service import build_verification_snapshot
-        
+        from app.services.ws_events import build_verification_updated_event
+        from app.websockets.manager import manager
+
         snapshot = build_verification_snapshot(db, session)
-        # Usamos asyncio.create_task si estamos en el mismo loop, 
-        # o simplemente lo lanzamos si el manager es accesible.
-        await manager.send_to_all({
-            "type": "verification_updated",
-            "session_id": session.id,
-            "payload": snapshot
-        })
-    except Exception as e:
-        # No bloqueamos el envío del mensaje por un error en el panel
+        event = build_verification_updated_event(snapshot, source="reminder") if snapshot else None
+        if event:
+            await manager.send_to_all(event)
+    except Exception:
         pass
 
 
@@ -153,7 +142,7 @@ async def _send_due_reminders(db: Session) -> None:
 
         try:
 
-            await send_reminder(
+            changed = await send_reminder(
                 db=db,
                 session=session,
                 reminder_type=r.type
@@ -161,6 +150,8 @@ async def _send_due_reminders(db: Session) -> None:
 
             # commit después de enviar
             db.commit()
+            if changed:
+                await broadcast_reminder_update(db, session)
 
         except Exception:
             db.rollback()

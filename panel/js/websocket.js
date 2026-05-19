@@ -5,6 +5,12 @@ let socket = null;
 const listeners = new Set();
 const pendingVerificationPatches = new Map();
 let verificationPatchTimer = null;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let hasConnectedOnce = false;
+
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 15000;
 
 function stripUndefinedEntries(value) {
     return Object.fromEntries(
@@ -15,20 +21,34 @@ function stripUndefinedEntries(value) {
 function extractVerificationPayload(data = {}) {
     const payload = data.payload && typeof data.payload === "object"
         ? data.payload
-        : data;
-    return payload && typeof payload === "object" ? payload : null;
+        : {};
+    const patch = data.patch && typeof data.patch === "object"
+        ? data.patch
+        : {};
+    const merged = {
+        ...payload,
+        ...patch,
+        session_id: payload.session_id ?? data.session_id,
+        folio: payload.folio ?? data.folio,
+        no_cuenta: payload.no_cuenta ?? data.no_cuenta,
+        status: payload.status ?? data.status ?? patch.state,
+        updated_at: payload.updated_at ?? data.updated_at,
+        last_activity: payload.last_activity ?? data.updated_at,
+    };
+    return merged && typeof merged === "object" ? merged : null;
 }
 
 function buildVerificationChanges(payload = {}) {
     return stripUndefinedEntries({
-        progress_pct: payload.progress_pct,
+        progress_pct: payload.progress_pct ?? payload.progress,
         current_step: payload.current_step,
-        status: payload.status,
+        status: payload.status ?? payload.state,
         folio: payload.folio,
         phone: payload.phone,
         name: payload.name,
         last_activity: payload.last_activity || payload.updated_at,
         inconsistencias_count: payload.inconsistencias_count,
+        has_inconsistency: payload.has_inconsistency,
         inconsistencias: payload.inconsistencias,
         severity_counts: payload.severity_counts,
         highest_severity: payload.highest_severity,
@@ -73,12 +93,47 @@ function queueVerificationPatch(payload = {}) {
     }, 80);
 }
 
+function notifySocketEvent(name, detail = {}) {
+    window.dispatchEvent(new CustomEvent(name, { detail }));
+}
+
+function notifyMessage(data) {
+    notifySocketEvent("panel:ws-message", data);
+    listeners.forEach(fn => fn(data));
+}
+
+function scheduleReconnect() {
+    if (reconnectTimer) return;
+
+    const exponentialDelay = Math.min(
+        RECONNECT_MAX_MS,
+        RECONNECT_BASE_MS * (2 ** reconnectAttempts)
+    );
+    const jitter = Math.floor(Math.random() * 250);
+    const delay = exponentialDelay + jitter;
+
+    reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        reconnectAttempts += 1;
+        initWebSocket();
+    }, delay);
+}
+
 export function initWebSocket() {
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
         return socket;
     }
 
     socket = new WebSocket(getWebSocketUrl("/api/panel/ws"));
+
+    socket.onopen = () => {
+        const wasReconnect = hasConnectedOnce;
+        hasConnectedOnce = true;
+        reconnectAttempts = 0;
+        if (wasReconnect) {
+            notifySocketEvent("panel:ws-reconnected");
+        }
+    };
 
     socket.onmessage = (event) => {
         let data = null;
@@ -91,14 +146,23 @@ export function initWebSocket() {
 
         if (data.type === "new_message") {
             const sessionId = data.session_id;
-            const message = data.message || {};
+            const message = {
+                ...(data.message || {}),
+                id: data.message?.id ?? data.message_id,
+                message_id: data.message?.message_id ?? data.message_id,
+                direction: data.message?.direction ?? data.direction,
+                created_at: data.message?.created_at ?? data.created_at,
+                content: data.message?.content ?? data.preview,
+            };
+            const conversationPatch = data.conversation_patch || {};
             const conversation = {
                 ...(data.conversation || {}),
+                ...conversationPatch,
                 id: sessionId,
                 phone: data.phone || data.conversation?.phone || message.phone || null,
                 name: data.name || data.conversation?.name || null,
-                last_message: message.content || data.conversation?.last_message || "",
-                last_message_at: message.created_at || data.conversation?.last_message_at || "",
+                last_message: conversationPatch.last_message || message.content || data.conversation?.last_message || "",
+                last_message_at: conversationPatch.last_message_at || message.created_at || data.conversation?.last_message_at || "",
                 last_customer_message_at: data.conversation?.last_customer_message_at || null,
             };
 
@@ -144,7 +208,7 @@ export function initWebSocket() {
             });
         }
 
-        if (data.type === "dashboard_update" && data.payload) {
+        if (["dashboard_update", "dashboard_updated"].includes(data.type) && data.payload) {
             dispatch({
                 type: "dashboard/apply_delta",
                 payload: data.payload,
@@ -158,18 +222,22 @@ export function initWebSocket() {
         ) {
             queueVerificationPatch(extractVerificationPayload(data));
         }
-        if (data.type === "conversation_updated" && data.payload) {
+        if (data.type === "conversation_updated" && (data.payload || data.patch)) {
+            const payload = data.payload || {};
+            const patch = data.patch || {};
+            const sessionId = payload.session_id || data.session_id;
             dispatch({
                 type: "conversations/upsert",
                 payload: {
-                    id: data.payload.session_id || data.session_id,
-                    session_id: data.payload.session_id || data.session_id,
-                    folio: data.payload.folio,
-                    no_cuenta: data.payload.no_cuenta,
-                    last_message_at: data.payload.updated_at,
+                    id: sessionId,
+                    session_id: sessionId,
+                    ...patch,
+                    folio: patch.folio ?? payload.folio,
+                    no_cuenta: patch.no_cuenta ?? payload.no_cuenta,
+                    last_message_at: patch.last_message_at ?? payload.last_message_at ?? payload.updated_at,
                 },
             });
-            queueVerificationPatch(data.payload);
+            queueVerificationPatch({ ...payload, ...patch, session_id: sessionId });
         }
         if (["inconsistencia_updated", "inconsistency_updated"].includes(data.type) && data.payload) {
             dispatch({
@@ -177,15 +245,21 @@ export function initWebSocket() {
                 payload: data.payload,
             });
         }
+        if (data.type === "inconsistency_created") {
+            queueVerificationPatch({
+                session_id: data.session_id,
+                folio: data.folio,
+                has_inconsistency: true,
+                last_activity: data.created_at,
+            });
+        }
 
-        listeners.forEach(fn => fn(data));
+        notifyMessage(data);
     };
 
     socket.onclose = () => {
         socket = null;
-        setTimeout(() => {
-            initWebSocket();
-        }, 2000);
+        scheduleReconnect();
     };
 
     socket.onerror = () => {

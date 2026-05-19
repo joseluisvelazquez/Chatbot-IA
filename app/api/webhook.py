@@ -39,6 +39,15 @@ from app.services.siga_bridge_integration import (
 )
 from app.services.verification_panel_service import build_verification_snapshot
 from app.services.verification_tracker import STEP_MAP
+from app.services.ws_events import (
+    build_conversation_updated_event,
+    build_inconsistency_created_event,
+    build_inconsistency_updated_event,
+    build_new_message_event,
+    build_siga_snapshot_updated_event,
+    build_verification_updated_event,
+    minimal_verification_payload,
+)
 from app.utils.folio_parser import extraer_folio
 from app.utils.timezone import mexico_now_naive
 from app.websockets.manager import manager
@@ -84,44 +93,6 @@ def _event_log_meta(event: dict[str, Any]) -> dict[str, Any]:
         "has_text": bool(event.get("text")),
         "has_button": bool(event.get("button_id")),
         "is_media": bool(event.get("is_media")),
-    }
-
-
-def _minimal_verification_payload(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(snapshot, dict):
-        return None
-
-    siga = snapshot.get("siga") if isinstance(snapshot.get("siga"), dict) else {}
-    siga_bridge = snapshot.get("siga_bridge") if isinstance(snapshot.get("siga_bridge"), dict) else {}
-    return {
-        "session_id": snapshot.get("session_id"),
-        "folio": snapshot.get("folio"),
-        "no_cuenta": snapshot.get("no_cuenta"),
-        "phone": snapshot.get("phone"),
-        "status": snapshot.get("status"),
-        "progress_pct": snapshot.get("progress_pct"),
-        "current_step": snapshot.get("current_step"),
-        "last_activity": snapshot.get("last_activity"),
-        "inconsistencias_count": snapshot.get("inconsistencias_count"),
-        "inconsistencias": snapshot.get("inconsistencias"),
-        "severity_counts": snapshot.get("severity_counts"),
-        "highest_severity": snapshot.get("highest_severity"),
-        "confirmed_count": snapshot.get("confirmed_count"),
-        "total_steps": snapshot.get("total_steps"),
-        "siga_url": snapshot.get("siga_url"),
-        "siga": {
-            "available": bool(siga.get("available")),
-            "fetched_at": siga.get("fetched_at"),
-            "source_table": siga.get("source_table"),
-            "cache_valid": siga.get("cache_valid"),
-        } if siga else None,
-        "siga_bridge": {
-            "enabled": bool(siga_bridge.get("enabled")),
-            "available": bool(siga_bridge.get("available")),
-            "status": siga_bridge.get("status"),
-            "source": siga_bridge.get("source"),
-            "updated_at": siga_bridge.get("updated_at"),
-        } if siga_bridge else None,
     }
 
 
@@ -194,41 +165,33 @@ def has_newer_incoming_message(db: Session, session_id: int, event_time: datetim
     return bool(latest and latest.created_at and event_time < latest.created_at)
 
 
-def build_message_payload(message: Message) -> dict:
-    return {
-        "id": message.id,
-        "phone": message.phone,
-        "content": message.content,
-        "direction": message.direction,
-        "created_at": message.created_at.isoformat() if message.created_at else "",
-        "type": getattr(message, "type", None),
-        "media_url": getattr(message, "media_url", None),
-        "file_name": getattr(message, "file_name", None),
-    }
-
-
-def build_conversation_payload(chat, message: Message) -> dict:
-    return {
-        "id": chat.id,
-        "phone": chat.phone,
-        "name": None,
-        "last_message": message.content or "",
-        "last_message_at": message.created_at.isoformat() if message.created_at else "",
-        "last_customer_message_at": chat.last_customer_message_at.isoformat() if chat.last_customer_message_at else None,
-        "unread_count": chat.unread_count or 0,
-        "folio": str(chat.folio) if chat.folio else None,
-    }
-
-
 async def broadcast_new_message(chat, message: Message) -> None:
-    await emit_ws_message({
-        "type": "new_message",
-        "session_id": chat.id,
-        "phone": chat.phone,
-        "conversation": build_conversation_payload(chat, message),
-        "message": build_message_payload(message),
-        "unread_count": chat.unread_count,
-    })
+    await emit_ws_message(build_new_message_event(chat, message))
+
+
+def open_inconsistency_ids(db: Session, session_id: int | None) -> set[int]:
+    if not session_id:
+        return set()
+    rows = (
+        db.query(Inconsistencias.id)
+        .filter(
+            Inconsistencias.session_id == session_id,
+            func.upper(Inconsistencias.estatus) == "ABIERTA",
+        )
+        .all()
+    )
+    return {int(row.id) for row in rows if row.id is not None}
+
+
+def load_inconsistencies_by_ids(db: Session, ids: set[int]) -> list[Inconsistencias]:
+    if not ids:
+        return []
+    return (
+        db.query(Inconsistencias)
+        .filter(Inconsistencias.id.in_(ids))
+        .order_by(Inconsistencias.id.asc())
+        .all()
+    )
 
 
 def count_open_issues(db: Session) -> int:
@@ -336,6 +299,9 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     total_sessions_delta = 0
     active_sessions_delta = 0
     issues_open_delta = 0
+    open_inconsistency_ids_before: set[int] = set()
+    created_inconsistency_ids: set[int] = set()
+    closed_inconsistency_ids: set[int] = set()
     bridge_verification = None
     processing_started_at = time.perf_counter()
     lock = _phone_lock(phone)
@@ -367,6 +333,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         open_issues_before = count_open_issues(db)
 
         chat = get_or_create_session(db, phone)
+        open_inconsistency_ids_before = open_inconsistency_ids(db, chat.id)
 
         if get_message_by_message_id(db, message_id):
             db.rollback()
@@ -421,17 +388,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             lock_acquired = False
             await broadcast_new_message(chat, saved_msg)
             await broadcast_new_message(chat, bot_msg)
-            await emit_ws_message({
-                "type": "conversation_updated",
-                "session_id": chat.id,
-                "payload": {
-                    "session_id": chat.id,
-                    "folio": str(chat.folio) if chat.folio else None,
-                    "status": str(chat.state) if chat.state else None,
-                    "updated_at": chat.updated_at.isoformat() if getattr(chat, "updated_at", None) else "",
-                    "source": "webhook",
-                },
-            })
+            await emit_ws_message(build_conversation_updated_event(chat, source="webhook"))
             await emit_ws_message({
                 "type": "dashboard_update",
                 "payload": {
@@ -501,17 +458,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             _release_lock(lock)
             lock_acquired = False
             await broadcast_new_message(chat, saved_msg)
-            await emit_ws_message({
-                "type": "conversation_updated",
-                "session_id": chat.id,
-                "payload": {
-                    "session_id": chat.id,
-                    "folio": str(chat.folio) if chat.folio else None,
-                    "status": str(chat.state) if chat.state else None,
-                    "updated_at": chat.updated_at.isoformat() if getattr(chat, "updated_at", None) else "",
-                    "source": "webhook",
-                },
-            })
+            await emit_ws_message(build_conversation_updated_event(chat, source="webhook"))
             await emit_ws_message({
                 "type": "dashboard_update",
                 "payload": {
@@ -539,8 +486,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         if text.strip().lower() == "activar notificaciones":
             reply = "✅ *Notificaciones activadas*\nTu ventana de 24h está abierta para recibir alertas."
             
-            # Guardar el mensaje entrante y saliente
-            save_message(db, chat.id, phone, "in", text, message_id=message_id, created_at=event_time)
+            # El mensaje entrante ya fue persistido antes de este caso especial.
             bot_msg = save_message(db, chat.id, phone, "out", reply)
             
             # Actualizar la sesión para abrir la ventana de Meta
@@ -554,11 +500,28 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 last_customer_message_at=max(event_time, utcnow_naive()) # 🔑 Clave para Meta
             )
             db.commit()
-            
-            # Responder y salir
-            asyncio.create_task(send_whatsapp_message(phone, reply))
+            db.refresh(chat)
+            db.refresh(saved_msg)
+            db.refresh(bot_msg)
+
             _release_lock(lock)
             lock_acquired = False
+            await broadcast_new_message(chat, saved_msg)
+            await broadcast_new_message(chat, bot_msg)
+            await emit_ws_message(build_conversation_updated_event(chat, source="webhook"))
+            await emit_ws_message({
+                "type": "dashboard_update",
+                "payload": {
+                    "messages_in_delta": 1,
+                    "messages_out_delta": 1,
+                    "total_sessions_delta": total_sessions_delta,
+                    "active_sessions_delta": active_sessions_delta,
+                    "issues_open_delta": 0,
+                    "funnel_steps_delta": [],
+                    "session_id": chat.id,
+                },
+            })
+            asyncio.create_task(send_whatsapp_message(phone, reply))
             return {"status": "advisor_activated"}
 
         candidate_folio = extraer_folio(text)
@@ -652,6 +615,9 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         upsert_inactivity_reminders(db, chat)
         db.commit()
         issues_open_delta = count_open_issues(db) - open_issues_before
+        open_inconsistency_ids_after = open_inconsistency_ids(db, chat.id)
+        created_inconsistency_ids = open_inconsistency_ids_after - open_inconsistency_ids_before
+        closed_inconsistency_ids = open_inconsistency_ids_before - open_inconsistency_ids_after
 
         # 🔔 Notificar a asesores si el nuevo estado requiere atención
         from app.services.notification_service import notify_if_attention_needed
@@ -713,6 +679,12 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     if bot_msg:
         await broadcast_new_message(chat, bot_msg)
 
+    for inc in load_inconsistencies_by_ids(db, created_inconsistency_ids):
+        await emit_ws_message(build_inconsistency_created_event(inc))
+
+    for inc in load_inconsistencies_by_ids(db, closed_inconsistency_ids):
+        await emit_ws_message(build_inconsistency_updated_event(inc, source="webhook"))
+
     await emit_ws_message({
         "type": "dashboard_update",
         "payload": {
@@ -726,48 +698,29 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         },
     })
 
-    await emit_ws_message({
-        "type": "conversation_updated",
-        "session_id": chat.id,
-        "payload": {
-            "session_id": chat.id,
-            "folio": str(chat.folio) if chat.folio else None,
-            "status": next_state.value if isinstance(next_state, ChatState) else str(next_state),
-            "updated_at": chat.updated_at.isoformat() if getattr(chat, "updated_at", None) else "",
-            "source": "webhook",
-        },
-    })
+    await emit_ws_message(
+        build_conversation_updated_event(
+            chat,
+            patch={
+                "status": next_state.value if isinstance(next_state, ChatState) else str(next_state),
+            },
+            source="webhook",
+        )
+    )
 
     if snapshot:
-        minimal_snapshot = _minimal_verification_payload(snapshot)
+        minimal_snapshot = minimal_verification_payload(snapshot)
         await emit_ws_message({
             "type": "verification_update",
             "payload": minimal_snapshot,
         })
-        await emit_ws_message({
-            "type": "verification_updated",
-            "session_id": chat.id,
-            "folio": snapshot.get("folio"),
-            "no_cuenta": snapshot.get("no_cuenta"),
-            "status": snapshot.get("status"),
-            "updated_at": snapshot.get("last_activity") or "",
-            "source": "webhook",
-            "payload": minimal_snapshot,
-        })
+        verification_event = build_verification_updated_event(snapshot, source="webhook")
+        if verification_event:
+            await emit_ws_message(verification_event)
         if snapshot.get("siga"):
-            await emit_ws_message(
-                {
-                    "type": "siga_snapshot_updated",
-                    "session_id": chat.id,
-                    "folio": snapshot.get("folio"),
-                    "no_cuenta": snapshot.get("no_cuenta"),
-                    "status": snapshot.get("status"),
-                    "updated_at": snapshot.get("siga", {}).get("fetched_at") if isinstance(snapshot.get("siga"), dict) else "",
-                    "source": "webhook",
-                    "payload": snapshot,
-                },
-                roles=_SIGA_DETAIL_ROLES,
-            )
+            siga_event = build_siga_snapshot_updated_event(snapshot, source="webhook")
+            if siga_event:
+                await emit_ws_message(siga_event, roles=_SIGA_DETAIL_ROLES)
 
     if reply:
         asyncio.create_task(

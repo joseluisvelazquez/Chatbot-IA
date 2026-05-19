@@ -8,6 +8,7 @@ import { dispatch, subscribeStore, getState } from "./store.js"
 
 let funnelChartInstance = null;
 let unsubscribeDashboardStore = null
+let dashboardRealtimeBound = false
 
 const DASHBOARD_STATE_LABELS = {
     folio: "Folio",
@@ -201,6 +202,7 @@ function renderSigaBridgeMetrics(metrics) {
 }
 
 export function initDashboardPage() {
+    setupDashboardRealtimeRecovery()
     loadSummary()
     loadFunnel()
     loadStateTimes()
@@ -213,6 +215,20 @@ export function initDashboardPage() {
     })
 
     renderDashboardFromState(getState())
+}
+
+function setupDashboardRealtimeRecovery() {
+    if (dashboardRealtimeBound) return
+
+    window.addEventListener("panel:ws-reconnected", () => {
+        if (!document.getElementById("kpi-sessions")) return
+        loadSummary()
+        loadFunnel()
+        loadStateTimes()
+        loadSigaBridgeMetrics()
+    })
+
+    dashboardRealtimeBound = true
 }
 
 function renderDashboardFromState(appState) {

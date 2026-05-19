@@ -35,6 +35,8 @@ let chatLoadRequestId = 0
 let lastMessagesVersion = -1
 let lastMessagesSessionKey = null
 let lastPreviewVersion = -1
+let realtimeRecoveryBound = false
+let realtimeRecoveryRunning = false
 
 const renderedMessageIdsBySession = new Map()
 
@@ -63,6 +65,49 @@ let selectedPreviewIndex = 0
 let imageList = []
 let imageSet = new Set()
 let currentImageIndex = 0
+
+function extractMessagesList(response) {
+    if (Array.isArray(response)) return response
+    if (Array.isArray(response?.messages)) return response.messages
+    if (Array.isArray(response?.data)) return response.data
+    if (Array.isArray(response?.items)) return response.items
+    return []
+}
+
+function setupRealtimeRecovery() {
+    if (realtimeRecoveryBound) return
+
+    window.addEventListener("panel:ws-reconnected", async () => {
+        if (!document.getElementById("conversationList")) return
+        if (realtimeRecoveryRunning) return
+
+        realtimeRecoveryRunning = true
+        try {
+            const sessions = await getConversations()
+            dispatch({
+                type: "conversations/loaded",
+                payload: sessions
+            })
+
+            if (currentSessionId) {
+                const messages = await getMessages(currentSessionId, PAGE_SIZE, 0)
+                dispatch({
+                    type: "messages/loaded",
+                    payload: {
+                        sessionId: currentSessionId,
+                        items: extractMessagesList(messages)
+                    }
+                })
+            }
+        } catch (error) {
+            console.warn("No se pudo resincronizar conversaciones:", error)
+        } finally {
+            realtimeRecoveryRunning = false
+        }
+    })
+
+    realtimeRecoveryBound = true
+}
 
 function trackImageUrl(url) {
     if (!url || imageSet.has(url)) return
@@ -268,6 +313,7 @@ export async function initConversationsPage() {
     window.autoResize = autoResize
     
     startWindowValidationTimer()
+    setupRealtimeRecovery()
 
     // reset visual de la vista al volver a entrar al módulo
     lastLoadedSessionId = null
@@ -1365,12 +1411,7 @@ export async function loadChat(sessionId, phone, name = null) {
         const messages = await getMessages(numericSessionId, PAGE_SIZE, 0)
         if (requestId !== chatLoadRequestId) return
 
-        let messagesList = []
-
-        if (Array.isArray(messages)) messagesList = messages
-        else if (Array.isArray(messages.messages)) messagesList = messages.messages
-        else if (Array.isArray(messages.data)) messagesList = messages.data
-        else if (Array.isArray(messages.items)) messagesList = messages.items
+        const messagesList = extractMessagesList(messages)
 
         if (!isSameChat) {
             dispatch({

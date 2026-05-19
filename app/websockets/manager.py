@@ -1,5 +1,4 @@
 import logging
-from typing import List
 
 from fastapi import WebSocket
 
@@ -18,11 +17,25 @@ def _message_session_id(message: dict) -> int | None:
         return None
 
 
+def _message_company_id(message: dict) -> int | None:
+    raw_company_id = message.get("company_id")
+    if raw_company_id is None and isinstance(message.get("payload"), dict):
+        raw_company_id = message["payload"].get("company_id")
+    if raw_company_id is None:
+        return None
+    try:
+        return int(raw_company_id)
+    except (TypeError, ValueError):
+        return None
+
+
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: list[WebSocket] = []
 
     def connect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            return
         self.active_connections.append(websocket)
         logger.info("websocket_connected", extra={"connections": len(self.active_connections)})
 
@@ -36,10 +49,16 @@ class ConnectionManager:
         websocket: WebSocket,
         roles: set[str] | None,
         session_id: int | None,
+        company_id: int | None,
     ) -> bool:
         user = getattr(websocket.state, "user", None)
         if roles and str(getattr(user, "role", "") or "") not in roles:
             return False
+
+        if company_id is not None:
+            user_company_id = getattr(websocket.state, "company_id", None)
+            if user_company_id != company_id:
+                return False
 
         allowed_session_ids = getattr(websocket.state, "allowed_session_ids", None)
         if allowed_session_ids is None or session_id is None:
@@ -55,11 +74,12 @@ class ConnectionManager:
     ):
         allowed_roles = set(roles) if roles else None
         session_id = _message_session_id(message)
+        company_id = _message_company_id(message)
         dead_connections = []
         sent_count = 0
 
-        for ws in self.active_connections:
-            if not self._can_send(ws, allowed_roles, session_id):
+        for ws in list(self.active_connections):
+            if not self._can_send(ws, allowed_roles, session_id, company_id):
                 continue
             try:
                 await ws.send_json(message)
@@ -84,6 +104,7 @@ class ConnectionManager:
                 "sent_count": sent_count,
                 "roles": sorted(allowed_roles) if allowed_roles else None,
                 "session_scoped": session_id is not None,
+                "company_scoped": company_id is not None,
             },
         )
 

@@ -59,6 +59,14 @@ from app.services.siga_bridge_cache import (
     is_cache_valid,
 )
 from app.services.siga_navigation import build_siga_account_url
+from app.services.ws_events import (
+    build_conversation_updated_event,
+    build_inconsistency_updated_event,
+    build_new_message_event,
+    build_siga_snapshot_updated_event,
+    build_verification_updated_event,
+    minimal_verification_payload,
+)
 from app.db.models import BitacoraVentas
 from app.config.settings import settings
 
@@ -159,11 +167,13 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         user = decode_panel_session(session_token, db)  
     except Exception:
+        db.close()
         await websocket.close(code=1008)
         return
 
     await websocket.accept()
     websocket.state.user = user
+    websocket.state.company_id = int(user.empresa_id)
     if user.role in ("admin", "sistemas", "jefe_operativo"):
         websocket.state.allowed_session_ids = None
     else:
@@ -183,9 +193,16 @@ async def websocket_endpoint(websocket: WebSocket):
             payload = json.loads(data)
 
             if payload.get("type") == "typing":
+                try:
+                    session_id = int(payload.get("session_id"))
+                except (TypeError, ValueError):
+                    continue
+                allowed_session_ids = getattr(websocket.state, "allowed_session_ids", None)
+                if allowed_session_ids is not None and session_id not in allowed_session_ids:
+                    continue
                 await manager.send_to_all({
                     "type": "typing",
-                    "session_id": payload.get("session_id")
+                    "session_id": session_id
                 })
 
     except WebSocketDisconnect:
@@ -228,6 +245,13 @@ async def mark_as_read(
         "session_id": session.id,
         "unread_count": 0
     })
+    await manager.send_to_all(
+        build_conversation_updated_event(
+            session,
+            patch={"unread_count": 0},
+            source="panel_read",
+        )
+    )
 
     return {"status": "ok"}
 
@@ -1097,33 +1121,15 @@ async def get_verification_by_session(
         )
         if fetched:
             public_item = redact_siga_details_for_role(dict(item), None)
-            await manager.send_to_all({
-                "type": "verification_updated",
-                "session_id": session.id,
-                "folio": folio,
-                "no_cuenta": item.get("no_cuenta"),
-                "status": item.get("status"),
-                "updated_at": item.get("last_activity"),
-                "source": "siga_refresh",
-                "payload": public_item,
-            })
-            await manager.send_to_all(
-                {
-                    "type": "siga_snapshot_updated",
-                    "session_id": session.id,
-                    "folio": folio,
-                    "no_cuenta": item.get("no_cuenta"),
-                    "status": item.get("status"),
-                    "updated_at": (
-                        item.get("siga", {}).get("fetched_at")
-                        if isinstance(item.get("siga"), dict)
-                        else None
-                    ),
-                    "source": "siga_refresh",
-                    "payload": item,
-                },
-                roles={"admin", "jefe_operativo", "sistemas"},
-            )
+            verification_event = build_verification_updated_event(public_item, source="siga_refresh")
+            if verification_event:
+                await manager.send_to_all(verification_event)
+            siga_event = build_siga_snapshot_updated_event(public_item, source="siga_refresh")
+            if siga_event:
+                await manager.send_to_all(
+                    siga_event,
+                    roles={"admin", "jefe_operativo", "sistemas"},
+                )
         return item
 
     apply_siga_snapshot_to_panel_item(
@@ -1191,18 +1197,11 @@ async def update_inconsistencia_panel_resolution(
                 public_snapshot = redact_siga_details_for_role(dict(verification_snapshot), None)
                 await manager.send_to_all({
                     "type": "verification_update",
-                    "payload": public_snapshot,
+                    "payload": minimal_verification_payload(public_snapshot),
                 })
-                await manager.send_to_all({
-                    "type": "verification_updated",
-                    "session_id": session.id,
-                    "folio": public_snapshot.get("folio"),
-                    "no_cuenta": public_snapshot.get("no_cuenta"),
-                    "status": public_snapshot.get("status"),
-                    "updated_at": public_snapshot.get("last_activity"),
-                    "source": "panel",
-                    "payload": public_snapshot,
-                })
+                verification_event = build_verification_updated_event(public_snapshot, source="panel")
+                if verification_event:
+                    await manager.send_to_all(verification_event)
 
             inconsistency_payload = {
                 "id": inc.id,
@@ -1210,23 +1209,27 @@ async def update_inconsistencia_panel_resolution(
                 "session_id": inc.session_id,
                 "resolved_by_panel": panel_resolved,
                 "resolved_by_siga": bool(inc.resolved_by_siga),
+                "status": inc.estatus,
             }
             await manager.send_to_all({
                 "type": "inconsistencia_updated",
                 "payload": inconsistency_payload,
             })
-            await manager.send_to_all({
-                "type": "inconsistency_updated",
-                "session_id": inc.session_id,
-                "source": "panel",
-                "payload": inconsistency_payload,
-            })
+            await manager.send_to_all(
+                build_inconsistency_updated_event(
+                    inc,
+                    source="panel",
+                    payload=inconsistency_payload,
+                )
+            )
 
     if issues_open_delta:
         await manager.send_to_all({
             "type": "dashboard_update",
+            "session_id": inc.session_id,
             "payload": {
                 "issues_open_delta": issues_open_delta,
+                "session_id": inc.session_id,
             },
         })
 
@@ -1460,35 +1463,13 @@ async def send_agent_message(
 
         session.last_message_at = now
         session.last_message = content
+        session.unread_count = 0
 
         db.flush()
 
-        message_payload = {
-            "id": message.id,
-            "phone": phone,
-            "content": message.content,
-            "direction": message.direction,
-            "created_at": message.created_at.isoformat() if message.created_at else now.isoformat()
-        }
-
         db.commit()
 
-        await manager.send_to_all({
-            "type": "new_message",
-            "session_id": session.id,
-            "phone": session.phone,
-            "conversation": {
-                "id": session.id,
-                "phone": session.phone,
-                "name": None,
-                "last_message": message.content,
-                "last_message_at": message_payload["created_at"],
-                "last_customer_message_at": session.last_customer_message_at.isoformat() if session.last_customer_message_at else None,
-                "unread_count": 0,
-                "folio": str(session.folio) if session.folio else None,
-            },
-            "message": message_payload
-        })
+        await manager.send_to_all(build_new_message_event(session, message))
 
         await manager.send_to_all({
             "type": "dashboard_update",
@@ -1496,6 +1477,7 @@ async def send_agent_message(
                 "messages_in_delta": 0,
                 "messages_out_delta": 1,
                 "active_sessions_delta": 0 if was_active else 1,
+                "session_id": session.id,
             },
         })
 
@@ -1602,32 +1584,7 @@ async def send_agent_file(
     # =========================
     # 📡 2. WEBSOCKET (INMEDIATO)
     # =========================
-    await manager.send_to_all({
-        "type": "new_message",
-        "session_id": session.id,
-        "phone": session.phone,
-        "conversation": {
-            "id": session.id,
-            "phone": session.phone,
-            "name": None,
-            "last_message": last_message,
-            "last_message_at": message.created_at.isoformat(),
-            "last_customer_message_at": session.last_customer_message_at.isoformat() if session.last_customer_message_at else None,
-            "unread_count": 0,
-            "folio": str(session.folio) if session.folio else None,
-        },
-        "message": {
-            "id": message.id,
-            "phone": session.phone,
-            "content": message.content,
-            "direction": "agent",
-            "type": media_type,
-            "media_url": media_url,
-            "file_name": file_name,
-            "created_at": message.created_at.isoformat()
-        },
-        "unread_count": 0,
-    })
+    await manager.send_to_all(build_new_message_event(session, message))
 
     await manager.send_to_all({
         "type": "dashboard_update",
@@ -1635,6 +1592,7 @@ async def send_agent_file(
             "messages_in_delta": 0,
             "messages_out_delta": 1,
             "active_sessions_delta": 0 if was_active else 1,
+            "session_id": session.id,
         },
     })
 
@@ -1642,8 +1600,11 @@ async def send_agent_file(
     if snapshot:
         await manager.send_to_all({
             "type": "verification_update",
-            "payload": snapshot,
+            "payload": minimal_verification_payload(snapshot),
         })
+        verification_event = build_verification_updated_event(snapshot, source="panel")
+        if verification_event:
+            await manager.send_to_all(verification_event)
     else:
         await manager.send_to_all({
             "type": "verification_update",
@@ -1872,35 +1833,7 @@ async def resume_bot_control(
     # Broadcast Panel
     from app.websockets.manager import manager
     
-    await manager.send_to_all({
-        "type": "new_message",
-        "session_id": session.id,
-        "phone": session.phone,
-        "conversation": {
-            "id": session.id,
-            "phone": session.phone,
-            "name": None,
-            "last_message": session.last_message,
-            "last_message_at": bot_msg.created_at.isoformat() if bot_msg.created_at else session.last_message_at.isoformat(),
-            "unread_count": session.unread_count,
-            "folio": str(session.folio) if session.folio else None,
-            "status": classify_panel_status(
-                    verification_data={"is_completed": False},
-                    has_open_inconsistencia=False,
-                    last_activity=session.last_message_at,
-                    session_state=str(session.state or ""),
-                    previous_state=str(session.previous_state or ""),
-                ),
-        },
-        "message": {
-            "id": bot_msg.id,
-            "phone": bot_msg.phone,
-            "content": bot_msg.content,
-            "direction": bot_msg.direction,
-            "created_at": bot_msg.created_at.isoformat() if bot_msg.created_at else session.last_message_at.isoformat(),
-        },
-        "unread_count": session.unread_count
-    })
+    await manager.send_to_all(build_new_message_event(session, bot_msg))
     
     await manager.send_to_all({
         "type": "dashboard_update",
@@ -1908,6 +1841,7 @@ async def resume_bot_control(
             "messages_in_delta": 0,
             "messages_out_delta": 1,
             "active_sessions_delta": 0,
+            "session_id": session.id,
         },
     })
     
@@ -1916,8 +1850,11 @@ async def resume_bot_control(
     if snapshot:
         await manager.send_to_all({
             "type": "verification_update",
-            "payload": snapshot,
+            "payload": minimal_verification_payload(snapshot),
         })
+        verification_event = build_verification_updated_event(snapshot, source="panel")
+        if verification_event:
+            await manager.send_to_all(verification_event)
         
     return {"status": "success", "message": "El chatbot ha retomado el control", "next_state": next_state.value}
 
@@ -2010,21 +1947,14 @@ async def verify_by_call(
     if snapshot:
         await manager.send_to_all({
             "type": "verification_update",
-            "payload": snapshot,
+            "payload": minimal_verification_payload(snapshot),
         })
         
         from app.router.panel_router import redact_siga_details_for_role
         public_snapshot = redact_siga_details_for_role(dict(snapshot), None)
-        await manager.send_to_all({
-            "type": "verification_updated",
-            "session_id": session.id,
-            "folio": public_snapshot.get("folio"),
-            "no_cuenta": public_snapshot.get("no_cuenta"),
-            "status": public_snapshot.get("status"),
-            "updated_at": public_snapshot.get("last_activity"),
-            "source": "panel",
-            "payload": public_snapshot,
-        })
+        verification_event = build_verification_updated_event(public_snapshot, source="panel")
+        if verification_event:
+            await manager.send_to_all(verification_event)
 
     return {"status": "success", "message": "Verificado exitosamente por llamada"}
 
