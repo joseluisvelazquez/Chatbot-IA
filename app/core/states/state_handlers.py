@@ -15,6 +15,7 @@ from app.services.siga_bridge_sale import (
     bridge_sale_from_session,
     bridge_verification_found,
 )
+from app.services.siga_bridge_cache import upsert_cached_verification
 from app.services.session_context import reset_verification_context_for_folio
 from app.utils.product_mapping import requires_components_check
 
@@ -41,6 +42,20 @@ INCONSISTENCIAS_MAP = {
     ChatState.CONFIRMAR_PRODUCTO: "producto",
     ChatState.CONFIRMAR_PAGO_INICIAL: "pago_inicial",
 }
+
+
+def _cache_bridge_payload_for_folio(session, folio, bridge_payload) -> None:
+    if not folio or not bridge_verification_found(bridge_payload):
+        return
+    try:
+        upsert_cached_verification(
+            session,
+            str(folio),
+            bridge_payload,
+            raw=bridge_payload,
+        )
+    except Exception:
+        pass
 
 
 # -----------------------------
@@ -92,6 +107,11 @@ def handle_cambiar_folio(context):
         }
 
     reset_verification_context_for_folio(context.session, nuevo_folio)
+    _cache_bridge_payload_for_folio(
+        context.session,
+        nuevo_folio,
+        getattr(context, "bridge_verification", None),
+    )
 
     target_state = ChatState.INICIO2
     if context.state == ChatState.CAMBIAR_FOLIO_DEVOLUCION:

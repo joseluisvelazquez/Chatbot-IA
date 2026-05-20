@@ -68,6 +68,7 @@ def test_try_mark_step_ignores_inicio_without_touching_store(monkeypatch):
 
 def test_new_explicit_folio_replaces_previous_context():
     session = DummySession()
+    session.previous_state = None
 
     result = flow_engine.process_message(
         session=session,
@@ -80,7 +81,42 @@ def test_new_explicit_folio_replaces_previous_context():
     assert session.folio == "2222"
     assert session.previous_state is None
     assert session.invalid_folio_attempts == 0
-    assert "siga_bridge" not in session.extra_json
+    assert session.extra_json["siga_bridge"]["verification_cache"]["folio"] == "2222"
+
+
+def test_initial_prefilled_activation_message_starts_bridge_verification():
+    session = DummySession()
+    session.state = ChatState.ESPERA.value
+    session.previous_state = None
+    session.folio = None
+    session.extra_json = {}
+
+    result = flow_engine.process_message(
+        session=session,
+        text="Hola MEXIcomp, adquirí un equipo y quiero activar mis beneficios, mi folio es: 17726",
+        db=EmptyDb(),
+        bridge_verification=bridge_payload("17726"),
+    )
+
+    assert result.next_state == ChatState.INICIO2
+    assert session.folio == "17726"
+    assert "Cliente Demo" in result.reply
+
+
+def test_active_menu_blocks_new_folio_without_replacing_bridge_cache():
+    session = DummySession()
+
+    result = flow_engine.process_message(
+        session=session,
+        text="mi folio es 2222",
+        db=EmptyDb(),
+        bridge_verification=bridge_payload("2222"),
+    )
+
+    assert result.next_state == ChatState.MENU_AYUDA
+    assert session.folio == "1111"
+    assert session.extra_json["siga_bridge"]["verification_cache"]["folio"] == "1111"
+    assert "verificación activa" in result.reply
 
 
 def test_siga_account_url_uses_legacy_entry_page(monkeypatch):
