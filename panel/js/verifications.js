@@ -16,6 +16,40 @@ let verificationRealtimeBound = false;
 const verificationRowCache = new Map();
 const pendingInconsistenciaUpdates = new Set();
 const pendingVerificationDetailRequests = new Map();
+const pendingVerificationRowRequests = new Map();
+
+async function refreshVerificationListItem(sessionId) {
+    const sessionKey = String(sessionId || "");
+    if (!sessionKey) return null;
+
+    const activeRequest = pendingVerificationRowRequests.get(sessionKey);
+    if (activeRequest) {
+        return activeRequest;
+    }
+
+    const request = (async () => {
+        try {
+            const latest = await getVerificationBySession(sessionId);
+            if (!latest?.session_id || String(latest.session_id) !== sessionKey) {
+                return null;
+            }
+
+            dispatch({
+                type: "verifications/upsert",
+                payload: latest,
+            });
+            return latest;
+        } catch (error) {
+            console.warn("No se pudo refrescar verificacion activa:", error);
+            return null;
+        } finally {
+            pendingVerificationRowRequests.delete(sessionKey);
+        }
+    })();
+
+    pendingVerificationRowRequests.set(sessionKey, request);
+    return request;
+}
 
 function setupVerificationRealtimeRecovery() {
     if (verificationRealtimeBound) return;
@@ -27,6 +61,14 @@ function setupVerificationRealtimeRecovery() {
 
     window.addEventListener("panel:ws-message", (event) => {
         const data = event.detail || {};
+        if (data.type === "verification_context_changed") {
+            const sessionId = data.session_id || data.payload?.session_id;
+            if (sessionId) {
+                void refreshVerificationListItem(sessionId);
+            }
+            return;
+        }
+
         if (!["siga_snapshot_updated", "inconsistency_created", "inconsistency_updated"].includes(data.type)) {
             return;
         }
@@ -337,6 +379,13 @@ function buildRowSignature(item) {
         item.siga?.available ?? "",
         item.siga?.fetched_at || "",
     ]);
+}
+
+function verificationRenderKey(item = {}) {
+    if (item.verification_id != null && item.verification_id !== "") {
+        return `verification:${item.verification_id}`;
+    }
+    return `${item.session_id || ""}:${item.folio || ""}`;
 }
 
 function buildDrawerSignature(item) {
@@ -1363,9 +1412,9 @@ function renderVerificationRows(items, validKeys) {
     safeItems.forEach((item) => {
         if (!item?.session_id) return;
 
-        const sessionKey = String(item.session_id);
+        const rowKey = verificationRenderKey(item);
         const signature = buildRowSignature(item);
-        const cached = verificationRowCache.get(sessionKey) || {
+        const cached = verificationRowCache.get(rowKey) || {
             node: document.createElement("tr"),
             signature: "",
         };
@@ -1376,7 +1425,7 @@ function renderVerificationRows(items, validKeys) {
         }
 
         cached.node.onclick = () => openVerificationDetail(item);
-        verificationRowCache.set(sessionKey, cached);
+        verificationRowCache.set(rowKey, cached);
         fragment.appendChild(cached.node);
     });
 
@@ -1418,17 +1467,7 @@ function renderVerificationsFromState(state) {
             return;
         }
 
-        const validKeys = new Set(
-            verifications.order
-                .map(String)
-                .filter((sessionKey) => {
-                    if (!currentVerificationStatus) {
-                        return true;
-                    }
-
-                    return verifications.bySessionId?.[sessionKey]?.status === currentVerificationStatus;
-                })
-        );
+        const validKeys = new Set(items.map(verificationRenderKey).filter(Boolean));
 
         renderVerificationRows(items, validKeys);
         setVerificationState({ type: "success" });

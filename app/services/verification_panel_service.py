@@ -129,6 +129,7 @@ def build_verification_snapshot(
         session.id,
         verif.json if verif and isinstance(verif.json, dict) else {},
         current_state=session.state,
+        folio=folio,
     )
     verification_data = compute_verification(progress_json)
 
@@ -152,6 +153,7 @@ def build_verification_snapshot(
 
     item = {
         "session_id": session.id,
+        "verification_id": getattr(verif, "id_verificacion", None) if verif else None,
         "folio": folio,
         "phone": session.phone,
         "no_cuenta": no_cuenta,
@@ -186,11 +188,13 @@ def merge_progress_from_flow_events(
     session_id: int,
     progress: Optional[Dict[str, int]],
     current_state: Any = None,
+    folio: str | None = None,
 ) -> Dict[str, int]:
     normalized = normalize_progress_payload(progress or {})
+    expected_folio = str(folio) if folio else None
 
     rows = (
-        db.query(FlowEvent.to_state)
+        db.query(FlowEvent.to_state, FlowEvent.folio)
         .filter(
             FlowEvent.session_id == session_id,
             FlowEvent.to_state.isnot(None),
@@ -199,7 +203,10 @@ def merge_progress_from_flow_events(
         .all()
     )
 
-    for (to_state,) in rows:
+    for to_state, event_folio in rows:
+        if expected_folio and event_folio is not None and str(event_folio) != expected_folio:
+            continue
+
         step = _step_from_state(to_state)
         if step not in STEP_ORDER:
             continue

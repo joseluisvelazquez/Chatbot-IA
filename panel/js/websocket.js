@@ -29,11 +29,15 @@ function extractVerificationPayload(data = {}) {
         ...payload,
         ...patch,
         session_id: payload.session_id ?? data.session_id,
+        verification_id: payload.verification_id ?? data.verification_id,
         folio: payload.folio ?? data.folio,
         no_cuenta: payload.no_cuenta ?? data.no_cuenta,
         status: payload.status ?? data.status ?? patch.state,
+        progress_pct: payload.progress_pct ?? payload.progress ?? patch.progress_pct ?? patch.progress ?? data.progress_pct ?? data.progress,
+        current_step: payload.current_step ?? patch.current_step ?? data.current_step,
+        force_refetch: payload.force_refetch ?? data.force_refetch,
         updated_at: payload.updated_at ?? data.updated_at,
-        last_activity: payload.last_activity ?? data.updated_at,
+        last_activity: payload.last_activity ?? data.last_activity ?? data.updated_at,
     };
     return merged && typeof merged === "object" ? merged : null;
 }
@@ -53,6 +57,9 @@ function buildVerificationChanges(payload = {}) {
         severity_counts: payload.severity_counts,
         highest_severity: payload.highest_severity,
         no_cuenta: payload.no_cuenta,
+        verification_id: payload.verification_id,
+        updated_at: payload.updated_at,
+        force_refetch: payload.force_refetch,
         siga_url: payload.siga_url,
         siga: payload.siga,
         siga_bridge: payload.siga_bridge,
@@ -221,6 +228,22 @@ export function initWebSocket() {
             && extractVerificationPayload(data)
         ) {
             queueVerificationPatch(extractVerificationPayload(data));
+        }
+        if (data.type === "verification_context_changed" && extractVerificationPayload(data)) {
+            const payload = extractVerificationPayload(data);
+            dispatch({
+                type: "verifications/context_changed",
+                payload,
+            });
+            dispatch({
+                type: "conversations/upsert",
+                payload: {
+                    id: payload.session_id,
+                    session_id: payload.session_id,
+                    folio: payload.folio,
+                    last_message_at: payload.last_activity || payload.updated_at,
+                },
+            });
         }
         if (data.type === "conversation_updated" && (data.payload || data.patch)) {
             const payload = data.payload || {};

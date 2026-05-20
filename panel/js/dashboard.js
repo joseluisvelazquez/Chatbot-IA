@@ -9,6 +9,7 @@ import { dispatch, subscribeStore, getState } from "./store.js"
 let funnelChartInstance = null;
 let unsubscribeDashboardStore = null
 let dashboardRealtimeBound = false
+let funnelRefreshTimer = null
 
 const DASHBOARD_STATE_LABELS = {
     folio: "Folio",
@@ -77,6 +78,16 @@ async function loadFunnel() {
     } catch (e) {
         console.error("Error funnel:", e);
     }
+}
+
+function scheduleFunnelRefresh() {
+    if (!document.getElementById("funnelChart")) return
+    if (funnelRefreshTimer) return
+
+    funnelRefreshTimer = window.setTimeout(() => {
+        funnelRefreshTimer = null
+        loadFunnel()
+    }, 150)
 }
 
 function renderFunnelFromState(appState) {
@@ -226,6 +237,21 @@ function setupDashboardRealtimeRecovery() {
         loadFunnel()
         loadStateTimes()
         loadSigaBridgeMetrics()
+    })
+
+    window.addEventListener("panel:ws-message", (event) => {
+        const data = event.detail || {}
+        if (![
+            "dashboard_update",
+            "dashboard_updated",
+            "verification_context_changed",
+            "verification_update",
+            "verification_updated",
+        ].includes(data.type)) {
+            return
+        }
+
+        scheduleFunnelRefresh()
     })
 
     dashboardRealtimeBound = true

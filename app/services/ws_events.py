@@ -132,6 +132,7 @@ def minimal_verification_payload(snapshot: dict[str, Any] | None) -> dict[str, A
     siga_bridge = snapshot.get("siga_bridge") if isinstance(snapshot.get("siga_bridge"), dict) else {}
     return {
         "session_id": snapshot.get("session_id"),
+        "verification_id": snapshot.get("verification_id"),
         "folio": snapshot.get("folio"),
         "no_cuenta": snapshot.get("no_cuenta"),
         "phone": snapshot.get("phone"),
@@ -178,8 +179,12 @@ def build_verification_updated_event(
         return None
 
     patch = {
+        "verification_id": payload.get("verification_id"),
+        "folio": payload.get("folio"),
+        "no_cuenta": payload.get("no_cuenta"),
         "state": payload.get("state"),
         "current_step": payload.get("current_step"),
+        "progress_pct": payload.get("progress_pct"),
         "progress": payload.get("progress"),
         "has_inconsistency": payload.get("has_inconsistency"),
         "last_activity": payload.get("last_activity"),
@@ -195,6 +200,47 @@ def build_verification_updated_event(
         "source": source,
         "patch": patch,
         "payload": payload,
+    }
+
+
+def build_verification_context_changed_event(
+    chat: Any,
+    snapshot: dict[str, Any] | None = None,
+    *,
+    previous_folio: str | None = None,
+    source: str | None = None,
+    force_refetch: bool = True,
+) -> dict[str, Any] | None:
+    session_id = getattr(chat, "id", None)
+    if not session_id:
+        return None
+
+    current_folio = str(getattr(chat, "folio", "")) if getattr(chat, "folio", None) else None
+    payload = minimal_verification_payload(snapshot)
+    if payload and payload.get("folio") and current_folio and str(payload.get("folio")) != current_folio:
+        payload = None
+
+    progress = payload.get("progress_pct") if payload else None
+    body = strip_undefined({
+        "session_id": session_id,
+        "folio": current_folio,
+        "previous_folio": previous_folio,
+        "verification_id": payload.get("verification_id") if payload else None,
+        "no_cuenta": payload.get("no_cuenta") if payload else None,
+        "current_step": payload.get("current_step") if payload else None,
+        "progress_pct": progress,
+        "progress": progress,
+        "state": payload.get("state") if payload else getattr(chat, "state", None),
+        "last_activity": payload.get("last_activity") if payload else iso_datetime(getattr(chat, "last_message_at", None)),
+        "updated_at": payload.get("last_activity") if payload else iso_datetime(getattr(chat, "updated_at", None)),
+        "force_refetch": force_refetch,
+        "source": source,
+    })
+
+    return {
+        "type": "verification_context_changed",
+        **body,
+        "payload": body,
     }
 
 

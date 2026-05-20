@@ -397,10 +397,24 @@ def dashboard_funnel(
     require_company_scope(user)
     date_from = mexico_now_naive() - timedelta(days=days)
     scoped_session_ids = scoped_session_ids_subquery(db, user)
+    sessions = (
+        restrict_to_assigned(db.query(ChatSessions), user, db)
+        .filter(
+            ChatSessions.last_message_at >= date_from,
+            ChatSessions.folio.isnot(None),
+        )
+        .all()
+    )
+    active_folio_by_session = {
+        session.id: str(session.folio)
+        for session in sessions
+        if session.id and session.folio
+    }
 
     events = (
         db.query(
             FlowEvent.session_id,
+            FlowEvent.folio,
             FlowEvent.to_state,
             FlowEvent.created_at
         )
@@ -416,46 +430,48 @@ def dashboard_funnel(
     # NORMALIZAR A STEPS
     # --------------------------------------
     step_index = {step: index for index, step in enumerate(FUNNEL_STEPS)}
-    session_max_index: dict[int, int] = {}
+    session_folio_max_index: dict[tuple[int, str], int] = {}
 
     for e in events:
+        active_folio = active_folio_by_session.get(e.session_id)
+        if not active_folio:
+            continue
+
+        event_folio = str(e.folio) if e.folio is not None else active_folio
+        if event_folio != active_folio:
+            continue
+
         step = STEP_MAP.get(e.to_state)
 
         if step not in step_index:
             continue
 
+        key = (e.session_id, active_folio)
         current_index = step_index[step]
-        previous_index = session_max_index.get(e.session_id, -1)
+        previous_index = session_folio_max_index.get(key, -1)
         if current_index > previous_index:
-            session_max_index[e.session_id] = current_index
+            session_folio_max_index[key] = current_index
 
         # guardar primera vez que llegó al step
 
-    sessions = (
-        restrict_to_assigned(db.query(ChatSessions), user, db)
-        .filter(
-            ChatSessions.last_message_at >= date_from,
-            ChatSessions.folio.isnot(None),
-        )
-        .all()
-    )
-
     for session in sessions:
+        folio = str(session.folio)
         step = resolve_panel_current_step(session, None)
         if step not in step_index:
             continue
 
+        key = (session.id, folio)
         current_index = step_index[step]
-        previous_index = session_max_index.get(session.id, -1)
+        previous_index = session_folio_max_index.get(key, -1)
         if current_index > previous_index:
-            session_max_index[session.id] = current_index
+            session_folio_max_index[key] = current_index
 
     # --------------------------------------
     # CONTAR USUARIOS POR STEP
     # --------------------------------------
     step_counts = {step: 0 for step in FUNNEL_STEPS}
 
-    for max_index in session_max_index.values():
+    for max_index in session_folio_max_index.values():
         for step in FUNNEL_STEPS[:max_index + 1]:
             step_counts[step] += 1
 
@@ -848,6 +864,7 @@ def get_verifications(
             session.id,
             verification.json if verification else {},
             current_state=session.state,
+            folio=folio,
         )
 
         verification_data = compute_verification(progress)
@@ -874,6 +891,7 @@ def get_verifications(
 
         item = {
             "session_id": session.id,
+            "verification_id": getattr(verification, "id_verificacion", None) if verification else None,
             "folio": folio,
             "name": phone_to_name.get(normalize_phone(session.phone)),
             "no_cuenta": no_cuenta,
@@ -981,6 +999,7 @@ async def get_verification_by_session(
         session.id,
         progress,
         current_state=session.state,
+        folio=folio,
     )
 
     verification_data = compute_verification(progress)
@@ -1025,6 +1044,7 @@ async def get_verification_by_session(
     # =========================
     item = {
         "session_id": session.id,
+        "verification_id": getattr(verification, "id_verificacion", None) if verification else None,
         "folio": folio,
         "name": (
             cached_siga.get("customer", {}).get("name")
@@ -1086,10 +1106,12 @@ async def get_verification_by_session(
                     session.id,
                     refreshed_verification.json or {},
                     current_state=session.state,
+                    folio=folio,
                 )
                 refreshed_data = compute_verification(refreshed_progress)
                 item.update(
                     {
+                        "verification_id": getattr(refreshed_verification, "id_verificacion", None),
                         "progress_pct": refreshed_data["progress_pct"],
                         "current_step": resolve_panel_current_step(
                             session,

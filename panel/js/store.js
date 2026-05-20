@@ -89,6 +89,79 @@ function timestampValue(value) {
     return Number.isFinite(time) ? time : null
 }
 
+function normalizeFolio(value) {
+    if (value == null) return null
+    const text = String(value).trim()
+    return text || null
+}
+
+function verificationIdentity(item = {}) {
+    if (item.verification_id != null && item.verification_id !== "") {
+        return `verification:${item.verification_id}`
+    }
+
+    const sessionKey = toSessionKey(item.session_id)
+    const folio = normalizeFolio(item.folio)
+    if (sessionKey && folio) {
+        return `session:${sessionKey}:folio:${folio}`
+    }
+
+    return sessionKey ? `session:${sessionKey}` : null
+}
+
+function withVerificationIdentity(item = {}) {
+    return {
+        ...item,
+        verification_key: verificationIdentity(item),
+    }
+}
+
+function isIncomingVerificationOlder(current = {}, incoming = {}) {
+    const currentTime = timestampValue(current.last_activity || current.updated_at)
+    const incomingTime = timestampValue(incoming.last_activity || incoming.updated_at)
+    return currentTime != null && incomingTime != null && incomingTime < currentTime
+}
+
+function isVerificationContextChange(current = {}, incoming = {}) {
+    const currentIdentity = verificationIdentity(current)
+    const incomingIdentity =
+        incoming.verification_id != null && incoming.verification_id !== ""
+            ? verificationIdentity({ session_id: current.session_id, ...incoming })
+            : incoming.folio != null
+                ? verificationIdentity({ session_id: current.session_id, ...incoming, verification_id: null })
+                : verificationIdentity({ ...current, ...incoming })
+    return Boolean(currentIdentity && incomingIdentity && currentIdentity !== incomingIdentity)
+}
+
+function resetVerificationForContext(current = {}, incoming = {}) {
+    const next = {
+        session_id: toSessionId(incoming.session_id ?? current.session_id),
+        phone: incoming.phone ?? current.phone ?? null,
+        name: incoming.name ?? current.name ?? null,
+        folio: incoming.folio ?? null,
+        verification_id: incoming.verification_id ?? null,
+        no_cuenta: incoming.no_cuenta ?? null,
+        status: incoming.status ?? incoming.state ?? "in_progress",
+        progress_pct: incoming.progress_pct ?? incoming.progress ?? 0,
+        current_step: incoming.current_step ?? "inicio",
+        confirmed_count: incoming.confirmed_count ?? 0,
+        total_steps: incoming.total_steps ?? current.total_steps ?? 0,
+        last_activity: incoming.last_activity ?? incoming.updated_at ?? current.last_activity ?? "",
+        session_state: incoming.session_state ?? current.session_state,
+        previous_state: incoming.previous_state ?? null,
+        inconsistencias: Array.isArray(incoming.inconsistencias) ? incoming.inconsistencias : [],
+        inconsistencias_count: incoming.inconsistencias_count ?? 0,
+        has_inconsistency: Boolean(incoming.has_inconsistency),
+        severity_counts: incoming.severity_counts ?? { total: 0, leve: 0, moderada: 0, critica: 0 },
+        highest_severity: incoming.highest_severity ?? null,
+        siga_url: incoming.siga_url ?? null,
+        siga: incoming.siga ?? null,
+        siga_bridge: incoming.siga_bridge ?? null,
+    }
+
+    return withVerificationIdentity(next)
+}
+
 function isIncomingConversationOlder(current = {}, incoming = {}) {
     const currentTime = timestampValue(current.last_message_at)
     const incomingTime = timestampValue(incoming.last_message_at)
@@ -183,11 +256,13 @@ function upsertVerification(item) {
     if (!item?.session_id) return false
 
     const sessionKey = toSessionKey(item.session_id)
+    const current = state.verifications.bySessionId[sessionKey] || {}
+    const base = isVerificationContextChange(current, item) ? {} : current
 
-    state.verifications.bySessionId[sessionKey] = {
-        ...(state.verifications.bySessionId[sessionKey] || {}),
+    state.verifications.bySessionId[sessionKey] = withVerificationIdentity({
+        ...base,
         ...item,
-    }
+    })
 
     const exists = state.verifications.order.includes(sessionKey)
     if (!exists) {
@@ -540,7 +615,6 @@ export function dispatch(action) {
             state.dashboard.issues_open = addMetric(state.dashboard.issues_open, p.issues_open_delta)
             state.dashboard.total_sessions = addMetric(state.dashboard.total_sessions, p.total_sessions_delta)
             state.dashboard.active_sessions = addMetric(state.dashboard.active_sessions, p.active_sessions_delta)
-            applyFunnelDeltas(p)
             break
         }
 
@@ -781,23 +855,57 @@ export function dispatch(action) {
                     "progress_pct",
                     "current_step",
                     "no_cuenta",
+                    "verification_id",
                 ].some(key => changes[key] != null)
 
                 if (!canUpsert) break
 
-                upsertVerification({
+                upsertVerification(resetVerificationForContext({}, {
                     session_id: Number(session_id),
                     ...changes,
-                })
+                }))
                 state.verifications._version++
                 break
             }
 
-            state.verifications.bySessionId[session_id] = {
-                ...current,
+            const incoming = {
+                session_id: Number(session_id),
                 ...changes,
             }
+            if (isIncomingVerificationOlder(current, incoming)) {
+                break
+            }
 
+            const contextChanged = isVerificationContextChange(current, incoming)
+            state.verifications.bySessionId[session_id] = contextChanged
+                ? resetVerificationForContext(current, incoming)
+                : withVerificationIdentity({
+                ...current,
+                ...changes,
+            })
+
+            state.verifications._version++
+            break
+        }
+
+        case "verifications/context_changed": {
+            const session_id = toSessionKey(action.payload?.session_id)
+            if (!session_id) break
+
+            const current = state.verifications.bySessionId[session_id] || {}
+            const incoming = {
+                session_id: Number(session_id),
+                ...(action.payload || {}),
+            }
+            if (isIncomingVerificationOlder(current, incoming)) {
+                break
+            }
+
+            state.verifications.bySessionId[session_id] = resetVerificationForContext(current, incoming)
+            const exists = state.verifications.order.includes(session_id)
+            if (!exists) {
+                state.verifications.order.unshift(session_id)
+            }
             state.verifications._version++
             break
         }

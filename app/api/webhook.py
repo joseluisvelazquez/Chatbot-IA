@@ -45,6 +45,7 @@ from app.services.ws_events import (
     build_inconsistency_updated_event,
     build_new_message_event,
     build_siga_snapshot_updated_event,
+    build_verification_context_changed_event,
     build_verification_updated_event,
     minimal_verification_payload,
 )
@@ -203,9 +204,15 @@ def count_open_issues(db: Session) -> int:
     )
 
 
-def get_reached_funnel_steps(db: Session, session_id: int, date_from: datetime) -> set[str]:
+def get_reached_funnel_steps(
+    db: Session,
+    session_id: int,
+    date_from: datetime,
+    folio: str | None = None,
+) -> set[str]:
+    expected_folio = str(folio) if folio else None
     rows = (
-        db.query(FlowEvent.to_state)
+        db.query(FlowEvent.to_state, FlowEvent.folio)
         .filter(
             FlowEvent.session_id == session_id,
             FlowEvent.to_state.isnot(None),
@@ -216,7 +223,12 @@ def get_reached_funnel_steps(db: Session, session_id: int, date_from: datetime) 
 
     return {
         step
-        for (to_state,) in rows
+        for to_state, event_folio in rows
+        if (
+            not expected_folio
+            or event_folio is None
+            or str(event_folio) == expected_folio
+        )
         if (step := STEP_MAP.get(to_state))
     }
 
@@ -303,6 +315,9 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     created_inconsistency_ids: set[int] = set()
     closed_inconsistency_ids: set[int] = set()
     bridge_verification = None
+    candidate_folio = extraer_folio(text)
+    previous_folio = None
+    verification_context_changed = False
     processing_started_at = time.perf_counter()
     lock = _phone_lock(phone)
     lock_acquired = False
@@ -333,6 +348,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         open_issues_before = count_open_issues(db)
 
         chat = get_or_create_session(db, phone)
+        previous_folio = str(chat.folio) if chat.folio else None
         open_inconsistency_ids_before = open_inconsistency_ids(db, chat.id)
 
         if get_message_by_message_id(db, message_id):
@@ -423,6 +439,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             db,
             chat.id,
             utcnow_naive() - timedelta(days=7),
+            folio=str(candidate_folio or chat.folio or "") or None,
         )
         media_msg = handle_incoming_media(event, chat) if is_media else None
 
@@ -524,7 +541,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             asyncio.create_task(send_whatsapp_message(phone, reply))
             return {"status": "advisor_activated"}
 
-        candidate_folio = extraer_folio(text)
         if settings.SIGA_BRIDGE_ENABLED and candidate_folio:
             bridge_verification = await lookup_verification_for_folio(
                 candidate_folio,
@@ -641,6 +657,8 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             db.refresh(bot_msg)
 
         snapshot = build_verification_snapshot(db, chat)
+        current_folio = str(chat.folio) if chat.folio else None
+        verification_context_changed = previous_folio != current_folio
 
         if settings.SIGA_BRIDGE_ENABLED:
             asyncio.create_task(
@@ -695,8 +713,22 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             "issues_open_delta": issues_open_delta,
             "funnel_steps_delta": funnel_step_deltas,
             "session_id": chat.id,
+            "folio": chat.folio,
+            "reason": "verification_context_changed" if verification_context_changed else "verification_progress",
+            "force_refetch_funnel": True,
+            "at": utcnow_naive().isoformat(),
         },
     })
+
+    if verification_context_changed:
+        context_event = build_verification_context_changed_event(
+            chat,
+            snapshot,
+            previous_folio=previous_folio,
+            source="webhook",
+        )
+        if context_event:
+            await emit_ws_message(context_event)
 
     await emit_ws_message(
         build_conversation_updated_event(
