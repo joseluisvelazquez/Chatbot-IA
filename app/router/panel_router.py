@@ -237,14 +237,26 @@ async def mark_as_read(
     if not session:
         raise HTTPException(404, "Sesión no encontrada")
 
-    session.unread_count = 0
+    phone_key = normalize_conversation_phone(session.phone)
+    sessions_to_mark = [session]
+    if phone_key:
+        sessions_to_mark = [
+            row
+            for row in scoped_session_query(db, user).all()
+            if normalize_conversation_phone(row.phone) == phone_key
+        ] or [session]
+
+    for item in sessions_to_mark:
+        item.unread_count = 0
+
     db.commit()
 
-    await manager.send_to_all({
-        "type": "update_unread",
-        "session_id": session.id,
-        "unread_count": 0
-    })
+    for item in sessions_to_mark:
+        await manager.send_to_all({
+            "type": "update_unread",
+            "session_id": item.id,
+            "unread_count": 0
+        })
     await manager.send_to_all(
         build_conversation_updated_event(
             session,
@@ -284,6 +296,27 @@ def resolve_cuentas_from_folios(folios: list[str], db: Session, user) -> dict:
             result[folio] = str(no_cuenta)
 
     return result
+
+
+def normalize_conversation_phone(phone: str | None) -> str:
+    if not phone:
+        return ""
+
+    value = "".join(ch for ch in str(phone) if ch.isdigit())
+
+    if value.startswith("52") and len(value) > 10:
+        value = value[2:]
+
+    return value[-10:]
+
+
+def append_unique_text(items: list[str], value: str | None) -> None:
+    if value is None:
+        return
+
+    text_value = str(value).strip()
+    if text_value and text_value not in items:
+        items.append(text_value)
 
 # =========================================
 # Endpoints para los dashboard (PAGINADO + DTO + LÓGICA DE NEGOCIO)
@@ -761,19 +794,11 @@ def get_verifications(
     # =========================
     # 🧠 HELPERS
     # =========================
-    def normalize_phone(phone: str | None) -> str:
-        if not phone:
-            return ""
-        phone = str(phone).replace("+", "").strip()
-        if phone.startswith("52") and len(phone) > 10:
-            phone = phone[2:]
-        return phone[-10:]
-    
     # =========================
     # 📞 RESOLVER NOMBRES (BATCH)
     # =========================
     normalized_phones = list({
-        normalize_phone(s.phone)
+        normalize_conversation_phone(s.phone)
         for s in sessions
         if s.phone
     })
@@ -792,7 +817,7 @@ def get_verifications(
         if not v.tel_1:
             continue
 
-        db_phone = normalize_phone(v.tel_1)
+        db_phone = normalize_conversation_phone(v.tel_1)
         if db_phone and v.nombre_completo:
             phone_to_name[db_phone] = v.nombre_completo.strip()
 
@@ -893,7 +918,7 @@ def get_verifications(
             "session_id": session.id,
             "verification_id": getattr(verification, "id_verificacion", None) if verification else None,
             "folio": folio,
-            "name": phone_to_name.get(normalize_phone(session.phone)),
+            "name": phone_to_name.get(normalize_conversation_phone(session.phone)),
             "no_cuenta": no_cuenta,
             "phone": session.phone,
             "status": panel_status,
@@ -1291,20 +1316,9 @@ def get_conversations(
         .all()
     )
     
-    def normalize_phone(phone: str | None) -> str:
-        if not phone:
-            return ""
-
-        phone = str(phone).replace("+", "").strip()
-
-        if phone.startswith("52") and len(phone) > 10:
-            phone = phone[2:]
-
-        return phone[-10:]
-    
     # teléfonos normalizados de sesiones
     normalized_phones = list({
-        normalize_phone(s.phone)
+        normalize_conversation_phone(s.phone)
         for s in sessions
         if s.phone
     })
@@ -1328,27 +1342,53 @@ def get_conversations(
         if not v.tel_1:
             continue
 
-        db_phone = normalize_phone(v.tel_1)
+        db_phone = normalize_conversation_phone(v.tel_1)
         if db_phone and v.nombre_completo:
             phone_to_name[db_phone] = v.nombre_completo.strip()
 
-    response = []
+    grouped_sessions: dict[str, dict] = {}
     for s in sessions:
+        phone_key = normalize_conversation_phone(s.phone) or str(s.phone or s.id)
         folio = str(s.folio) if s.folio else None
         cached_siga = get_cached_verification(s, folio, allow_stale=True) if folio else None
         no_cuenta = folio_to_no_cuenta.get(folio) if folio else None
         if not no_cuenta and isinstance(cached_siga, dict) and cached_siga.get("no_cuenta"):
             no_cuenta = str(cached_siga["no_cuenta"])
 
+        group = grouped_sessions.get(phone_key)
+        if not group:
+            group = {
+                "latest": s,
+                "cuentas": [],
+                "unread_count": 0,
+                "last_customer_message_at": None,
+            }
+            grouped_sessions[phone_key] = group
+
+        group["unread_count"] += int(s.unread_count or 0)
+        append_unique_text(group["cuentas"], no_cuenta)
+
+        last_customer_at = group["last_customer_message_at"]
+        if s.last_customer_message_at and (
+            last_customer_at is None or s.last_customer_message_at > last_customer_at
+        ):
+            group["last_customer_message_at"] = s.last_customer_message_at
+
+    response = []
+    for phone_key, group in grouped_sessions.items():
+        s = group["latest"]
+        folio = str(s.folio) if s.folio else None
+        cuentas = list(reversed(group["cuentas"]))
+
         response.append(
             ConversationResponse(
                 id=s.id,
                 phone=s.phone,
-                name=phone_to_name.get(normalize_phone(s.phone)),
+                name=phone_to_name.get(phone_key),
                 last_message=s.last_message,
                 last_message_at=s.last_message_at,
-                unread_count=s.unread_count,
-                no_cuenta=no_cuenta,
+                unread_count=group["unread_count"],
+                no_cuenta=", ".join(cuentas) if cuentas else None,
                 folio=folio,
                 status=classify_panel_status(
                     verification_data={"is_completed": False},
@@ -1357,7 +1397,7 @@ def get_conversations(
                     session_state=str(s.state or ""),
                     previous_state=str(s.previous_state or ""),
                 ),
-                last_customer_message_at=s.last_customer_message_at,
+                last_customer_message_at=group["last_customer_message_at"],
             )
         )
 
@@ -1392,15 +1432,30 @@ def get_messages(
     # evita acceso cruzado
     require_company_scope(user)
 
+    phone_key = normalize_conversation_phone(session.phone)
+    session_ids = [session_id]
+
+    if phone_key:
+        scoped_sessions = restrict_to_assigned(
+            db.query(ChatSessions.id, ChatSessions.phone),
+            user,
+            db,
+        ).all()
+        session_ids = [
+            row.id
+            for row in scoped_sessions
+            if normalize_conversation_phone(row.phone) == phone_key
+        ] or [session_id]
+
     base_query = db.query(Message).filter(
-        Message.session_id == session_id
+        Message.session_id.in_(session_ids)
     )
 
     total = base_query.count()
 
     messages = (
         base_query
-        .order_by(desc(Message.id))
+        .order_by(desc(Message.created_at), desc(Message.id))
         .offset(offset)
         .limit(limit)
         .all()

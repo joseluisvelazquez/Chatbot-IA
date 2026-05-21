@@ -95,6 +95,58 @@ function normalizeFolio(value) {
     return text || null
 }
 
+function normalizePhoneKey(value) {
+    if (value == null) return null
+
+    let digits = String(value).replace(/\D/g, "")
+    if (digits.startsWith("52") && digits.length > 10) {
+        digits = digits.slice(2)
+    }
+
+    const key = digits.slice(-10)
+    return key || null
+}
+
+function splitAccountValues(value) {
+    if (value == null) return []
+    if (Array.isArray(value)) return value.flatMap(splitAccountValues)
+
+    return String(value)
+        .split(",")
+        .map(item => item.trim())
+        .filter(Boolean)
+}
+
+function mergeAccountValues(...values) {
+    const accounts = []
+
+    values.flatMap(splitAccountValues).forEach((account) => {
+        if (!accounts.includes(account)) accounts.push(account)
+    })
+
+    return accounts.join(", ") || null
+}
+
+function findConversationIdByPhone(phone, excludeId = null) {
+    const key = normalizePhoneKey(phone)
+    if (!key) return null
+
+    const excluded = toSessionId(excludeId)
+    const match = Object.values(state.conversations.byId).find((session) => (
+        session &&
+        toSessionId(session.id) !== excluded &&
+        normalizePhoneKey(session.phone) === key
+    ))
+
+    return match ? toSessionId(match.id) : null
+}
+
+function resolveCanonicalConversationId(sessionId, phone = null) {
+    const explicitId = toSessionId(sessionId)
+    const existingByPhone = findConversationIdByPhone(phone, explicitId)
+    return existingByPhone || explicitId
+}
+
 function verificationIdentity(item = {}) {
     if (item.verification_id != null && item.verification_id !== "") {
         return `verification:${item.verification_id}`
@@ -199,11 +251,32 @@ function upsertConversation(session) {
     const normalized = normalizeConversation(session)
     if (!normalized) return false
 
-    state.conversations.byId[normalized.id] = normalized
+    const existingId = findConversationIdByPhone(normalized.phone, normalized.id)
+    const targetId = existingId || normalized.id
+    const current = state.conversations.byId[targetId] || {}
+    const currentTime = timestampValue(current.last_message_at) || 0
+    const incomingTime = timestampValue(normalized.last_message_at) || 0
+    const merged = incomingTime >= currentTime
+        ? { ...current, ...normalized }
+        : { ...normalized, ...current }
 
-    const exists = state.conversations.order.includes(normalized.id)
+    state.conversations.byId[targetId] = {
+        ...merged,
+        id: targetId,
+        session_id: targetId,
+        no_cuenta: mergeAccountValues(current.no_cuenta, normalized.no_cuenta),
+        phone: current.phone || normalized.phone,
+        display_name: merged.name || current.name || normalized.name || current.phone || normalized.phone || "Cliente sin nombre",
+    }
+
+    if (existingId && state.conversations.byId[normalized.id]) {
+        delete state.conversations.byId[normalized.id]
+        state.conversations.order = state.conversations.order.filter(item => item !== normalized.id)
+    }
+
+    const exists = state.conversations.order.includes(targetId)
     if (!exists) {
-        state.conversations.order.unshift(normalized.id)
+        state.conversations.order.unshift(targetId)
     }
 
     return true
@@ -212,6 +285,7 @@ function upsertConversation(session) {
 function moveConversationToTop(sessionId) {
     const id = toSessionId(sessionId)
     if (!id) return
+    if (!state.conversations.byId[id]) return
 
     state.conversations.order = [
         id,
@@ -673,21 +747,25 @@ export function dispatch(action) {
 
         case "messages/add": {
             const { sessionId, message, conversation } = action.payload || {}
-            const added = upsertMessage(sessionId, message)
+            const targetSessionId = resolveCanonicalConversationId(
+                sessionId,
+                conversation?.phone || message?.phone,
+            )
+            const added = upsertMessage(targetSessionId || sessionId, message)
 
             if (conversation) {
                 upsertConversation(conversation)
                 state.conversations._version++
             }
 
-            if (added && sessionId && state.conversations.byId[Number(sessionId)]) {
-                state.conversations.byId[Number(sessionId)] = {
-                    ...state.conversations.byId[Number(sessionId)],
-                    last_message_at: message.created_at || state.conversations.byId[Number(sessionId)].last_message_at,
-                    last_message: message.content || state.conversations.byId[Number(sessionId)].last_message,
+            if (added && targetSessionId && state.conversations.byId[Number(targetSessionId)]) {
+                state.conversations.byId[Number(targetSessionId)] = {
+                    ...state.conversations.byId[Number(targetSessionId)],
+                    last_message_at: message.created_at || state.conversations.byId[Number(targetSessionId)].last_message_at,
+                    last_message: message.content || state.conversations.byId[Number(targetSessionId)].last_message,
                 }
 
-                moveConversationToTop(sessionId)
+                moveConversationToTop(targetSessionId)
                 state.conversations._version++
             }
 
