@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.db.models import ChatSessions
 from app.core.states.states import ChatState
+from app.utils.folio_parser import extraer_folio_si_mensaje_de_folio
 from app.utils.timezone import mexico_now_naive
 
 def attach_folio_to_session(db, session, folio):
@@ -90,21 +91,17 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None, tex
 
     # Si está finalizada, verificamos si quiere iniciar otra verificación
     if session and is_session_finished:
-        from app.utils.folio_parser import extraer_folio
-        
         # Validar si el usuario quiere verificar otro folio
         is_starting_new = False
         if intent in ["MENU_VERIFICACION", "SELECCIONAR_FOLIO"] or (intent and intent.startswith("SELECCIONAR_FOLIO_")):
             is_starting_new = True
         elif text:
-            # Solo considerar que quiere iniciar nueva verificación si la única
-            # cosa relevante en el mensaje es un folio (texto corto, sin oración compleja)
             stripped = text.strip()
-            folio_val = extraer_folio(stripped)
-            # El mensaje completo debe ser esencialmente el folio solo, o una frase muy corta
-            # Evitamos disparar con mensajes largos que contengan números (ej: montos, teléfonos)
-            only_folio = folio_val and len(stripped.split()) <= 3
-            if only_folio:
+            folio_val = extraer_folio_si_mensaje_de_folio(
+                stripped,
+                allow_folio_suelto=True,
+            )
+            if folio_val:
                 is_starting_new = True
             elif stripped.lower() in ["verificar", "verificacion", "otro folio", "nueva verificacion", "iniciar verificacion"]:
                 is_starting_new = True

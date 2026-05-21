@@ -18,7 +18,7 @@ from app.content import messages
 from app.content.message_builder import MessageBuilder
 from app.services import verification_service
 from app.siga.siga_repository import obtener_venta_por_folio, obtener_verificacion_por_no_cuenta
-from app.utils.folio_parser import extraer_folio
+from app.utils.folio_parser import extraer_folio_si_mensaje_de_folio
 
 from app.services.verification_service import VerificationService, log_flow_event
 from app.services.verification_tracker import track_verification
@@ -38,9 +38,63 @@ from app.services.siga_bridge_sale import (
     bridge_verification_found,
     get_cached_bridge_verification_payload,
 )
+from app.services.siga_bridge_cache import upsert_cached_verification
 from app.db.models import ChatSessions
 
 logger = logging.getLogger(__name__)
+
+
+ACTIVE_VERIFICATION_STATES = {
+    ChatState.INICIO,
+    ChatState.INICIO2,
+    ChatState.CONFIRMAR_NOMBRE,
+    ChatState.CONFIRMAR_DOMICILIO,
+    ChatState.CONFIRMAR_FECHA,
+    ChatState.CONFIRMAR_PRODUCTO,
+    ChatState.CONFIRMAR_ESTADO_PRODUCTO,
+    ChatState.CONFIRMAR_COMPONENTES,
+    ChatState.CONFIRMAR_PAGO_INICIAL,
+    ChatState.INFO_PAGOS,
+    ChatState.INFO_METODOS_PAGO,
+    ChatState.INFO_COMPROBANTE_ACCESO,
+    ChatState.INFO_PLAN_3_MESES,
+    ChatState.INFO_OTROS_PLANES,
+    ChatState.INFO_BENEFICIOS,
+    ChatState.INFO_BENEFICIOS2,
+    ChatState.COMPONENTES_FALTANTES,
+    ChatState.COMPONENTES_CONFIRMAR_FALTANTES,
+    ChatState.VERIFICAR_FOTO_COMPONENTE,
+    ChatState.INCONSISTENCIA,
+}
+
+SERVICE_STATES_WITH_VERIFICATION_CONTEXT = {
+    ChatState.MENU_AYUDA,
+    ChatState.MENU_DUDA,
+    ChatState.DUDA,
+    ChatState.FUERA_DE_FLUJO,
+}
+
+STATES_ALLOW_BARE_FOLIO = {
+    ChatState.ESPERA,
+    ChatState.CAMBIAR_FOLIO,
+    ChatState.CAMBIAR_FOLIO_DEVOLUCION,
+    ChatState.CAMBIAR_FOLIO_DESCUENTO,
+    ChatState.SELECCIONAR_FOLIO,
+    ChatState.MENU_AYUDA,
+    ChatState.FUERA_DE_FLUJO,
+    ChatState.FINALIZADO,
+}
+
+STATES_ALLOW_AUTO_FOLIO = {
+    ChatState.ESPERA,
+    ChatState.INICIO,
+    ChatState.CAMBIAR_FOLIO,
+    ChatState.CAMBIAR_FOLIO_DEVOLUCION,
+    ChatState.CAMBIAR_FOLIO_DESCUENTO,
+    ChatState.MENU_AYUDA,
+    ChatState.FUERA_DE_FLUJO,
+    ChatState.FINALIZADO,
+}
 
 
 def _mask(value, *, visible: int = 4) -> str | None:
@@ -50,6 +104,73 @@ def _mask(value, *, visible: int = 4) -> str | None:
     if len(text) <= visible:
         return "***"
     return f"***{text[-visible:]}"
+
+
+def _coerce_state(value) -> ChatState | None:
+    if isinstance(value, ChatState):
+        return value
+    if not value:
+        return None
+    try:
+        return ChatState(value)
+    except ValueError:
+        return None
+
+
+def _active_verification_context_state(
+    current_state: ChatState,
+    previous_state: str | ChatState | None,
+) -> ChatState | None:
+    if current_state in ACTIVE_VERIFICATION_STATES:
+        return current_state
+
+    previous = _coerce_state(previous_state)
+    if (
+        current_state in SERVICE_STATES_WITH_VERIFICATION_CONTEXT
+        and previous in ACTIVE_VERIFICATION_STATES
+    ):
+        return previous
+
+    return None
+
+
+def _folio_input_from_text(
+    text: str,
+    current_state: ChatState,
+    previous_state: str | ChatState | None = None,
+) -> str | None:
+    allow_bare = current_state in STATES_ALLOW_BARE_FOLIO
+    if (
+        not allow_bare
+        and current_state in SERVICE_STATES_WITH_VERIFICATION_CONTEXT
+        and _active_verification_context_state(current_state, previous_state)
+    ):
+        allow_bare = True
+
+    return extraer_folio_si_mensaje_de_folio(
+        text,
+        allow_folio_suelto=allow_bare,
+    )
+
+
+def _cache_bridge_payload_for_folio(session, folio: str | None, bridge_verification=None) -> None:
+    if not folio or not bridge_verification_found(bridge_verification):
+        return
+    try:
+        upsert_cached_verification(
+            session,
+            str(folio),
+            bridge_verification,
+            raw=bridge_verification,
+        )
+    except Exception:
+        logger.exception(
+            "chatbot_bridge_cache_accept_failed",
+            extra={
+                "session_id": getattr(session, "id", None),
+                "folio_masked": _mask(folio),
+            },
+        )
 
 
 # --------------------------------------
@@ -702,33 +823,12 @@ def process_message(
     # ==========================================
     # DETECTAR SI TIENE VERIFICACIÓN ACTIVA Y TRATA DE CAMBIAR DE FOLIO
     # ==========================================
-    ACTIVE_VERIFICATION_STATES = {
-        ChatState.INICIO,
-        ChatState.INICIO2,
-        ChatState.CONFIRMAR_NOMBRE,
-        ChatState.CONFIRMAR_DOMICILIO,
-        ChatState.CONFIRMAR_FECHA,
-        ChatState.CONFIRMAR_PRODUCTO,
-        ChatState.CONFIRMAR_ESTADO_PRODUCTO,
-        ChatState.CONFIRMAR_COMPONENTES,
-        ChatState.CONFIRMAR_PAGO_INICIAL,
-        ChatState.INFO_PAGOS,
-        ChatState.INFO_METODOS_PAGO,
-        ChatState.INFO_PLAN_3_MESES,
-        ChatState.INFO_OTROS_PLANES,
-        ChatState.INFO_BENEFICIOS,
-        ChatState.INFO_BENEFICIOS2,
-        ChatState.COMPONENTES_FALTANTES,
-        ChatState.COMPONENTES_CONFIRMAR_FALTANTES,
-        ChatState.VERIFICAR_FOTO_COMPONENTE,
-        ChatState.INCONSISTENCIA,
-    }
-
-    folio_detectado = extraer_folio(text)
+    active_context_state = _active_verification_context_state(current_state, previous_state)
+    folio_detectado = _folio_input_from_text(text, current_state, previous_state)
     folio_intento = folio_detectado or folio
     detected_folio_is_new = bool(folio_intento and str(folio_intento) != str(session.folio))
 
-    if session.folio and current_state in ACTIVE_VERIFICATION_STATES:
+    if session.folio and active_context_state:
         if detected_folio_is_new:
             next_state = ChatState.MENU_AYUDA
             _log()
@@ -739,18 +839,18 @@ def process_message(
                     {"id": "MENU_VERIFICACION", "label": "📄 Ir a verificación"},
                     {"id": "MENU_DUDA", "label": "❓ Hacer una pregunta"},
                 ],
-                previous_state=current_state.value
+                previous_state=active_context_state.value
             )
         elif folio_intento and str(folio_intento) == str(session.folio):
             # Mismo folio ingresado de nuevo en medio de verificación activa
             # Simplemente le recordamos y volvemos a renderizar la pregunta actual del estado
-            reply_state, buttons, image_id = render_state(current_state, session, db)
+            reply_state, buttons, image_id = render_state(active_context_state, session, db)
             reply = f"{messages.VERIFICACION_MISMO_FOLIO}\n\n{reply_state}"
-            next_state = current_state
+            next_state = active_context_state
             _log()
             return FlowResult(
                 reply=reply,
-                next_state=current_state,
+                next_state=active_context_state,
                 buttons=buttons,
                 image_id=image_id,
                 previous_state=previous_state
@@ -760,20 +860,7 @@ def process_message(
     # 2. Detectar folio automático
     # --------------------------------------
 
-    folio_detectado = extraer_folio(text)
-
-    # Solo aplicar detección automática de folio en estados donde el usuario
-    # está esperando ingresar un folio o es el inicio del flujo.
-    STATES_ALLOW_AUTO_FOLIO = {
-        ChatState.ESPERA,
-        ChatState.INICIO,
-        ChatState.CAMBIAR_FOLIO,
-        ChatState.CAMBIAR_FOLIO_DEVOLUCION,
-        ChatState.CAMBIAR_FOLIO_DESCUENTO,
-        ChatState.MENU_AYUDA,
-        ChatState.FUERA_DE_FLUJO,
-        ChatState.FINALIZADO,
-    }
+    folio_detectado = _folio_input_from_text(text, current_state, previous_state)
 
     current_folio = str(getattr(session, "folio", None) or "")
     detected_folio_is_new = bool(folio_detectado and str(folio_detectado) != current_folio)
@@ -794,6 +881,7 @@ def process_message(
                 return verification_result
             
             reset_verification_context_for_folio(session, folio_detectado)
+            _cache_bridge_payload_for_folio(session, folio_detectado, bridge_verification)
 
             _log()
 
@@ -851,6 +939,7 @@ def process_message(
             return verification_result
 
         reset_verification_context_for_folio(session, folio_a_buscar)
+        _cache_bridge_payload_for_folio(session, folio_a_buscar, bridge_verification)
 
         _try_mark_step(db, session, "inicio", bridge_verification)
         _try_mark_step(db, session, "folio", bridge_verification)

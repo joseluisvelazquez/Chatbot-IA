@@ -19,7 +19,12 @@ from starlette.requests import ClientDisconnect
 from app.adapters.meta_webhook import parse_meta_payload
 from app.adapters.whatsapp_client import send_whatsapp_message
 from app.config.settings import settings
-from app.core.flow.flow_engine import process_message
+from app.core.flow.flow_engine import (
+    ACTIVE_VERIFICATION_STATES,
+    SERVICE_STATES_WITH_VERIFICATION_CONTEXT,
+    STATES_ALLOW_BARE_FOLIO,
+    process_message,
+)
 from app.core.states.states import ChatState
 from app.core.verification_steps import STEP_ORDER
 from app.db.models import ChatSessions, FlowEvent, Inconsistencias, Message
@@ -37,6 +42,7 @@ from app.services.siga_bridge_integration import (
     lookup_customer_for_incoming_phone,
     lookup_verification_for_folio,
 )
+from app.services.siga_bridge_sale import get_cached_bridge_verification_payload
 from app.services.verification_panel_service import build_verification_snapshot
 from app.services.verification_tracker import STEP_MAP
 from app.services.ws_events import (
@@ -49,7 +55,7 @@ from app.services.ws_events import (
     build_verification_updated_event,
     minimal_verification_payload,
 )
-from app.utils.folio_parser import extraer_folio
+from app.utils.folio_parser import extraer_folio_si_mensaje_de_folio
 from app.utils.timezone import mexico_now_naive
 from app.websockets.manager import manager
 
@@ -84,6 +90,49 @@ def _mask_last(value: Any, visible: int = 4) -> str | None:
     if len(text) <= visible:
         return "***"
     return f"***{text[-visible:]}"
+
+
+def _coerce_chat_state(value: Any) -> ChatState | None:
+    if isinstance(value, ChatState):
+        return value
+    if not value:
+        return None
+    try:
+        return ChatState(value)
+    except ValueError:
+        return None
+
+
+def _active_verification_context_state(chat: ChatSessions) -> ChatState | None:
+    current_state = _coerce_chat_state(getattr(chat, "state", None))
+    if current_state in ACTIVE_VERIFICATION_STATES:
+        return current_state
+
+    previous_state = _coerce_chat_state(getattr(chat, "previous_state", None))
+    if (
+        current_state in SERVICE_STATES_WITH_VERIFICATION_CONTEXT
+        and previous_state in ACTIVE_VERIFICATION_STATES
+    ):
+        return previous_state
+
+    return None
+
+
+def _incoming_folio_for_bridge_lookup(text: str, chat: ChatSessions) -> str | None:
+    current_state = _coerce_chat_state(getattr(chat, "state", None))
+    allow_bare = current_state in STATES_ALLOW_BARE_FOLIO
+    return extraer_folio_si_mensaje_de_folio(
+        text,
+        allow_folio_suelto=allow_bare,
+    )
+
+
+def _would_overwrite_active_bridge_context(chat: ChatSessions, folio: str | None) -> bool:
+    if not folio or not getattr(chat, "folio", None):
+        return False
+    if str(folio) == str(chat.folio):
+        return False
+    return _active_verification_context_state(chat) is not None
 
 
 def _event_log_meta(event: dict[str, Any]) -> dict[str, Any]:
@@ -315,7 +364,6 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     created_inconsistency_ids: set[int] = set()
     closed_inconsistency_ids: set[int] = set()
     bridge_verification = None
-    candidate_folio = extraer_folio(text)
     previous_folio = None
     verification_context_changed = False
     processing_started_at = time.perf_counter()
@@ -347,8 +395,14 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         active_sessions_delta = 0 if was_active else 1
         open_issues_before = count_open_issues(db)
 
-        chat = get_or_create_session(db, phone)
+        chat = get_or_create_session(
+            db,
+            phone,
+            text=text,
+            intent=button_id or "",
+        )
         previous_folio = str(chat.folio) if chat.folio else None
+        incoming_folio = _incoming_folio_for_bridge_lookup(text, chat)
         open_inconsistency_ids_before = open_inconsistency_ids(db, chat.id)
 
         if get_message_by_message_id(db, message_id):
@@ -439,7 +493,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             db,
             chat.id,
             utcnow_naive() - timedelta(days=7),
-            folio=str(candidate_folio or chat.folio or "") or None,
+            folio=str(incoming_folio or chat.folio or "") or None,
         )
         media_msg = handle_incoming_media(event, chat) if is_media else None
 
@@ -541,21 +595,46 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             asyncio.create_task(send_whatsapp_message(phone, reply))
             return {"status": "advisor_activated"}
 
-        if settings.SIGA_BRIDGE_ENABLED and candidate_folio:
-            bridge_verification = await lookup_verification_for_folio(
-                candidate_folio,
-                company_id=1,
-                session=chat,
-            )
-            if bridge_verification:
+        lookup_skipped_for_active_context = False
+        if settings.SIGA_BRIDGE_ENABLED and incoming_folio:
+            if _would_overwrite_active_bridge_context(chat, incoming_folio):
+                lookup_skipped_for_active_context = True
                 logger.info(
-                    "siga_snapshot_updated_from_webhook",
+                    "siga_bridge_lookup_skipped_active_context",
                     extra={
                         "session_id": chat.id,
-                        "folio_masked": _mask_last(candidate_folio),
+                        "current_folio_masked": _mask_last(chat.folio),
+                        "incoming_folio_masked": _mask_last(incoming_folio),
                         "message_id": message_id,
                     },
                 )
+            else:
+                bridge_verification = await lookup_verification_for_folio(
+                    incoming_folio,
+                    company_id=1,
+                    session=chat,
+                )
+                if bridge_verification:
+                    logger.info(
+                        "siga_snapshot_updated_from_webhook",
+                        extra={
+                            "session_id": chat.id,
+                            "folio_masked": _mask_last(incoming_folio),
+                            "message_id": message_id,
+                        },
+                    )
+
+        if (
+            settings.SIGA_BRIDGE_ENABLED
+            and chat.folio
+            and (not incoming_folio or lookup_skipped_for_active_context)
+            and get_cached_bridge_verification_payload(chat, str(chat.folio)) is None
+        ):
+            bridge_verification = await lookup_verification_for_folio(
+                str(chat.folio),
+                company_id=1,
+                session=chat,
+            ) or bridge_verification
 
         if (
             settings.SIGA_BRIDGE_ENABLED

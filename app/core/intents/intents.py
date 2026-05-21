@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from app.core.states.states import ChatState
+from app.utils.folio_parser import extraer_folio_explicito
 
 # -------------------------------------------------
 # Catálogo de intenciones
@@ -175,12 +176,8 @@ def detect_intent(text: str, state: ChatState | None = None):
     # Detectar inicio con folio
     # -------------------------------------------------
 
-    folio_pattern = r"folio\s*(?:es|:)?\s*([a-z0-9\-]+)"
-
-    match = re.search(folio_pattern, text_l)
-
-    if match:
-        folio = match.group(1).strip()
+    folio = extraer_folio_explicito(text_l)
+    if folio:
         return "start_verification", folio
 
     # -------------------------------------------------
