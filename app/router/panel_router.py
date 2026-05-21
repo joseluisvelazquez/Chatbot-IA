@@ -1360,6 +1360,7 @@ def get_conversations(
             group = {
                 "latest": s,
                 "cuentas": [],
+                "folios": [],
                 "unread_count": 0,
                 "last_customer_message_at": None,
             }
@@ -1367,6 +1368,7 @@ def get_conversations(
 
         group["unread_count"] += int(s.unread_count or 0)
         append_unique_text(group["cuentas"], no_cuenta)
+        append_unique_text(group["folios"], folio)
 
         last_customer_at = group["last_customer_message_at"]
         if s.last_customer_message_at and (
@@ -1379,6 +1381,7 @@ def get_conversations(
         s = group["latest"]
         folio = str(s.folio) if s.folio else None
         cuentas = list(reversed(group["cuentas"]))
+        folios_grupo = list(reversed(group["folios"]))
 
         response.append(
             ConversationResponse(
@@ -1390,6 +1393,7 @@ def get_conversations(
                 unread_count=group["unread_count"],
                 no_cuenta=", ".join(cuentas) if cuentas else None,
                 folio=folio,
+                folios=folios_grupo,
                 status=classify_panel_status(
                     verification_data={"is_completed": False},
                     has_open_inconsistencia=False,

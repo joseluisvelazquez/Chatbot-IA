@@ -23,6 +23,7 @@ class ConversationResponse(BaseModel):
     unread_count: int = 0
     no_cuenta: str | None = None
     folio: str | None = None
+    folios: list[str] = Field(default_factory=list)
     status: str | None = None
     last_customer_message_at: Optional[datetime] = None
 

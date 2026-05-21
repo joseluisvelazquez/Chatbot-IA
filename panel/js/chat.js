@@ -570,6 +570,67 @@ function formatTime(dateString) {
     })
 }
 
+function parsePanelDate(dateString) {
+    if (!dateString) return null
+
+    const raw = String(dateString)
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+
+    if (hasTimezone) {
+        const date = new Date(raw.replace(" ", "T"))
+        if (Number.isNaN(date.getTime())) return null
+
+        return new Date(date.toLocaleString("en-US", {
+            timeZone: "America/Mexico_City"
+        }))
+    }
+
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/)
+    if (!match) return null
+
+    return new Date(
+        Number(match[1]),
+        Number(match[2]) - 1,
+        Number(match[3]),
+        Number(match[4] || 0),
+        Number(match[5] || 0),
+        Number(match[6] || 0),
+    )
+}
+
+function startOfDay(date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function formatSidebarTimestamp(dateString) {
+    const date = parsePanelDate(dateString)
+    if (!date) return formatTime(dateString)
+
+    const mexicoNow = new Date(new Date().toLocaleString("en-US", {
+        timeZone: "America/Mexico_City"
+    }))
+    const diffDays = Math.floor((startOfDay(mexicoNow) - startOfDay(date)) / 86400000)
+    const time = date.toLocaleTimeString("es-MX", {
+        hour: "2-digit",
+        minute: "2-digit"
+    })
+
+    if (diffDays === 0) return `Hoy ${time}`
+    if (diffDays === 1) return `Ayer ${time}`
+    if (diffDays > 1 && diffDays < 7) {
+        const weekday = date.toLocaleDateString("es-MX", { weekday: "long" })
+        return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)} ${time}`
+    }
+
+    const dateText = date.toLocaleDateString("es-MX", {
+        day: "2-digit",
+        month: "short",
+        year: date.getFullYear() === mexicoNow.getFullYear() ? undefined : "numeric"
+    }).replace(".", "")
+
+    return `${dateText} ${time}`
+}
+
 function formatDateSeparator(dateString) {
     if (!dateString) return ""
 
@@ -608,6 +669,38 @@ function formatDateSeparator(dateString) {
         day: "numeric",
         month: "long"
     })
+}
+
+function accountList(value) {
+    if (!value) return []
+    if (Array.isArray(value)) return value.flatMap(accountList)
+
+    return String(value)
+        .split(",")
+        .map(item => item.trim())
+        .filter(Boolean)
+        .filter((item, index, items) => items.indexOf(item) === index)
+}
+
+function renderSidebarAccounts(value) {
+    const accounts = accountList(value)
+    if (!accounts.length) return ""
+
+    const label = accounts.length === 1 ? "Cuenta" : "Cuentas"
+    const chips = accounts
+        .map(account => `
+            <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600 dark:bg-slate-700 dark:text-slate-200">
+                ${escapeHtml(account)}
+            </span>
+        `)
+        .join("")
+
+    return `
+        <div class="mt-1 flex min-w-0 flex-wrap items-center gap-1 text-xs text-gray-400">
+            <span class="shrink-0">${label}:</span>
+            ${chips}
+        </div>
+    `
 }
 
 function formatWhatsAppText(text) {
@@ -786,12 +879,16 @@ function renderSidebarFromState(state) {
             const name = s.name?.toLowerCase() || ""
             const cuenta = String(s.no_cuenta || "").toLowerCase()
             const folio = String(s.folio || "").toLowerCase()
+            const folios = Array.isArray(s.folios)
+                ? s.folios.join(" ").toLowerCase()
+                : String(s.folios || "").toLowerCase()
 
             return (
                 phone.includes(searchTerm) ||
                 name.includes(searchTerm) ||
                 cuenta.includes(searchTerm) ||
-                folio.includes(searchTerm)
+                folio.includes(searchTerm) ||
+                folios.includes(searchTerm)
             )
         })
     }
@@ -869,15 +966,10 @@ function updateSidebarNode(node, s) {
                 ${escapeHtml(displayName)}
             </div>
 
-            ${s.no_cuenta
-            ? `<div class="text-xs text-gray-400">
-                        Cuenta: ${escapeHtml(s.no_cuenta)}
-                </div>`
-            : ""
-        }
+            ${renderSidebarAccounts(s.no_cuenta)}
 
             <div class="text-xs text-gray-500">
-                ${formatTime(s.last_message_at)}
+                ${formatSidebarTimestamp(s.last_message_at)}
             </div>
         </div>
 

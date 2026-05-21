@@ -127,6 +127,16 @@ function mergeAccountValues(...values) {
     return accounts.join(", ") || null
 }
 
+function mergeUniqueList(...values) {
+    const items = []
+
+    values.flatMap(splitAccountValues).forEach((item) => {
+        if (!items.includes(item)) items.push(item)
+    })
+
+    return items
+}
+
 function findConversationIdByPhone(phone, excludeId = null) {
     const key = normalizePhoneKey(phone)
     if (!key) return null
@@ -265,6 +275,7 @@ function upsertConversation(session) {
         id: targetId,
         session_id: targetId,
         no_cuenta: mergeAccountValues(current.no_cuenta, normalized.no_cuenta),
+        folios: mergeUniqueList(current.folios, current.folio, normalized.folios, normalized.folio),
         phone: current.phone || normalized.phone,
         display_name: merged.name || current.name || normalized.name || current.phone || normalized.phone || "Cliente sin nombre",
     }
