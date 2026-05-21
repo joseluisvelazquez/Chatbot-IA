@@ -129,6 +129,7 @@ def render_state(next_state, session, db):
 
     if next_state == ChatState.INFO_COMPROBANTE_ACCESO:
         reply = _render_comprobante_acceso(session, venta)
+        image_id = settings.get_asset_url(settings.VIDEO_ID_COMPROBANTES)
 
     if not venta:
         return reply, buttons, image_id
@@ -205,6 +206,7 @@ def render_state(next_state, session, db):
 
     elif next_state == ChatState.INFO_COMPROBANTE_ACCESO:
         reply = _render_comprobante_acceso(session, venta)
+        image_id = settings.get_asset_url(settings.VIDEO_ID_COMPROBANTES)
 
     elif next_state == ChatState.INFO_PLAN_3_MESES:
         calculos_3m = calcular_info_plan_3_meses(venta)

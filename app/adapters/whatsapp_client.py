@@ -68,7 +68,7 @@ def _looks_like_asset_filename(value: str | None) -> bool:
     if parsed.scheme or parsed.netloc:
         return False
     lower = str(value).strip().lower()
-    return lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
+    return lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4"))
 
 
 def _normalize_image_source(image_id: str | None) -> str | None:
@@ -161,6 +161,10 @@ async def _image_link_is_reachable(image_url: str) -> bool:
     if not image_url.lower().startswith(("http://", "https://")):
         return True
 
+    # Asumir que los mp4 son accesibles para evitar falsos negativos por loopback de red (el API container no tiene nginx)
+    if image_url.lower().endswith(".mp4"):
+        return True
+
     try:
         async with httpx.AsyncClient(timeout=IMAGE_LINK_TIMEOUT, follow_redirects=True) as client:
             response = await client.head(image_url)
@@ -184,7 +188,7 @@ async def _image_link_is_reachable(image_url: str) -> bool:
         return False
 
     content_type = response.headers.get("content-type", "")
-    if content_type and "image/" not in content_type.lower():
+    if content_type and "image/" not in content_type.lower() and "video/" not in content_type.lower():
         logger.warning(
             "whatsapp_image_link_invalid_content_type",
             extra={"content_type": content_type[:80]},
@@ -309,7 +313,9 @@ async def send_document(phone: str, url: str, filename="archivo.pdf"):
 
 async def send_buttons_with_image(phone: str, text: str, buttons: list, image_id: str):
     image_source = _normalize_image_source(image_id)
-    header_image = {"link": image_source} if image_source and image_source.startswith("http") else {"id": image_source}
+    header_media = {"link": image_source} if image_source and image_source.startswith("http") else {"id": image_source}
+
+    media_type = "video" if str(image_id).lower().endswith(".mp4") else "image"
 
     return await _send(
         {
@@ -320,8 +326,8 @@ async def send_buttons_with_image(phone: str, text: str, buttons: list, image_id
             "interactive": {
                 "type": "button",
                 "header": {
-                    "type": "image",
-                    "image": header_image
+                    "type": media_type,
+                    media_type: header_media
                 },
                 "body": {"text": text},
                 "action": {"buttons": build_meta_buttons(buttons)},

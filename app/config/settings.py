@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     IMAGE_ID_REGULADOR: str | None = None
     IMAGE_ID_WIFI: str | None = None
 
+    # Videos
+    VIDEO_ID_COMPROBANTES: str | None = None
+
     # ============================================================
     # URL base para servir archivos
     # ============================================================
