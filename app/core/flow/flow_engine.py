@@ -796,7 +796,9 @@ def process_message(
                     detected_intent = ai_intent
 
         # CASO 2: intent válido PERO mensaje complejo → IA puede reinterpretar
-        elif detected_intent in PROTECTED_INTENTS and use_ai:
+        # EXCEPCIÓN: "start_verification" es determinístico (extraído por regex del folio)
+        # y nunca debe ser sobreescrito por la IA, ya que ni siquiera está en VALID_INTENTS.
+        elif detected_intent in PROTECTED_INTENTS and use_ai and detected_intent != "start_verification":
 
             ai_result = interpret_intent_with_ai(
                 text,
