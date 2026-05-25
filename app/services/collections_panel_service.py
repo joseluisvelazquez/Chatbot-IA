@@ -877,6 +877,48 @@ def normalize_collection_record(
     }
 
 
+def resolve_collection_payment_state(item: Mapping[str, Any] | None) -> dict[str, Any]:
+    data = _as_mapping(item)
+    if not data:
+        return {
+            "estado_pago": "unknown",
+            "fuente_estado_pago": "unknown",
+            "paid": False,
+            "reason": "missing_collection_data",
+        }
+
+    source = "bridge" if (
+        data.get("source") == "siga_bridge"
+        or _as_mapping(data.get("siga_bridge")).get("available")
+    ) else "cobranza_panel"
+    financial = _as_mapping(data.get("financial_summary"))
+    balance = _safe_decimal(_first_money(data.get("balance"), financial.get("balance")))
+    status = _first_text(data.get("account_status"), data.get("status"))
+    process = _first_text(data.get("process"), data.get("proceso"))
+    classification = _first_text(data.get("classification"), data.get("estado_calculado"))
+    status_text = _strip_accents(f"{status or ''} {process or ''} {classification or ''}".lower())
+
+    paid = bool(data.get("is_paid"))
+    reason = "collection_is_paid" if paid else "pending_balance_or_status"
+    if not paid and (classification or "").lower() == "pagado":
+        paid = True
+        reason = "collection_classification_pagado"
+    if not paid and balance is not None and balance <= 0:
+        paid = True
+        reason = "balance_zero_or_negative"
+    if not paid and any(token in status_text for token in ("pagad", "liquidad", "saldad")):
+        paid = True
+        reason = "paid_status_text"
+
+    return {
+        "estado_pago": "pagado" if paid else "no_pagado",
+        "fuente_estado_pago": source,
+        "paid": paid,
+        "reason": reason,
+        "balance": balance,
+    }
+
+
 def _classification_options(items: list[dict[str, Any]]) -> list[dict[str, str]]:
     options = {
         "sano": "Sano",

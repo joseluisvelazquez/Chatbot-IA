@@ -56,7 +56,7 @@ INFO_PAGOS = (
 
 INFO_METODOS_PAGO = (
     "🏦 Aquí te dejo las opciones para realizar tus pagos.\n\n"
-    "💳 No olvides incluir este número *A{numero_cuenta}* como concepto o referencia.\n\n"
+    "💳 No olvides incluir este número *{numero_cuenta}* como concepto o referencia.\n\n"
     "¿Está claro o tienes alguna duda respecto a los métodos de pago?"
 )
 

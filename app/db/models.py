@@ -280,6 +280,69 @@ class Reminder(Base):
         Index("idx_reminders_session", "session_id"),
     )
 
+
+class PaymentReminder(Base):
+    __tablename__ = "payment_reminders"
+    __table_args__ = (
+        UniqueConstraint(
+            "cuenta",
+            "due_date",
+            "reminder_type",
+            name="uq_payment_reminders_account_due_type",
+        ),
+        Index("idx_payment_reminders_account_due_type", "cuenta", "due_date", "reminder_type"),
+        Index("idx_payment_reminders_status_scheduled", "status", "scheduled_for"),
+        Index("idx_payment_reminders_phone", "phone"),
+        Index("idx_payment_reminders_folio", "folio"),
+        Index("idx_payment_reminders_cuenta", "cuenta"),
+        Index("idx_payment_reminders_receipt_status", "receipt_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    phone: Mapped[str] = mapped_column(VARCHAR(20), nullable=False)
+    folio: Mapped[Optional[str]] = mapped_column(VARCHAR(50))
+    cuenta: Mapped[str] = mapped_column(VARCHAR(50), nullable=False)
+    due_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    next_due_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
+    scheduled_for: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    reminder_type: Mapped[str] = mapped_column(VARCHAR(50), nullable=False)
+    template_name: Mapped[Optional[str]] = mapped_column(VARCHAR(120))
+    status: Mapped[str] = mapped_column(
+        VARCHAR(40),
+        nullable=False,
+        server_default=text("'scheduled'"),
+        default="scheduled",
+    )
+    receipt_status: Mapped[str] = mapped_column(
+        VARCHAR(40),
+        nullable=False,
+        server_default=text("'none'"),
+        default="none",
+    )
+    receipt_id: Mapped[Optional[int]] = mapped_column(Integer)
+    saldo_snapshot: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
+    monto_minimo_snapshot: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(13, 2))
+    bridge_found = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    bridge_snapshot_hash: Mapped[Optional[str]] = mapped_column(VARCHAR(64))
+    meta_message_id: Mapped[Optional[str]] = mapped_column(VARCHAR(120))
+    error_code: Mapped[Optional[str]] = mapped_column(VARCHAR(80))
+    error_message_sanitized: Mapped[Optional[str]] = mapped_column(String(255))
+    dry_run = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    paused_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    reactivated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    cancelled_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+    )
+
 class ChatSessions(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (

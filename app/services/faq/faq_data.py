@@ -76,7 +76,7 @@ FAQ_DATA = [
             "como le pongo mi numero de cuenta al ticket"
         ],
         "response": "No hay manera de que en los depósitos en efectivo pongan concepto, una vez que usted tenga su ticket deberá escribirlo en el mismo con pluma, para conocer su numero de cuenta inicie la verificación.  ",
-        "response_dinamica": "No hay manera de que en los depósitos en efectivo pongan concepto, una vez que usted tenga su ticket deberá escribir este numero *A{numero_cuenta}* en el mismo con pluma."
+        "response_dinamica": "No hay manera de que en los depósitos en efectivo pongan concepto, una vez que usted tenga su ticket deberá escribir este numero *{numero_cuenta_referencia}* en el mismo con pluma."
     },
 
     # -------------------------
@@ -90,7 +90,7 @@ FAQ_DATA = [
             "transferencia concepto"
         ],
         "response": "Debe colocar el número de cuenta que se le proporciona durante la verificación, el cual comienza con la letra A.",
-        "response_dinamica": "Debe colocar su número de cuenta, el cual es *A{numero_cuenta}*."
+        "response_dinamica": "Debe colocar su número de cuenta, el cual es *{numero_cuenta_referencia}*."
     },
 
     # -------------------------

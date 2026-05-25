@@ -1,5 +1,6 @@
 # Archivos de base de datos
 *.sql
+!app/db/migrations/*.sql
 *.dump
 *.bak
 

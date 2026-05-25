@@ -5,9 +5,12 @@ from app.api.webhook import router as webhook_router
 
 from app.config.paths import MEDIA_DIR, PANEL_DIR
 from app.jobs.inactivity_reminders import run_inactivity_reminders_job
+from app.jobs.payment_reminders import run_payment_reminders_job
+from app.config.settings import settings
 from fastapi.staticfiles import StaticFiles
 from app.router.auth_router import router as auth_router
 from app.router.panel_router import router as panel_router
+from app.router.payment_reminders import router as payment_reminders_router
 from app.router.media_router import router as media_router
 from app.router.siga_bridge_router import router as siga_bridge_router
 
@@ -25,6 +28,7 @@ from app.api.external import router as external_router
 app = FastAPI(title="MXCOMP Chatbot")
 app.include_router(webhook_router)
 app.include_router(panel_router)
+app.include_router(payment_reminders_router)
 app.include_router(media_router)
 app.include_router(auth_router)  
 app.include_router(siga_bridge_router)
@@ -65,6 +69,15 @@ def startup():
         max_instances=1,  # solo dentro del mismo proceso
         coalesce=True,
     )
+    if settings.PAYMENT_REMINDERS_ENABLED:
+        scheduler.add_job(
+            run_payment_reminders_job,
+            "interval",
+            minutes=settings.PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES,
+            id="payment_reminders",
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.start()
 
 

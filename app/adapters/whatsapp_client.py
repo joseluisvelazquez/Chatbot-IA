@@ -311,6 +311,39 @@ async def send_document(phone: str, url: str, filename="archivo.pdf"):
     )
 
 
+async def send_template_message(
+    phone: str,
+    template_name: str,
+    parameters: list[str] | tuple[str, ...] | None = None,
+    *,
+    language: str | None = None,
+):
+    body_parameters = [
+        {"type": "text", "text": str(value)}
+        for value in (parameters or [])
+    ]
+    template: dict = {
+        "name": template_name,
+        "language": {"code": language or settings.META_TEMPLATE_LANGUAGE},
+    }
+    if body_parameters:
+        template["components"] = [
+            {
+                "type": "body",
+                "parameters": body_parameters,
+            }
+        ]
+
+    return await _send(
+        {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "template",
+            "template": template,
+        }
+    )
+
+
 async def send_buttons_with_image(phone: str, text: str, buttons: list, image_id: str):
     image_source = _normalize_image_source(image_id)
     header_media = {"link": image_source} if image_source and image_source.startswith("http") else {"id": image_source}

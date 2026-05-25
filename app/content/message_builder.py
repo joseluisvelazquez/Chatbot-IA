@@ -3,6 +3,7 @@ from decimal import Decimal
 from app.pricing.payment_plans import PLANES_POR_MESES
 from decimal import Decimal
 from app.pricing.payment_plans import _redondear_entero_amigable
+from app.utils.account_reference import format_account_reference
 
 
 def _clean_access_value(value) -> str | None:
@@ -24,13 +25,6 @@ def _format_money_value(value) -> str:
     except Exception:
         return clean
     return f"{amount:,.2f}"
-
-
-def format_account_reference(numero_cuenta) -> str | None:
-    text = _clean_access_value(numero_cuenta)
-    if not text:
-        return None
-    return text if text.upper().startswith("A") else f"A{text}"
 
 
 class MessageBuilder:
@@ -70,10 +64,8 @@ class MessageBuilder:
     
     @staticmethod
     def info_metodos_pago(numero_cuenta: str) -> str:
-        clean = _clean_access_value(numero_cuenta)
-        if clean and clean.upper().startswith("A") and len(clean) > 1:
-            clean = clean[1:]
-        return messages.INFO_METODOS_PAGO.format(numero_cuenta=clean or numero_cuenta)
+        cuenta = format_account_reference(numero_cuenta) or numero_cuenta
+        return messages.INFO_METODOS_PAGO.format(numero_cuenta=cuenta)
 
     @staticmethod
     def info_comprobante_acceso(numero_cuenta: str, codigo_cliente: str | None) -> str:

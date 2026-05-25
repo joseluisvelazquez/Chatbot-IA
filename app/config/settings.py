@@ -1,5 +1,7 @@
+import json
+
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -89,9 +91,28 @@ class Settings(BaseSettings):
     # ============================================================
     # development/testing
     # ============================================================
-    TEST_PHONE_ONLY: list[str]
+    TEST_PHONE_ONLY: list[str] = []
     ADVISOR_PHONES: list[str] = []
     DEBUG: bool = True
+
+    @field_validator("TEST_PHONE_ONLY", "ADVISOR_PHONES", mode="before")
+    @classmethod
+    def parse_csv_lists(cls, value):
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            if text.startswith("["):
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            return [item.strip() for item in text.split(",") if item.strip()]
+        return value
 
     # ============================================================
     # SIGA Bridge v1
@@ -108,6 +129,25 @@ class Settings(BaseSettings):
     SIGA_BRIDGE_VERIFICATION_MAX_ATTEMPTS: int = 1
     SIGA_PANEL_BASE_URL: str = "https://siga.mxcomp.mx/"
     SIGA_ACCOUNT_REDIRECT_PATH: str = "cuentas.php"
+
+    # ============================================================
+    # Recordatorios automaticos de pago
+    # ============================================================
+
+    PAYMENT_REMINDERS_ENABLED: bool = False
+    PAYMENT_REMINDERS_DRY_RUN: bool = True
+    PAYMENT_REMINDER_COMPANY_ID: int = 1
+    PAYMENT_REMINDER_SYNC_LIMIT: int = 100
+    PAYMENT_REMINDER_SEND_HOUR: int = 10
+    PAYMENT_REMINDER_DEFAULT_WEEKDAY: str | None = None
+    PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES: int = 15
+
+    META_PAYMENT_PENDING_TEMPLATE_NAME: str | None = None
+    META_PAYMENT_OVERDUE_TEMPLATE_NAME: str | None = None
+    # Deprecated: payment reminders no longer send a receipt-under-review template.
+    META_RECEIPT_UNDER_REVIEW_TEMPLATE_NAME: str | None = None
+    META_NEXT_PAYMENT_TEMPLATE_NAME: str | None = None
+    META_TEMPLATE_LANGUAGE: str = "es_MX"
 
     @property
     def DATABASE_URL(self) -> str:
