@@ -4,6 +4,7 @@ from app.content import messages as content_messages
 from app.content.message_builder import MessageBuilder
 
 import logging
+import re
 
 from app.siga.siga_repository import (
     obtener_venta_por_folio,
@@ -35,6 +36,21 @@ from app.utils.product_mapping import get_product_info_for_sale
 
 logger = logging.getLogger(__name__)
 
+RENDER_DATA_REQUIRED_STATES = {
+    ChatState.INICIO,
+    ChatState.INICIO2,
+    ChatState.CONFIRMAR_NOMBRE,
+    ChatState.CONFIRMAR_DOMICILIO,
+    ChatState.CONFIRMAR_FECHA,
+    ChatState.CONFIRMAR_PRODUCTO,
+    ChatState.CONFIRMAR_ESTADO_PRODUCTO,
+    ChatState.CONFIRMAR_PAGO_INICIAL,
+    ChatState.INFO_PAGOS,
+    ChatState.INFO_METODOS_PAGO,
+    ChatState.INFO_PLAN_3_MESES,
+    ChatState.INFO_BENEFICIOS2,
+}
+
 
 def _mask(value, *, visible: int = 4) -> str | None:
     if value is None:
@@ -50,6 +66,91 @@ def _has_render_value(value) -> bool:
         return False
     text = str(value).strip()
     return bool(text) and text.lower() not in {"-", "null", "none", "undefined", "no disponible"}
+
+
+def _reply_has_unresolved_placeholder(reply: str | None) -> bool:
+    return bool(reply and re.search(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}", reply))
+
+
+def _sale_for_session(session, db):
+    if not getattr(session, "folio", None):
+        return None
+
+    venta = obtener_venta_por_folio(db, session.folio) if db else None
+    if not venta:
+        venta = bridge_sale_from_session(session, session.folio)
+    return venta
+
+
+def _missing_fields_for_state(next_state, session, db, venta=None) -> list[str]:
+    if next_state not in RENDER_DATA_REQUIRED_STATES:
+        return []
+
+    venta = venta or _sale_for_session(session, db)
+    if not venta:
+        return ["venta_snapshot"]
+
+    missing: list[str] = []
+
+    if next_state in {ChatState.INICIO, ChatState.INICIO2, ChatState.CONFIRMAR_NOMBRE}:
+        if not _has_render_value(getattr(venta, "nombre_completo", None)):
+            missing.append("nombre_completo")
+
+    elif next_state == ChatState.CONFIRMAR_DOMICILIO:
+        if is_bridge_sale(venta):
+            domicilio_texto = bridge_address_from_session(session, session.folio)
+        else:
+            domicilio = obtener_domicilio_por_movimiento(db, venta.id_movimiento_bv) if db else None
+            domicilio_texto = address_formatter.construir_domicilio(domicilio) if domicilio else None
+        if not _has_render_value(domicilio_texto):
+            missing.append("domicilio_completo")
+
+    elif next_state == ChatState.CONFIRMAR_FECHA:
+        if not _has_render_value(getattr(venta, "fecha_venta", None)):
+            missing.append("fecha_venta")
+
+    elif next_state in {ChatState.CONFIRMAR_PRODUCTO, ChatState.CONFIRMAR_ESTADO_PRODUCTO, ChatState.INFO_BENEFICIOS2}:
+        info = get_product_info_for_sale(venta)
+        product_name = info.get("nombre_amigable")
+        if not _has_render_value(product_name) or str(product_name).strip().lower() == "producto":
+            missing.append("nombre_producto")
+
+    elif next_state == ChatState.CONFIRMAR_PAGO_INICIAL:
+        if not _has_render_value(getattr(venta, "pago", None)):
+            missing.append("importe_pago_inicial")
+
+    elif next_state == ChatState.INFO_PAGOS:
+        calculos = calcular_info_pagos(venta)
+        required = ("fecha_limite", "pago_minimo", "importe_quincenal", "importe_mensual")
+        missing.extend(key for key in required if not _has_render_value((calculos or {}).get(key)))
+
+    elif next_state == ChatState.INFO_METODOS_PAGO:
+        if not _has_render_value(construir_no_cuenta(venta)):
+            missing.append("numero_cuenta")
+
+    elif next_state == ChatState.INFO_PLAN_3_MESES:
+        calculos_3m = calcular_info_plan_3_meses(venta)
+        required = ("saldo_3_meses", "fecha_limite_3_meses", "importe_semanal_3m")
+        missing.extend(key for key in required if not _has_render_value((calculos_3m or {}).get(key)))
+
+    return missing
+
+
+def get_missing_render_fields(next_state, session, db) -> list[str]:
+    return _missing_fields_for_state(next_state, session, db)
+
+
+def _render_missing_data(next_state, session, missing_fields: list[str]):
+    logger.warning(
+        "verification_render_blocked_missing_data",
+        extra={
+            "session_id": getattr(session, "id", None),
+            "state": getattr(next_state, "value", str(next_state)),
+            "folio_masked": _mask(getattr(session, "folio", None)),
+            "missing_fields": missing_fields,
+        },
+    )
+    return content_messages.DATOS_VERIFICACION_PREPARANDO, [], None
 
 
 def _snapshot_from_session(session) -> dict | None:
@@ -109,15 +210,7 @@ def render_state(next_state, session, db):
     buttons = flow.get("buttons", [])
     image_id = None
 
-    venta = None
-
-    # --------------------------------------
-    # Obtener datos de SIGA si hay folio
-    # --------------------------------------
-    if session.folio:
-        venta = obtener_venta_por_folio(db, session.folio) if db else None
-        if not venta:
-            venta = bridge_sale_from_session(session, session.folio)
+    venta = _sale_for_session(session, db)
 
     # --------------------------------------
     # Render dinámico por estado
@@ -131,7 +224,13 @@ def render_state(next_state, session, db):
         reply = _render_comprobante_acceso(session, venta)
         image_id = settings.get_asset_url(settings.VIDEO_ID_COMPROBANTES)
 
+    missing_fields = _missing_fields_for_state(next_state, session, db, venta)
+    if missing_fields:
+        return _render_missing_data(next_state, session, missing_fields)
+
     if not venta:
+        if _reply_has_unresolved_placeholder(reply):
+            return _render_missing_data(next_state, session, ["unresolved_placeholder"])
         return reply, buttons, image_id
 
     if next_state == ChatState.RETO_SEGURIDAD:
@@ -140,20 +239,21 @@ def render_state(next_state, session, db):
 
     elif next_state in [ChatState.INICIO, ChatState.INICIO2]:
         nombre = construir_nombre(venta)
+        if not _has_render_value(nombre):
+            return _render_missing_data(next_state, session, ["nombre_completo"])
         reply = reply.format(nombre_completo=nombre)
 
     elif next_state == ChatState.CONFIRMAR_NOMBRE:
+        if not _has_render_value(construir_nombre(venta)):
+            return _render_missing_data(next_state, session, ["nombre_completo"])
         reply = MessageBuilder.confirmar_nombre(
             construir_nombre(venta)
         )
 
     elif next_state == ChatState.CONFIRMAR_PAGO_INICIAL:
         pago_inicial = construir_pago_inicial(venta)
-        if is_bridge_sale(venta) and not pago_inicial:
-            reply = (
-                "Por ahora no tengo registrado el importe de tu pago inicial. "
-                "Para evitar darte un dato incorrecto, lo puede validar un asesor."
-            )
+        if not _has_render_value(getattr(venta, "pago", None)):
+            return _render_missing_data(next_state, session, ["importe_pago_inicial"])
         else:
             reply = MessageBuilder.confirmar_pago(pago_inicial)
 
@@ -197,6 +297,8 @@ def render_state(next_state, session, db):
                 importe_quincenal=calculos["importe_quincenal"],
                 importe_mensual=calculos["importe_mensual"],
             )
+        else:
+            return _render_missing_data(next_state, session, ["pagos"])
 
     elif next_state == ChatState.INFO_METODOS_PAGO:
         reply = MessageBuilder.info_metodos_pago(
@@ -219,6 +321,8 @@ def render_state(next_state, session, db):
                 subsidio=calculos_3m["subsidio"]
                 if calculos_3m["tiene_subsidio"] else None,
             )
+        else:
+            return _render_missing_data(next_state, session, ["plan3meses"])
 
     elif next_state == ChatState.INFO_BENEFICIOS2:
         info = get_product_info_for_sale(venta)
@@ -279,5 +383,8 @@ def render_state(next_state, session, db):
         }
         
         reply = inconsistencia_map.get(origen, msg.INCONSISTENCIA)
+
+    if _reply_has_unresolved_placeholder(reply):
+        return _render_missing_data(next_state, session, ["unresolved_placeholder"])
 
     return reply, buttons, image_id

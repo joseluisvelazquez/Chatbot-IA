@@ -7,7 +7,7 @@ from app.core.states.states import ChatState
 from app.core.intents.intents import detect_intent
 from app.core.intents.intent_router import route_intent
 from app.core.states.state_resolver import resolve_next_state
-from app.core.states.state_renderer import render_state
+from app.core.states.state_renderer import get_missing_render_fields, render_state
 from app.core.states.state_handlers import handle_special_cases, handle_flow_skips
 from app.core.context.conversation_context import ConversationContext
 from app.core.states.state_types import get_state_type
@@ -285,6 +285,21 @@ def _bridge_payload_for_folio(session, folio: str | None, bridge_verification=No
         return cached_payload
 
     return None
+
+
+def _safe_render_current_state(current_state, session, db, previous_state=None) -> FlowResult | None:
+    missing_fields = get_missing_render_fields(current_state, session, db)
+    if not missing_fields:
+        return None
+
+    reply, buttons, image_id = render_state(current_state, session, db)
+    return FlowResult(
+        reply=reply,
+        next_state=current_state,
+        buttons=buttons,
+        previous_state=previous_state,
+        image_id=image_id,
+    )
 
 
 def _venta_or_bridge_for_folio(db, session, folio: str | None, bridge_verification=None):
@@ -959,6 +974,18 @@ def process_message(
     # --------------------------------------
     # 5. Contexto
     # --------------------------------------
+
+    blocked_render = _safe_render_current_state(current_state, session, db, new_previous_state)
+    if blocked_render:
+        logger.info(
+            "verification_continuation_blocked_missing_snapshot",
+            extra={
+                "session_id": getattr(session, "id", None),
+                "state": current_state.value,
+                "folio_masked": _mask(getattr(session, "folio", None)),
+            },
+        )
+        return blocked_render
 
     venta = _venta_or_bridge_for_folio(db, session, session.folio, bridge_verification) if session.folio else None
 

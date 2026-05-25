@@ -61,11 +61,12 @@ INFO_METODOS_PAGO = (
 )
 
 INFO_COMPROBANTE_ACCESO = (
-    "Cada que hagas uno, deberás enviar tu comprobante por el siguiente sitio 👇\n"
+    "Cada que hagas uno, deberás subir tu comprobante por el siguiente sitio 👇\n"
     "https://mxcomp.mx/\n\n"
     "*Datos de acceso:*\n"
     "Número de cuenta: *{numero_cuenta}*\n"
-    "Código de cliente: *{codigo_cliente}*"
+    "Código de cliente: *{codigo_cliente}*\n\n"
+    "Aqui te dejo un tutorial para que veas como se hace."
 )
 
 INFO_COMPROBANTE_ACCESO_FALLBACK = (
@@ -156,6 +157,10 @@ PEDIR_FOLIO_DESCUENTO = "Para poder darte mas detalles de tu cuenta, primero ind
 CONFIRMAR_FOLIO_DETECTADO = "🔎 Detecté tu folio: *{folio}*. ¿Es correcto?"
 FOLIO_NO_DETECTADO = "Lo siento, ese folio no parece estar registrado. Por favor intentalo de nuevo."
 FOLIO_NO_EXISTE = "🔍 ¡Ups! No logré localizar ese número de folio en mi sistema."
+DATOS_VERIFICACION_PREPARANDO = (
+    "Estoy preparando la informacion de tu compra para evitar darte datos incorrectos. "
+    "En cuanto este disponible retomamos la verificacion."
+)
 CONTINUAR_VERIFICACION = "🔁 Continuemos con la verificación:"
 CONTINUAR_VERIFICACION_MENU = "🔁 Continuemos con la verificación."
 CORRECCION_REGISTRADA = "✅ Entendido, ya registré la corrección.\n\n🔁 Continuemos con la verificación."

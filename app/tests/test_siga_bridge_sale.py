@@ -228,6 +228,36 @@ def test_cache_hit_does_not_call_bridge():
     assert snapshot["no_cuenta"] == "60436"
 
 
+def test_force_refresh_ignores_incomplete_cached_snapshot(monkeypatch):
+    session = DummySession()
+    session.extra_json = {}
+    upsert_cached_verification(session, "16809", {"found": False, "folio": "16809"})
+    monkeypatch.setattr("app.services.siga_bridge_cache.settings.SIGA_BRIDGE_ENABLED", True)
+
+    class BridgeClient:
+        calls = 0
+
+        async def get_verification(self, folio, company_id=None):
+            self.calls += 1
+            return verification_payload(sale={"folio": "16809", "no_cuenta": "60436"})
+
+    client = BridgeClient()
+
+    snapshot = run(
+        get_or_fetch_verification(
+            session,
+            "16809",
+            bridge_client=client,
+            force_refresh=True,
+            allow_stale_on_error=False,
+        )
+    )
+
+    assert client.calls == 1
+    assert snapshot["found"] is True
+    assert snapshot["no_cuenta"] == "60436"
+
+
 def test_cache_miss_calls_bridge(monkeypatch):
     session = DummySession()
     session.extra_json = {}
@@ -409,7 +439,7 @@ def test_renderer_bridge_plan_3_meses_uses_fecha_venta_base():
     reply, _buttons, _image_id = render_state(ChatState.INFO_PLAN_3_MESES, session, db=None)
 
     assert "30 de julio del 2026" in reply
-    assert "$7800.00" in reply
+    assert "$7,800.00" in reply
     assert "$600.00" in reply
 
 
@@ -437,7 +467,7 @@ def test_renderer_bridge_uses_payment_plans_when_bridge_omits_plan_amounts():
     assert "$932.00" in pagos_reply
     assert "No tengo disponible" not in pagos_reply
     assert "30 de julio del 2026" in plan_reply
-    assert "$7800.00" in plan_reply
+    assert "$7,800.00" in plan_reply
     assert "$600.00" in plan_reply
     assert "No tengo disponible" not in plan_reply
 

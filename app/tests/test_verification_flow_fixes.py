@@ -1,4 +1,6 @@
 from app.core.flow import flow_engine
+from app.api.external import _parse_payload
+from app.core.states.state_renderer import render_state
 from app.core.states.states import ChatState
 from app.services.siga_navigation import build_siga_account_url
 
@@ -119,6 +121,43 @@ def test_active_menu_blocks_new_folio_without_replacing_bridge_cache():
     assert "verificación activa" in result.reply
 
 
+def test_renderer_blocks_inicio_without_sale_snapshot():
+    session = DummySession()
+    session.state = ChatState.INICIO.value
+    session.folio = "3333"
+    session.extra_json = {}
+
+    reply, buttons, _image_id = render_state(ChatState.INICIO, session, EmptyDb())
+
+    assert "{nombre_completo}" not in reply
+    assert "preparando la informacion" in reply
+    assert buttons == []
+
+
+def test_continuation_does_not_advance_without_snapshot():
+    session = DummySession()
+    session.state = ChatState.INICIO.value
+    session.folio = "3333"
+    session.extra_json = {}
+
+    result = flow_engine.process_message(
+        session=session,
+        text="si",
+        db=EmptyDb(),
+    )
+
+    assert result.next_state == ChatState.INICIO
+    assert "{nombre_completo}" not in result.reply
+    assert "preparando la informacion" in result.reply
+
+
+def test_external_trigger_normalizes_mexico_phone_and_folio():
+    data = _parse_payload({"phone": "442 123 4567", "folio": "16779"})
+
+    assert data.phone == "5214421234567"
+    assert data.folio == "16779"
+
+
 def test_siga_account_url_uses_legacy_entry_page(monkeypatch):
     monkeypatch.setattr("app.services.siga_navigation.settings.SIGA_PANEL_BASE_URL", "https://siga.mxcomp.mx/")
     monkeypatch.setattr("app.services.siga_navigation.settings.SIGA_ACCOUNT_REDIRECT_PATH", "cuentas.php")
@@ -174,7 +213,7 @@ def test_info_pagos_no_doubt_text_advances_without_ai(monkeypatch):
                     "found": True,
                     "folio": "1111",
                     "no_cuenta": "60436",
-                    "sale": {"folio": "1111", "no_cuenta": "60436"},
+                    "sale": {"folio": "1111", "no_cuenta": "60436", "fecha_venta": "2026-04-30"},
                 },
             }
         }
@@ -199,6 +238,19 @@ def test_info_pagos_plain_no_advances_as_no_doubts(monkeypatch):
     session = DummySession()
     session.state = ChatState.INFO_PAGOS.value
     session.previous_state = ChatState.INFO_PAGOS.value
+    session.extra_json = {
+        "siga_bridge": {
+            "verification_cache": {
+                "folio": "1111",
+                "snapshot": {
+                    "found": True,
+                    "folio": "1111",
+                    "no_cuenta": "60436",
+                    "sale": {"folio": "1111", "no_cuenta": "60436", "fecha_venta": "2026-04-30"},
+                },
+            }
+        }
+    }
 
     def fail_ai(*_args, **_kwargs):
         raise AssertionError("plain no in info state must not invoke AI")

@@ -21,6 +21,7 @@ from app.services.siga_bridge_sale import (
 logger = logging.getLogger(__name__)
 
 _folio_locks: dict[str, asyncio.Lock] = {}
+_NOT_FOUND_CACHE_TTL_SECONDS = 30
 
 
 def _utcnow() -> datetime:
@@ -215,6 +216,8 @@ def upsert_cached_verification(
     now = _utcnow()
     ttl = ttl_seconds or settings.SIGA_BRIDGE_VERIFICATION_CACHE_TTL_SECONDS
     normalized_snapshot = _normalize_for_cache(snapshot, normalized_folio, fetched_at=_iso(now))
+    if ttl_seconds is None and not normalized_snapshot.get("found"):
+        ttl = min(ttl, _NOT_FOUND_CACHE_TTL_SECONDS)
 
     extra_json = _read_extra_json(session)
     siga_payload = _siga_payload(extra_json)

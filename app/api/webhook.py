@@ -25,6 +25,7 @@ from app.core.flow.flow_engine import (
     STATES_ALLOW_BARE_FOLIO,
     process_message,
 )
+from app.core.flow.flow import FLOW
 from app.core.states.states import ChatState
 from app.core.verification_steps import STEP_ORDER
 from app.db.models import ChatSessions, FlowEvent, Inconsistencias, Message
@@ -42,7 +43,10 @@ from app.services.siga_bridge_integration import (
     lookup_customer_for_incoming_phone,
     lookup_verification_for_folio,
 )
-from app.services.siga_bridge_sale import get_cached_bridge_verification_payload
+from app.services.siga_bridge_sale import (
+    bridge_verification_found,
+    get_cached_bridge_verification_payload,
+)
 from app.services.verification_panel_service import build_verification_snapshot
 from app.services.verification_tracker import STEP_MAP
 from app.services.ws_events import (
@@ -144,6 +148,51 @@ def _event_log_meta(event: dict[str, Any]) -> dict[str, Any]:
         "has_button": bool(event.get("button_id")),
         "is_media": bool(event.get("is_media")),
     }
+
+
+def _button_label_for_panel(button_id: str | None, chat: ChatSessions | None) -> str | None:
+    if not button_id:
+        return None
+
+    candidate_states = [
+        getattr(chat, "state", None),
+        getattr(chat, "previous_state", None),
+        ChatState.MENU_AYUDA.value,
+        ChatState.FINALIZADO.value,
+    ]
+    for state_value in candidate_states:
+        state = _coerce_chat_state(state_value)
+        if not state:
+            continue
+        for button in FLOW.get(state, {}).get("buttons", []):
+            if button.get("id") == button_id:
+                label = str(button.get("label") or "").strip()
+                return f"[BOTON] {label} ({button_id})" if label else f"[BOTON] {button_id}"
+
+    if button_id.startswith("SELECCIONAR_FOLIO_"):
+        return f"[BOTON] Seleccionar folio {button_id.replace('SELECCIONAR_FOLIO_', '')}"
+
+    return f"[BOTON] {button_id.replace('_', ' ').title()} ({button_id})"
+
+
+def _event_content_for_panel(event: dict[str, Any], chat: ChatSessions | None = None) -> str:
+    if event.get("button_id"):
+        return _button_label_for_panel(event.get("button_id"), chat) or "[BOTON]"
+    text = event.get("text")
+
+    event_type = str(event.get("type") or "unknown").lower()
+    labels = {
+        "image": "[IMAGEN] Imagen recibida",
+        "document": "[DOCUMENTO] Documento recibido",
+        "video": "[VIDEO] Video recibido",
+        "sticker": "[STICKER] Sticker recibido",
+        "audio": "[AUDIO] Audio recibido",
+    }
+    if event_type in labels:
+        return f"{labels[event_type]}: {text}" if text else labels[event_type]
+    if text:
+        return text
+    return f"[ARCHIVO] Mensaje {event_type} recibido"
 
 
 async def emit_ws_message(message: dict[str, Any], *, roles: set[str] | None = None) -> None:
@@ -347,7 +396,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     button_id = event.get("button_id")
     event_time = event["timestamp"]
     is_media = event["is_media"]
-    content = "Archivo recibido" if is_media else (text if text else button_id)
+    content = _event_content_for_panel(event)
 
     reply = None
     buttons = []
@@ -401,6 +450,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             text=text,
             intent=button_id or "",
         )
+        content = _event_content_for_panel(event, chat)
         previous_folio = str(chat.folio) if chat.folio else None
         incoming_folio = _incoming_folio_for_bridge_lookup(text, chat)
         open_inconsistency_ids_before = open_inconsistency_ids(db, chat.id)
@@ -419,7 +469,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             return {"status": "duplicate"}
 
         if event.get("unsupported"):
-            unsupported_content = f"[UNSUPPORTED] {event.get('type') or 'unknown'}"
+            unsupported_content = _event_content_for_panel(event, chat)
             saved_msg = save_message(
                 db=db,
                 session_id=chat.id,
@@ -502,7 +552,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             session_id=chat.id,
             phone=phone,
             direction="in",
-            content="[MEDIA]" if is_media else (text if text else f"[BOTON] {button_id}"),
+                content=content,
             message_id=message_id,
             type=media_msg.type if media_msg else "text",
             media_url=media_msg.media_url if media_msg else None,
@@ -613,6 +663,8 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                     incoming_folio,
                     company_id=1,
                     session=chat,
+                    force_refresh=True,
+                    allow_stale_on_error=False,
                 )
                 if bridge_verification:
                     logger.info(
@@ -624,16 +676,23 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                         },
                     )
 
+        cached_bridge_payload = (
+            get_cached_bridge_verification_payload(chat, str(chat.folio))
+            if chat.folio
+            else None
+        )
         if (
             settings.SIGA_BRIDGE_ENABLED
             and chat.folio
             and (not incoming_folio or lookup_skipped_for_active_context)
-            and get_cached_bridge_verification_payload(chat, str(chat.folio)) is None
+            and not bridge_verification_found(cached_bridge_payload)
         ):
             bridge_verification = await lookup_verification_for_folio(
                 str(chat.folio),
                 company_id=1,
                 session=chat,
+                force_refresh=True,
+                allow_stale_on_error=False,
             ) or bridge_verification
 
         if (

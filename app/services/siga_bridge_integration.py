@@ -236,6 +236,8 @@ async def lookup_verification_for_folio(
     *,
     company_id: int | None = None,
     session: Any | None = None,
+    force_refresh: bool = False,
+    allow_stale_on_error: bool = True,
 ) -> dict[str, Any] | list[Any] | None:
     if not settings.SIGA_BRIDGE_ENABLED:
         return None
@@ -250,6 +252,7 @@ async def lookup_verification_for_folio(
             "company_id": company_id,
             "folio_masked": _mask(normalized_folio),
             "session_id": getattr(session, "id", None),
+            "force_refresh": bool(force_refresh),
         },
     )
 
@@ -257,6 +260,8 @@ async def lookup_verification_for_folio(
         session,
         normalized_folio,
         company_id=company_id,
+        force_refresh=force_refresh,
+        allow_stale_on_error=allow_stale_on_error,
     )
     if data is None:
         logger.warning(

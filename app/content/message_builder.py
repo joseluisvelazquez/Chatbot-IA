@@ -14,6 +14,18 @@ def _clean_access_value(value) -> str | None:
     return text
 
 
+def _format_money_value(value) -> str:
+    clean = _clean_access_value(value)
+    if not clean:
+        return str(value)
+    normalized = clean.replace("$", "").replace(",", "").strip()
+    try:
+        amount = Decimal(normalized)
+    except Exception:
+        return clean
+    return f"{amount:,.2f}"
+
+
 def format_account_reference(numero_cuenta) -> str | None:
     text = _clean_access_value(numero_cuenta)
     if not text:
@@ -37,7 +49,7 @@ class MessageBuilder:
 
     @staticmethod
     def confirmar_pago(pago: str) -> str:
-        return messages.CONFIRMAR_PAGO.format(importe_pago_inicial=pago)
+        return messages.CONFIRMAR_PAGO.format(importe_pago_inicial=_format_money_value(pago))
 
     @staticmethod
     def confirmar_fecha(fecha: str) -> str:
@@ -51,9 +63,9 @@ class MessageBuilder:
     def info_pagos(fecha_limite: str, pago_minimo: str, importe_quincenal: str, importe_mensual: str) -> str:
         return messages.INFO_PAGOS.format(
             fecha_limite=fecha_limite,
-            pago_minimo=pago_minimo,
-            importe_quincenal=importe_quincenal,
-            importe_mensual=importe_mensual,
+            pago_minimo=_format_money_value(pago_minimo),
+            importe_quincenal=_format_money_value(importe_quincenal),
+            importe_mensual=_format_money_value(importe_mensual),
         )
     
     @staticmethod
@@ -78,11 +90,11 @@ class MessageBuilder:
     def info_plan_3_meses(saldo_3_meses: str, fecha_limite_3_meses: str, importe_semanal_3m: str, subsidio: str | None = None) -> str:
         partes = []
         if subsidio:
-            partes.append(messages.INFO_PLAN_3_MESES_DESCUENTO.format(subsidio=subsidio))
+            partes.append(messages.INFO_PLAN_3_MESES_DESCUENTO.format(subsidio=_format_money_value(subsidio)))
         partes.append(messages.INFO_PLAN_3_MESES.format(
-            saldo_3_meses=saldo_3_meses,
+            saldo_3_meses=_format_money_value(saldo_3_meses),
             fecha_limite_3_meses=fecha_limite_3_meses,
-            importe_semanal_3m=importe_semanal_3m,
+            importe_semanal_3m=_format_money_value(importe_semanal_3m),
         ))
         return "".join(partes)
 
