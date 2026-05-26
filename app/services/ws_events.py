@@ -62,6 +62,7 @@ def build_message_payload(message: Any) -> dict[str, Any]:
         "media_url": getattr(message, "media_url", None),
         "file_name": getattr(message, "file_name", None),
         "extra_json": getattr(message, "extra_json", None),
+        "reactions": getattr(message, "reactions_payload", None) or [],
     }
 
 
@@ -100,6 +101,7 @@ def build_new_message_event(chat: Any, message: Any) -> dict[str, Any]:
         "type": "new_message",
         "session_id": getattr(chat, "id", None),
         "message_id": message_id,
+        "message_kind": message_payload.get("type") or "text",
         "direction": message_payload.get("direction"),
         "created_at": message_payload.get("created_at"),
         "preview": preview,
@@ -113,6 +115,33 @@ def build_new_message_event(chat: Any, message: Any) -> dict[str, Any]:
         "conversation": conversation,
         "message": message_payload,
         "unread_count": conversation.get("unread_count"),
+    }
+
+
+def build_reaction_update_event(
+    *,
+    session_id: int | None,
+    wa_message_id_original: str | None,
+    message_id: int | None = None,
+    reaction: dict[str, Any] | None = None,
+    removed: bool = False,
+    orphan: bool = False,
+    event_message: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = strip_undefined({
+        "session_id": session_id,
+        "message_id": message_id,
+        "wa_message_id_original": wa_message_id_original,
+        "reaction": reaction,
+        "removed": removed,
+        "orphan": orphan,
+        "event_message": event_message,
+    })
+    return {
+        "type": "reaction_update",
+        "session_id": session_id,
+        "message_id": message_id,
+        "payload": payload,
     }
 
 

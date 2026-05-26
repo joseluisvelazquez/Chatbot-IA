@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import ChatSessions
-from app.adapters.whatsapp_client import send_whatsapp_message
+from app.adapters.whatsapp_client import _extract_meta_message_id, send_whatsapp_message
 from app.services.message_service import save_message
 from app.security.auth_dependencies import require_roles
 from app.security.auth_service import is_allowed_panel_company, restrict_to_assigned
@@ -49,7 +49,8 @@ async def send_message(
         raise HTTPException(status_code=403, detail="Acceso no permitido")
 
     # enviar a WhatsApp
-    await send_whatsapp_message(chat.phone, message)
+    response = await send_whatsapp_message(chat.phone, message)
+    provider_message_id = _extract_meta_message_id(response)
     
 
     # guardar mensaje
@@ -58,7 +59,8 @@ async def send_message(
         session_id=session_id,
         phone=chat.phone,
         direction="agent",
-        content=message
+        content=message,
+        message_id=provider_message_id,
     )
     now = mexico_now_naive()
     chat.last_message = message

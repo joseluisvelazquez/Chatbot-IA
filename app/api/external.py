@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.adapters.whatsapp_client import send_whatsapp_message
 from app.config.settings import settings
 from app.content import messages
 from app.core.states.state_renderer import get_missing_render_fields, render_state
@@ -181,10 +180,18 @@ def _bridge_http_status(exc: SigaBridgeError) -> int:
 
 
 async def _send_and_broadcast(chat: ChatSessions, bot_msg, reply_text: str, buttons: list[dict], image_id: str | None) -> None:
-    from app.api.webhook import broadcast_new_message
+    from app.api.webhook import broadcast_new_message, _send_whatsapp_and_update_message_id
 
     await broadcast_new_message(chat, bot_msg)
-    asyncio.create_task(send_whatsapp_message(chat.phone, reply_text, buttons, image_id=image_id))
+    asyncio.create_task(
+        _send_whatsapp_and_update_message_id(
+            db_message_id=getattr(bot_msg, "id", None),
+            phone=chat.phone,
+            text=reply_text,
+            buttons=buttons,
+            image_id=image_id,
+        )
+    )
 
 
 async def _send_pending_message(db: Session, chat: ChatSessions) -> None:

@@ -29,7 +29,7 @@ from app.core.flow.flow import FLOW
 from app.core.states.states import ChatState
 from app.core.verification_steps import STEP_ORDER
 from app.db.models import ChatSessions, FlowEvent, Inconsistencias, Message
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.services.inconsistencias_service import (
     close_open_inconsistencia,
     open_or_patch_inconsistencia,
@@ -58,11 +58,18 @@ from app.services.ws_events import (
     build_conversation_updated_event,
     build_inconsistency_created_event,
     build_inconsistency_updated_event,
+    build_message_payload,
     build_new_message_event,
+    build_reaction_update_event,
     build_siga_snapshot_updated_event,
     build_verification_context_changed_event,
     build_verification_updated_event,
     minimal_verification_payload,
+)
+from app.services.message_reaction_service import (
+    delete_reaction,
+    serialize_reaction,
+    upsert_reaction,
 )
 from app.utils.folio_parser import extraer_folio_si_mensaje_de_folio
 from app.utils.timezone import mexico_now_naive
@@ -145,13 +152,19 @@ def _would_overwrite_active_bridge_context(chat: ChatSessions, folio: str | None
 
 
 def _event_log_meta(event: dict[str, Any]) -> dict[str, Any]:
+    reaction = event.get("extra_json", {}).get("reaction") if isinstance(event.get("extra_json"), dict) else {}
+    sticker = event.get("extra_json", {}).get("sticker") if isinstance(event.get("extra_json"), dict) else {}
     return {
         "message_id": event.get("message_id"),
         "phone_last4": _mask_last(event.get("phone")),
         "event_type": event.get("type"),
+        "incoming_message_type": event.get("type"),
         "has_text": bool(event.get("text")),
         "has_button": bool(event.get("button_id")),
         "is_media": bool(event.get("is_media")),
+        "reaction_message_id": reaction.get("message_id") if isinstance(reaction, dict) else None,
+        "reaction_emoji": reaction.get("emoji") if isinstance(reaction, dict) else None,
+        "sticker_mime_type": sticker.get("mime_type") if isinstance(sticker, dict) else event.get("mime_type"),
     }
 
 
@@ -195,8 +208,9 @@ def _event_content_for_panel(event: dict[str, Any], chat: ChatSessions | None = 
         "image": "[IMAGEN] Imagen recibida",
         "document": "[DOCUMENTO] Documento recibido",
         "video": "[VIDEO] Video recibido",
-        "sticker": "[STICKER] Sticker recibido",
+        "sticker": "🧩 Sticker recibido",
         "audio": "[AUDIO] Audio recibido",
+        "reaction": "Reaccion recibida",
     }
     if event_type in labels:
         return f"{labels[event_type]}: {text}" if text else labels[event_type]
@@ -260,8 +274,9 @@ def validate_webhook_event(data: dict) -> dict:
         raise ValueError("message_id requerido")
 
     event_type = data.get("type")
-    is_media = event_type in {"image", "document"}
-    has_input = bool(data.get("text") or data.get("button_id") or is_media or data.get("unsupported"))
+    is_media = event_type in {"image", "document", "sticker"}
+    is_reaction = event_type == "reaction"
+    has_input = bool(data.get("text") or data.get("button_id") or is_media or is_reaction or data.get("unsupported"))
 
     if not has_input:
         raise ValueError("payload sin input procesable")
@@ -269,6 +284,7 @@ def validate_webhook_event(data: dict) -> dict:
     return {
         **data,
         "is_media": is_media,
+        "is_reaction": is_reaction,
         "timestamp": data.get("timestamp") or utcnow_naive(),
     }
 
@@ -289,6 +305,45 @@ def has_newer_incoming_message(db: Session, session_id: int, event_time: datetim
 
 async def broadcast_new_message(chat, message: Message) -> None:
     await emit_ws_message(build_new_message_event(chat, message))
+
+
+async def _send_whatsapp_and_update_message_id(
+    *,
+    db_message_id: int | None,
+    phone: str,
+    text: str | None,
+    buttons: list | None = None,
+    image_id: str | None = None,
+) -> None:
+    response = await send_whatsapp_message(phone, text, buttons, image_id=image_id)
+    if not db_message_id or response is None:
+        return
+    try:
+        body = response.json()
+    except Exception:
+        return
+    messages = body.get("messages") if isinstance(body, dict) else None
+    provider_message_id = None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        provider_message_id = messages[0].get("id")
+    if not provider_message_id:
+        return
+
+    db = SessionLocal()
+    try:
+        message = db.query(Message).filter(Message.id == db_message_id).first()
+        if message and not message.message_id:
+            message.message_id = str(provider_message_id)
+            db.commit()
+            logger.info(
+                "outgoing_message_provider_id_persisted",
+                extra={"message_db_id": db_message_id, "provider_message_id": provider_message_id},
+            )
+    except Exception:
+        db.rollback()
+        logger.warning("outgoing_message_provider_id_persist_failed", extra={"message_db_id": db_message_id})
+    finally:
+        db.close()
 
 
 def open_inconsistency_ids(db: Session, session_id: int | None) -> set[int]:
@@ -313,6 +368,137 @@ def load_inconsistencies_by_ids(db: Session, ids: set[int]) -> list[Inconsistenc
         .filter(Inconsistencias.id.in_(ids))
         .order_by(Inconsistencias.id.asc())
         .all()
+    )
+
+
+def _reaction_info(event: dict[str, Any]) -> dict[str, Any]:
+    extra = event.get("extra_json") if isinstance(event.get("extra_json"), dict) else {}
+    reaction = extra.get("reaction") if isinstance(extra.get("reaction"), dict) else {}
+    return {
+        "wa_message_id_original": reaction.get("message_id"),
+        "emoji": reaction.get("emoji"),
+    }
+
+
+async def persist_and_emit_reaction_event(
+    *,
+    db: Session,
+    chat: ChatSessions,
+    event: dict[str, Any],
+    total_sessions_delta: int,
+    active_sessions_delta: int,
+) -> None:
+    info = _reaction_info(event)
+    target_wa_id = info.get("wa_message_id_original")
+    emoji = info.get("emoji")
+    phone = event["phone"]
+    event_time = event["timestamp"]
+
+    target_msg = get_message_by_message_id(db, target_wa_id)
+    if target_msg:
+        if emoji:
+            reaction = upsert_reaction(
+                db,
+                target_message=target_msg,
+                wa_message_id_original=target_wa_id,
+                reacted_by_phone=phone,
+                reaction_emoji=emoji,
+                reacted_at=event_time,
+            )
+            db.flush()
+            payload_reaction = serialize_reaction(reaction)
+            removed = False
+        else:
+            removed_row = delete_reaction(
+                db,
+                wa_message_id_original=target_wa_id,
+                reacted_by_phone=phone,
+            )
+            payload_reaction = {
+                "wa_message_id_original": target_wa_id,
+                "reacted_by_phone": phone,
+            }
+            removed = True
+
+        db.commit()
+        await emit_ws_message(
+            build_reaction_update_event(
+                session_id=target_msg.session_id,
+                message_id=target_msg.id,
+                wa_message_id_original=target_wa_id,
+                reaction=payload_reaction,
+                removed=removed,
+            )
+        )
+        logger.info(
+            "webhook_reaction_persisted",
+            extra={
+                **_event_log_meta(event),
+                "session_id": target_msg.session_id,
+                "target_message_db_id": target_msg.id,
+                "removed": removed,
+            },
+        )
+        return
+
+    if not emoji:
+        db.commit()
+        logger.info("webhook_reaction_delete_without_target_ignored", extra=_event_log_meta(event))
+        return
+
+    content = f"El cliente reacciono con {emoji} a un mensaje anterior"
+    saved_msg = save_message(
+        db=db,
+        session_id=chat.id,
+        phone=phone,
+        direction="in",
+        content=content,
+        message_id=event["message_id"],
+        type="reaction",
+        created_at=event_time,
+        extra_json=event.get("extra_json"),
+    )
+    chat.unread_count = (chat.unread_count or 0) + 1
+    update_session(
+        session=chat,
+        state=chat.state,
+        last_message=content,
+        previous_state=chat.previous_state,
+        message_id=event["message_id"],
+        last_message_at=max(event_time, utcnow_naive()),
+        last_customer_message_at=max(event_time, utcnow_naive()),
+    )
+    db.flush()
+    db.commit()
+    db.refresh(chat)
+    db.refresh(saved_msg)
+
+    await broadcast_new_message(chat, saved_msg)
+    await emit_ws_message(build_conversation_updated_event(chat, source="reaction"))
+    await emit_ws_message({
+        "type": "dashboard_update",
+        "payload": {
+            "messages_in_delta": 1,
+            "messages_out_delta": 0,
+            "total_sessions_delta": total_sessions_delta,
+            "active_sessions_delta": active_sessions_delta,
+            "issues_open_delta": 0,
+            "funnel_steps_delta": [],
+            "session_id": chat.id,
+        },
+    })
+    await emit_ws_message(
+        build_reaction_update_event(
+            session_id=chat.id,
+            wa_message_id_original=target_wa_id,
+            reaction={
+                "wa_message_id_original": target_wa_id,
+                "reaction_emoji": emoji,
+                "reacted_by_phone": phone,
+            },
+            orphan=True,
+            event_message=build_message_payload(saved_msg),
+        )
     )
 
 
@@ -491,6 +677,66 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             lock_acquired = False
             return {"status": "duplicate"}
 
+        if event.get("is_reaction"):
+            await persist_and_emit_reaction_event(
+                db=db,
+                chat=chat,
+                event=event,
+                total_sessions_delta=total_sessions_delta,
+                active_sessions_delta=active_sessions_delta,
+            )
+            _release_lock(lock)
+            lock_acquired = False
+            logger.info("webhook_processing_finished", extra={**_event_log_meta(event), "session_id": chat.id, "status": "reaction"})
+            return {"status": "reaction"}
+
+        if event.get("type") == "sticker":
+            media_msg = handle_incoming_media(event, chat)
+            saved_msg = save_message(
+                db=db,
+                session_id=chat.id,
+                phone=phone,
+                direction="in",
+                content="🧩 Sticker recibido",
+                message_id=message_id,
+                type="sticker",
+                media_url=media_msg.media_url if media_msg else None,
+                created_at=event_time,
+                extra_json=event.get("extra_json"),
+            )
+            chat.unread_count = (chat.unread_count or 0) + 1
+            update_session(
+                session=chat,
+                state=chat.state,
+                last_message="🧩 Sticker recibido",
+                previous_state=chat.previous_state,
+                message_id=message_id,
+                last_message_at=max(event_time, utcnow_naive()),
+                last_customer_message_at=max(event_time, utcnow_naive()),
+            )
+            db.flush()
+            db.commit()
+            db.refresh(chat)
+            db.refresh(saved_msg)
+            _release_lock(lock)
+            lock_acquired = False
+            await broadcast_new_message(chat, saved_msg)
+            await emit_ws_message(build_conversation_updated_event(chat, source="sticker"))
+            await emit_ws_message({
+                "type": "dashboard_update",
+                "payload": {
+                    "messages_in_delta": 1,
+                    "messages_out_delta": 0,
+                    "total_sessions_delta": total_sessions_delta,
+                    "active_sessions_delta": active_sessions_delta,
+                    "issues_open_delta": 0,
+                    "funnel_steps_delta": [],
+                    "session_id": chat.id,
+                },
+            })
+            logger.info("webhook_processing_finished", extra={**_event_log_meta(event), "session_id": chat.id, "status": "sticker"})
+            return {"status": "sticker"}
+
         if event.get("unsupported"):
             unsupported_content = _event_content_for_panel(event, chat)
             saved_msg = save_message(
@@ -555,9 +801,10 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 },
             )
             asyncio.create_task(
-                send_whatsapp_message(
-                    phone,
-                    reply,
+                _send_whatsapp_and_update_message_id(
+                    db_message_id=bot_msg.id if bot_msg else None,
+                    phone=phone,
+                    text=reply,
                 )
             )
             return {"status": "unsupported_prompt_sent"}
@@ -667,7 +914,13 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                     "session_id": chat.id,
                 },
             })
-            asyncio.create_task(send_whatsapp_message(phone, reply))
+            asyncio.create_task(
+                _send_whatsapp_and_update_message_id(
+                    db_message_id=bot_msg.id if bot_msg else None,
+                    phone=phone,
+                    text=reply,
+                )
+            )
             return {"status": "advisor_activated"}
 
         lookup_skipped_for_active_context = False
@@ -927,10 +1180,11 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
 
     if reply:
         asyncio.create_task(
-            send_whatsapp_message(
-                phone,
-                reply,
-                buttons,
+            _send_whatsapp_and_update_message_id(
+                db_message_id=bot_msg.id if bot_msg else None,
+                phone=phone,
+                text=reply,
+                buttons=buttons,
                 image_id=image_id,
             )
         )

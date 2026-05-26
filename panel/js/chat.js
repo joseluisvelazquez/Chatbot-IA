@@ -906,6 +906,50 @@ function renderMediaFallbackCard(media) {
     `
 }
 
+function renderMessageReactions(msg) {
+    const reactions = Array.isArray(msg?.reactions) ? msg.reactions : []
+    if (!reactions.length) return ""
+
+    const content = reactions
+        .map((reaction) => reaction?.reaction_emoji)
+        .filter(Boolean)
+        .map((emoji) => `<span>${escapeHtml(emoji)}</span>`)
+        .join("")
+
+    if (!content) return ""
+
+    return `
+        <div class="mt-1 flex ${msg.direction === "in" ? "justify-start" : "justify-end"}">
+            <span class="inline-flex min-h-6 items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-sm shadow-sm dark:border-slate-500 dark:bg-slate-700">
+                ${content}
+            </span>
+        </div>
+    `
+}
+
+function renderStickerBubble(msg, mediaUrl) {
+    const safeMediaUrl = mediaUrl ? escapeHtml(mediaUrl) : null
+    if (safeMediaUrl) {
+        return `
+            <div class="flex flex-col gap-1">
+                <img
+                    src="${safeMediaUrl}"
+                    class="max-w-[160px] max-h-[160px] object-contain rounded-lg"
+                    loading="lazy"
+                    alt="Sticker recibido"
+                />
+                <span class="text-sm">El cliente envio un sticker</span>
+            </div>
+        `
+    }
+    return `
+        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-100">
+            <div class="font-medium">El cliente envio un sticker</div>
+            <div class="mt-1 text-[11px] text-gray-400 dark:text-gray-300">Preview no disponible</div>
+        </div>
+    `
+}
+
 function isUserAtBottom(container) {
     const threshold = 60
     return container.scrollHeight - container.scrollTop - container.clientHeight < threshold
@@ -1128,7 +1172,9 @@ function createMessageNode(rawMsg, timeOverride = "") {
     const mediaUrl = msg.media_url || (mediaMeta?.url ? resolveMediaUrl(mediaMeta.url) : null)
     const messageType = msg.type || mediaMeta?.type
 
-    if (mediaUrl) {
+    if (messageType === "sticker") {
+        bodyContent = renderStickerBubble(msg, mediaUrl)
+    } else if (mediaUrl) {
         const safeMediaUrl = escapeHtml(mediaUrl)
         if (messageType === "image") {
             trackImageUrl(mediaUrl)
@@ -1200,6 +1246,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
     }
 
     bodyContent += renderHistoricalButtons(msg)
+    bodyContent += renderMessageReactions(msg)
 
     const metaClass =
         msg.direction === "in"

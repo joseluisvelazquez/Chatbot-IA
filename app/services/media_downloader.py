@@ -21,6 +21,7 @@ REQUEST_TIMEOUT = (10, 60)  # connect, read
 ALLOWED_CONTENT_TYPES: dict[str, str] = {
     "image/jpeg": "jpg",
     "image/png": "png",
+    "image/webp": "webp",
     "application/pdf": "pdf",
 }
 

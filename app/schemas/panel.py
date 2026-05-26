@@ -38,6 +38,7 @@ class MessageResponse(BaseModel):
     media_url: Optional[str] = None
     file_name: Optional[str] = None
     extra_json: Optional[dict[str, Any]] = None
+    reactions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PaginatedMessagesResponse(BaseModel):

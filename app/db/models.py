@@ -996,3 +996,28 @@ class Message(Base):
         nullable=False,
         server_default=func.now()
     )
+
+
+class MessageReaction(Base):
+    __tablename__ = "message_reactions"
+    __table_args__ = (
+        UniqueConstraint(
+            "wa_message_id_original",
+            "reacted_by_phone",
+            name="uq_message_reactions_original_phone",
+        ),
+        Index("idx_message_reactions_message_id", "message_id"),
+        Index("idx_message_reactions_wa_original", "wa_message_id_original"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(Integer, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
+    wa_message_id_original: Mapped[str] = mapped_column(String(120), nullable=False)
+    reaction_emoji: Mapped[str] = mapped_column(String(32), nullable=False)
+    reacted_by_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)

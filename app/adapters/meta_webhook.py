@@ -30,6 +30,7 @@ def _fallback_text_for_message_type(message_type: str | None) -> str:
         "video": "Video recibido",
         "audio": "Audio recibido",
         "sticker": "Sticker recibido",
+        "reaction": "Reaccion recibida",
     }
     return labels.get(str(message_type or "unknown").lower(), "Mensaje recibido")
 
@@ -92,6 +93,7 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         button_id = None
         media_id = None
         file_name = None
+        mime_type = None
         unsupported = False
         caption = None
         metadata = None
@@ -161,6 +163,38 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             media_id = _clean_text(document.get("id"))
             file_name = _clean_text(document.get("filename"))
             caption = _clean_text(document.get("caption"))
+            mime_type = _clean_text(document.get("mime_type"))
+
+        # --------------------------------------------------
+        # STICKER
+        # --------------------------------------------------
+        elif message_type == "sticker":
+            sticker = message.get("sticker", {})
+            media_id = _clean_text(sticker.get("id"))
+            mime_type = _clean_text(sticker.get("mime_type")) or "image/webp"
+            text = "Sticker recibido"
+            metadata = {
+                "sticker": {
+                    "media_id": media_id,
+                    "mime_type": mime_type,
+                    "animated": bool(sticker.get("animated")),
+                }
+            }
+
+        # --------------------------------------------------
+        # REACTION
+        # --------------------------------------------------
+        elif message_type == "reaction":
+            reaction = message.get("reaction", {})
+            target_message_id = _clean_text(reaction.get("message_id"))
+            emoji = _clean_text(reaction.get("emoji"),)
+            text = f"Reaccion recibida: {emoji}" if emoji else "Reaccion eliminada"
+            metadata = {
+                "reaction": {
+                    "message_id": target_message_id,
+                    "emoji": emoji,
+                }
+            }
 
         # --------------------------------------------------
         # OTROS (audio, video, sticker, etc.)
@@ -176,6 +210,7 @@ def parse_meta_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "button_id": button_id,
             "media_id": media_id,
             "file_name": file_name,
+            "mime_type": mime_type,
             "extra_json": metadata,
             "timestamp": timestamp,
             "is_status": False,

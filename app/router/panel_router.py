@@ -12,7 +12,7 @@ from app.schemas.panel import (
     PaginatedMessagesResponse
 )
 
-from app.adapters.whatsapp_client import send_whatsapp_message
+from app.adapters.whatsapp_client import _extract_meta_message_id, send_whatsapp_message
 from app.db.session import get_db
 from app.security.auth_service import (
     decode_panel_session,
@@ -74,6 +74,7 @@ from app.services.message_metadata import (
     build_outgoing_media_metadata,
     merge_message_metadata,
 )
+from app.services.message_reaction_service import attach_reactions_to_messages
 
 # ORDEN REAL DEL FLOW 
 FUNNEL_STEPS = STEP_ORDER
@@ -1483,6 +1484,7 @@ def get_messages(
         .all()
     )
     messages.reverse()
+    attach_reactions_to_messages(db, messages)
 
     return PaginatedMessagesResponse(
         data=[
@@ -1495,6 +1497,7 @@ def get_messages(
                 media_url=m.media_url,
                 file_name=m.file_name,
                 extra_json=m.extra_json,
+                reactions=getattr(m, "reactions_payload", []),
             )
             for m in messages
         ],
@@ -1548,7 +1551,8 @@ async def send_agent_message(
     )
 
     try:
-        await send_whatsapp_message(phone, content)
+        response = await send_whatsapp_message(phone, content)
+        provider_message_id = _extract_meta_message_id(response)
 
         now = mexico_now_naive()
         message = Message(
@@ -1556,6 +1560,7 @@ async def send_agent_message(
             phone=phone,
             direction="agent",
             content=content,
+            message_id=provider_message_id,
             created_at=now,
         )
 
@@ -1941,12 +1946,17 @@ async def resume_bot_control(
     
     # Enviar WhatsApp
     from app.adapters.whatsapp_client import send_whatsapp_message
-    await send_whatsapp_message(
+    response = await send_whatsapp_message(
         phone=session.phone,
         text=reply_text,
         buttons=botones,
         image_id=image_id
     )
+    provider_message_id = _extract_meta_message_id(response)
+    if provider_message_id and not bot_msg.message_id:
+        bot_msg.message_id = provider_message_id
+        db.commit()
+        db.refresh(bot_msg)
     
     # Broadcast Panel
     from app.websockets.manager import manager

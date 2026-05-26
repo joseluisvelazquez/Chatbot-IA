@@ -97,6 +97,61 @@ def test_outgoing_media_metadata_with_and_without_local_url():
     assert remote["media"]["status"] == "sent_without_local_preview"
 
 
+def test_sticker_payload_is_parsed_as_media():
+    parsed = parse_meta_payload(_payload({
+        "from": "5215551234567",
+        "id": "wamid.sticker",
+        "timestamp": "1710000000",
+        "type": "sticker",
+        "sticker": {
+            "id": "media-sticker-id",
+            "mime_type": "image/webp",
+            "animated": False,
+        },
+    }))
+
+    assert parsed["type"] == "sticker"
+    assert parsed["text"] == "Sticker recibido"
+    assert parsed["media_id"] == "media-sticker-id"
+    assert parsed["mime_type"] == "image/webp"
+    assert parsed["extra_json"]["sticker"]["mime_type"] == "image/webp"
+
+
+def test_reaction_payload_is_parsed_with_target_message_and_emoji():
+    parsed = parse_meta_payload(_payload({
+        "from": "5215551234567",
+        "id": "wamid.reaction",
+        "timestamp": "1710000000",
+        "type": "reaction",
+        "reaction": {
+            "message_id": "wamid.original",
+            "emoji": "👍",
+        },
+    }))
+
+    assert parsed["type"] == "reaction"
+    assert parsed["extra_json"]["reaction"] == {
+        "message_id": "wamid.original",
+        "emoji": "👍",
+    }
+
+
+def test_empty_reaction_payload_is_parsed_as_delete():
+    parsed = parse_meta_payload(_payload({
+        "from": "5215551234567",
+        "id": "wamid.reaction-delete",
+        "timestamp": "1710000000",
+        "type": "reaction",
+        "reaction": {
+            "message_id": "wamid.original",
+            "emoji": "",
+        },
+    }))
+
+    assert parsed["text"] == "Reaccion eliminada"
+    assert parsed["extra_json"]["reaction"]["emoji"] is None
+
+
 def test_format_money_cases():
     assert format_money(1000) == "$1,000.00"
     assert format_money("1000.00") == "$1,000.00"

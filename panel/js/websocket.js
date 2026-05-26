@@ -205,6 +205,23 @@ export function initWebSocket() {
             }
         }
 
+        if (data.type === "reaction_update" && data.payload) {
+            dispatch({
+                type: "messages/reaction_update",
+                payload: data.payload,
+            });
+
+            if (data.payload.orphan && data.payload.event_message) {
+                dispatch({
+                    type: "messages/add",
+                    payload: {
+                        sessionId: data.payload.session_id,
+                        message: data.payload.event_message,
+                    },
+                });
+            }
+        }
+
         if (data.type === "update_unread") {
             dispatch({
                 type: "conversations/set_unread",

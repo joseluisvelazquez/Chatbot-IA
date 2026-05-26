@@ -337,6 +337,45 @@ function upsertMessage(sessionId, message) {
     return true
 }
 
+function applyMessageReaction(payload = {}) {
+    const key = toSessionKey(payload.session_id)
+    const list = key ? state.messages.bySessionId[key] : null
+    if (!list || !payload.message_id) return false
+
+    const index = list.findIndex(item => Number(item.id) === Number(payload.message_id))
+    if (index < 0) return false
+
+    const current = list[index]
+    const reactions = Array.isArray(current.reactions) ? [...current.reactions] : []
+    const incoming = payload.reaction || {}
+    const phone = incoming.reacted_by_phone
+    const waId = payload.wa_message_id_original || incoming.wa_message_id_original
+    const reactionIndex = reactions.findIndex(item =>
+        (phone && item.reacted_by_phone === phone) ||
+        (waId && item.wa_message_id_original === waId)
+    )
+
+    if (payload.removed) {
+        if (reactionIndex >= 0) reactions.splice(reactionIndex, 1)
+    } else if (incoming.reaction_emoji) {
+        const nextReaction = {
+            ...incoming,
+            wa_message_id_original: waId,
+        }
+        if (reactionIndex >= 0) reactions[reactionIndex] = nextReaction
+        else reactions.push(nextReaction)
+    } else {
+        return false
+    }
+
+    list[index] = {
+        ...current,
+        reactions,
+    }
+    bumpMessagesVersion(key)
+    return true
+}
+
 function upsertVerification(item) {
     if (!item?.session_id) return false
 
@@ -780,6 +819,11 @@ export function dispatch(action) {
                 state.conversations._version++
             }
 
+            break
+        }
+
+        case "messages/reaction_update": {
+            applyMessageReaction(action.payload || {})
             break
         }
 
