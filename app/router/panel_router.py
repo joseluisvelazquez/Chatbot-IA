@@ -323,6 +323,15 @@ def append_unique_text(items: list[str], value: str | None) -> None:
     if text_value and text_value not in items:
         items.append(text_value)
 
+
+def bridge_customer_name_from_snapshot(snapshot: dict | None) -> str | None:
+    if not isinstance(snapshot, dict):
+        return None
+    customer = snapshot.get("customer") if isinstance(snapshot.get("customer"), dict) else {}
+    name = customer.get("name") or snapshot.get("name")
+    text_value = str(name or "").strip()
+    return text_value or None
+
 # =========================================
 # Endpoints para los dashboard (PAGINADO + DTO + LÓGICA DE NEGOCIO)
 # =========================================
@@ -1357,6 +1366,7 @@ def get_conversations(
         folio = str(s.folio) if s.folio else None
         cached_siga = get_cached_verification(s, folio, allow_stale=True) if folio else None
         no_cuenta = folio_to_no_cuenta.get(folio) if folio else None
+        bridge_name = bridge_customer_name_from_snapshot(cached_siga)
         if not no_cuenta and isinstance(cached_siga, dict) and cached_siga.get("no_cuenta"):
             no_cuenta = str(cached_siga["no_cuenta"])
 
@@ -1368,12 +1378,15 @@ def get_conversations(
                 "folios": [],
                 "unread_count": 0,
                 "last_customer_message_at": None,
+                "bridge_name": None,
             }
             grouped_sessions[phone_key] = group
 
         group["unread_count"] += int(s.unread_count or 0)
         append_unique_text(group["cuentas"], no_cuenta)
         append_unique_text(group["folios"], folio)
+        if bridge_name and not group.get("bridge_name"):
+            group["bridge_name"] = bridge_name
 
         last_customer_at = group["last_customer_message_at"]
         if s.last_customer_message_at and (
@@ -1392,7 +1405,7 @@ def get_conversations(
             ConversationResponse(
                 id=s.id,
                 phone=s.phone,
-                name=phone_to_name.get(phone_key),
+                name=phone_to_name.get(phone_key) or group.get("bridge_name"),
                 last_message=s.last_message,
                 last_message_at=s.last_message_at,
                 unread_count=group["unread_count"],

@@ -28,6 +28,28 @@ def strip_undefined(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
 
 
+def chat_name_from_bridge_cache(chat: Any) -> str | None:
+    extra = getattr(chat, "extra_json", None)
+    if not isinstance(extra, dict):
+        return None
+    siga_bridge = extra.get("siga_bridge")
+    if not isinstance(siga_bridge, dict):
+        return None
+
+    snapshot = None
+    cache = siga_bridge.get("verification_cache")
+    if isinstance(cache, dict) and isinstance(cache.get("snapshot"), dict):
+        snapshot = cache["snapshot"]
+    lookup = siga_bridge.get("verification_lookup")
+    if snapshot is None and isinstance(lookup, dict) and isinstance(lookup.get("data"), dict):
+        snapshot = lookup["data"]
+
+    customer = snapshot.get("customer") if isinstance(snapshot, dict) and isinstance(snapshot.get("customer"), dict) else {}
+    name = customer.get("name") if isinstance(customer, dict) else None
+    text = str(name or "").strip()
+    return text or None
+
+
 def build_message_payload(message: Any) -> dict[str, Any]:
     return {
         "id": getattr(message, "id", None),
@@ -54,7 +76,7 @@ def build_conversation_payload(chat: Any, message: Any | None = None) -> dict[st
         "id": getattr(chat, "id", None),
         "session_id": getattr(chat, "id", None),
         "phone": getattr(chat, "phone", None),
-        "name": None,
+        "name": chat_name_from_bridge_cache(chat),
         "last_message": last_message or "",
         "last_message_at": message_created_at or iso_datetime(getattr(chat, "last_message_at", None)) or "",
         "last_customer_message_at": iso_datetime(getattr(chat, "last_customer_message_at", None)),

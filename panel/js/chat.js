@@ -863,8 +863,25 @@ function renderHistoricalButtons(msg) {
 
     return `
         <div class="mt-2 flex flex-col gap-1">
-            <span class="text-[11px] font-semibold uppercase text-gray-500 dark:text-gray-300">Opciones</span>
+            <span class="text-[11px] font-semibold uppercase text-gray-500 dark:text-gray-600">Opciones</span>
             <div class="flex flex-wrap gap-1.5">${chips}</div>
+        </div>
+    `
+}
+
+function renderCustomerSelection(text) {
+    const match = String(text || "").match(/^Cliente seleccion[oó]:\s*(.+)$/i)
+    if (!match) return null
+
+    const selected = match[1].trim()
+    if (!selected) return null
+
+    return `
+        <div class="flex flex-wrap items-center gap-2">
+            <span>${escapeHtml("Cliente selecciono:")}</span>
+            <span class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-100 px-3 py-1 text-xs font-medium text-gray-800 shadow-none dark:border-slate-400 dark:bg-slate-500 dark:text-white dark:shadow-sm">
+                ${escapeHtml(selected)}
+            </span>
         </div>
     `
 }
@@ -1176,6 +1193,8 @@ function createMessageNode(rawMsg, timeOverride = "") {
         bodyContent = renderMediaFallbackCard(mediaMeta)
     } else if (typeof msg.content === "string" && msg.content.trim().startsWith("[BOTON]")) {
         bodyContent = `<div>${formatButtonMessageSafe(msg.content)}</div>`
+    } else if (typeof msg.content === "string" && renderCustomerSelection(msg.content)) {
+        bodyContent = renderCustomerSelection(msg.content)
     } else {
         bodyContent = `<div>${formatWhatsAppText(msg.content)}</div>`
     }
