@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import re
+import unicodedata
 
 from app.core.states.states import ChatState
 from app.core.intents.intents import detect_intent
@@ -95,6 +97,73 @@ STATES_ALLOW_AUTO_FOLIO = {
     ChatState.FUERA_DE_FLUJO,
     ChatState.FINALIZADO,
 }
+
+
+def _classify_doubt_to_info_state(text: str) -> ChatState | None:
+    if not text:
+        return None
+    text_lower = text.lower()
+    
+    # 1. Comprobante de acceso / mxcomp
+    if any(k in text_lower for k in ["comprobante", "mxcomp", "subir ticket", "cargar ticket", "subir pago", "enviar ticket", "subir mi pago", "enviar mi pago"]):
+        return ChatState.INFO_COMPROBANTE_ACCESO
+        
+    # 2. Métodos de pago
+    if any(k in text_lower for k in ["donde pago", "donde pagar", "dónde pago", "dónde pagar", "oxxo", "transferencia", "deposito", "depósito", "spei", "banco", "tarjeta", "clabe"]):
+        return ChatState.INFO_METODOS_PAGO
+        
+    # 3. Plan 3 meses
+    if any(k in text_lower for k in ["3 meses", "tres meses", "plan de 3", "plan 3", "liquidar a los 3", "liquidar en 3"]):
+        return ChatState.INFO_PLAN_3_MESES
+        
+    # 4. Otros planes
+    if any(k in text_lower for k in ["otros planes", "planes de pago", "cambiar plan", "mas largo", "más largo", "contrato"]):
+        return ChatState.INFO_OTROS_PLANES
+        
+    # 5. Pagos (semanal, quincenal, mensual, montos)
+    if any(k in text_lower for k in ["semanal", "quincenal", "mensual", "cuanto pago", "cuánto pago", "cada cuanto", "cada cuándo", "pagos quincenales", "pagos mensuales"]):
+        return ChatState.INFO_PAGOS
+        
+    # 6. Beneficios
+    if any(k in text_lower for k in ["beneficios", "mis beneficios", "activar beneficios", "regalo", "promocion", "promoción", "descuento de estudiante"]):
+        return ChatState.INFO_BENEFICIOS
+        
+    # 7. Fallback por IA
+    try:
+        from app.services.ai.ai_service import generate_raw_ai_response
+        prompt = f"""
+Clasifica la duda del usuario en uno de los siguientes estados informativos del chatbot:
+
+- INFO_PAGOS: Preguntas sobre los montos de pago (semanal, quincenal, mensual, cuánto tiene que pagar).
+- INFO_METODOS_PAGO: Preguntas sobre dónde o cómo pagar, cuentas bancarias, depósitos en OXXO, transferencias SPEI, tarjetas de débito.
+- INFO_COMPROBANTE_ACCESO: Preguntas sobre dónde subir el comprobante de pago, el sitio mxcomp.mx, o cómo obtener el código de cliente.
+- INFO_PLAN_3_MESES: Preguntas sobre el plan de liquidación a 3 meses (o 13 semanas).
+- INFO_OTROS_PLANES: Preguntas sobre plazos más largos o cambio de planes.
+- INFO_BENEFICIOS: Preguntas sobre los beneficios adicionales, regalos o promociones.
+
+Responde ÚNICAMENTE con el nombre exacto del estado en mayúsculas (ej: INFO_METODOS_PAGO) o la palabra NONE si no corresponde a ninguna de las opciones anteriores de forma clara.
+
+Duda del usuario: "{text}"
+Respuesta:"""
+        res = generate_raw_ai_response(prompt, task="info_classification")
+        if res:
+            res = res.strip().upper()
+            if "INFO_PAGOS" in res:
+                return ChatState.INFO_PAGOS
+            if "INFO_METODOS_PAGO" in res:
+                return ChatState.INFO_METODOS_PAGO
+            if "INFO_COMPROBANTE_ACCESO" in res:
+                return ChatState.INFO_COMPROBANTE_ACCESO
+            if "INFO_PLAN_3_MESES" in res:
+                return ChatState.INFO_PLAN_3_MESES
+            if "INFO_OTROS_PLANES" in res:
+                return ChatState.INFO_OTROS_PLANES
+            if "INFO_BENEFICIOS" in res:
+                return ChatState.INFO_BENEFICIOS
+    except Exception:
+        pass
+        
+    return None
 
 
 def _mask(value, *, visible: int = 4) -> str | None:
@@ -335,6 +404,7 @@ def process_message(
     db=None,
     bridge_verification=None,
 ) -> FlowResult:
+    #logger.info(f"🟢 [Flujo] Inicio process_message | Estado: {session.state} | Intent: {intent} | Texto: '{text}'")
 
     # --------------------------------------
     # Si mandó folio para iniciar
@@ -448,6 +518,21 @@ def process_message(
         new_previous_state = previous_state
 
     # ==========================================
+    # DETECCIÓN DE MENSAJE PREDETERMINADO DEL QR
+    # ==========================================
+    qr_text = text.strip() if text else ""
+    if "quiero activar mis beneficios" in qr_text.lower() and "mi folio es" in qr_text.lower() and not re.search(r"\d", qr_text):
+        session.folio = None
+        _log(to_state_override=ChatState.CAMBIAR_FOLIO)
+        return FlowResult(
+            reply=messages.PEDIR_FOLIO,
+            next_state=ChatState.CAMBIAR_FOLIO,
+            buttons=[],
+            previous_state=new_previous_state
+        )
+
+
+    # ==========================================
     # ESTADOS DE ESPERA Y ESCALAMIENTO (IGNORAR MENSAJES)
     # ==========================================
     escalation_states = {
@@ -457,23 +542,77 @@ def process_message(
         ChatState.DEVOLUCION_FINALIZADA
     }
     if current_state in escalation_states:
-        if current_state == ChatState.ESPERANDO_REGISTRO and intent == "CAMBIAR_FOLIO":
+        if current_state == ChatState.ESPERANDO_REGISTRO:
+            # Si el usuario presionó el botón de cambiar folio (y es válido),
+            # dejamos que pase de largo este bloque para que la validación
+            # de botones más abajo lo procese correctamente.
+            if intent == "CAMBIAR_FOLIO":
+                pass
+            else:
+                # Check if user sent a folio directly in their text message
+                direct_folio = extraer_folio_si_mensaje_de_folio(text, allow_folio_suelto=True)
+                if direct_folio:
+                    # Validate length of direct folio (must be >= 5 and <= 10)
+                    if len(str(direct_folio)) < 5 or len(str(direct_folio)) > 10:
+                        return FlowResult(
+                            reply="⚠️ El folio ingresado no es válido. Por favor, verifícalo e inténtalo de nuevo.",
+                            next_state=current_state,
+                            buttons=[{"id": "CAMBIAR_FOLIO", "label": "🔄 Volver a intentar"}],
+                            previous_state=previous_state
+                        )
+
+                    venta = _venta_or_bridge_for_folio(db, session, direct_folio, bridge_verification)
+                    if venta:
+                        # Folio exists! Proceed/advance
+                        target_state = ChatState.INICIO2
+                        
+                        verification_result = _check_verification_complete(direct_folio)
+                        if verification_result:
+                            return verification_result
+                        
+                        reset_verification_context_for_folio(session, direct_folio)
+                        _cache_bridge_payload_for_folio(session, direct_folio, bridge_verification)
+
+                        _log(to_state_override=target_state)
+
+                        reply_state, buttons, image_id = render_state(target_state, session, db)
+                        return FlowResult(
+                            reply=reply_state,
+                            next_state=target_state,
+                            buttons=buttons,
+                            image_id=image_id,
+                            previous_state=previous_state
+                        )
+                    else:
+                        # Folio does not exist! Stay in ESPERANDO_REGISTRO but with the new folio
+                        reset_verification_context_for_folio(session, direct_folio)
+                        _log(to_state_override=ChatState.ESPERANDO_REGISTRO)
+                        
+                        mensaje_saludo = messages.SALA_ESPERA.format(folio=direct_folio)
+                        return FlowResult(
+                            reply=mensaje_saludo,
+                            next_state=ChatState.ESPERANDO_REGISTRO,
+                            buttons=[{"id": "CAMBIAR_FOLIO", "label": "✏️ Cambiar folio"}],
+                            previous_state=previous_state
+                        )
+                
+                # El sistema está esperando a que el webhook externo cambie el estado
+                # o que un asesor humano atienda la conversación.
+                # Ignoramos cualquier mensaje del usuario para no romper el flujo ni interrumpir.
+                return FlowResult(
+                    reply=None,
+                    next_state=current_state,
+                    buttons=[],
+                    previous_state=previous_state
+                )
+        else:
+            # Para los demás estados de escalamiento, simplemente ignorar todo
             return FlowResult(
-                reply=messages.PEDIR_FOLIO,
-                next_state=ChatState.CAMBIAR_FOLIO,
+                reply=None,
+                next_state=current_state,
                 buttons=[],
                 previous_state=previous_state
             )
-            
-        # El sistema está esperando a que el webhook externo cambie el estado
-        # o que un asesor humano atienda la conversación.
-        # Ignoramos cualquier mensaje del usuario para no romper el flujo ni interrumpir.
-        return FlowResult(
-            reply=None,
-            next_state=current_state,
-            buttons=[],
-            previous_state=previous_state
-        )
 
     # ==========================================
     # VALIDACIÓN DEL RETO DE SEGURIDAD
@@ -568,6 +707,16 @@ def process_message(
             
         if current_state == ChatState.SELECCIONAR_FOLIO and intent.startswith("SELECCIONAR_FOLIO_"):
             valid_button_ids.append(intent)
+
+        # CAMBIAR_FOLIO se envía dinámicamente por las validaciones de folio
+        # (folio inválido, solo letras, etc.) — aceptarlo solo en esos estados
+        folio_states_with_retry = {
+            ChatState.ESPERA, ChatState.CAMBIAR_FOLIO,
+            ChatState.CAMBIAR_FOLIO_DEVOLUCION, ChatState.CAMBIAR_FOLIO_DESCUENTO,
+            ChatState.INICIO, ChatState.ESPERANDO_REGISTRO,
+        }
+        if current_state in folio_states_with_retry and intent == "CAMBIAR_FOLIO":
+            valid_button_ids.append("CAMBIAR_FOLIO")
             
         if intent not in valid_button_ids:
             logger.info(f"Botón obsoleto ignorado: {intent} (estado actual: {current_state})")
@@ -587,6 +736,17 @@ def process_message(
                 previous_state=new_previous_state
             )
 
+        # Si CAMBIAR_FOLIO pasó la validación, pedir folio de nuevo
+        if intent == "CAMBIAR_FOLIO":
+            session.folio = None
+            _log(to_state_override=ChatState.CAMBIAR_FOLIO)
+            return FlowResult(
+                reply=messages.PEDIR_FOLIO,
+                next_state=ChatState.CAMBIAR_FOLIO,
+                buttons=[],
+                previous_state=previous_state
+            )
+
         detected_intent = intent
         action = "advance"
     else:
@@ -594,9 +754,6 @@ def process_message(
         # 1. Detectar intención (con prioridad)
         # --------------------------------------
         text_clean = text.strip().lower()
-
-        import re
-        import unicodedata
 
         def clean_for_match(txt):
             txt = txt.lower()
@@ -821,6 +978,50 @@ def process_message(
 
         if not button_matched:
             action = route_intent(current_state, detected_intent)
+            #logger.info(f"🔀 [Router] Estado: {current_state.value} | Intent Final: {detected_intent} -> Acción: {action}")
+
+        # ==========================================
+        # INTERCEPCIÓN DE DUDAS (JUMP-AHEAD A PREGUNTAS INFO_)
+        # ==========================================
+        if (detected_intent == "doubt" or action == "ai_doubt") and not (intent and intent.isupper()):
+            jump_state = _classify_doubt_to_info_state(text)
+            if jump_state:
+                # Determinar punto de retorno
+                if current_state in {ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.FUERA_DE_FLUJO, ChatState.ESPERA}:
+                    suspended_state_val = session.previous_state or ChatState.INICIO2.value
+                else:
+                    suspended_state_val = current_state.value
+
+                from app.core.verification.verification_schema import VERIFICATION_STEP_ORDER
+                from app.services.verification_tracker import STEP_MAP
+
+                suspended_step = STEP_MAP.get(ChatState(suspended_state_val))
+                jump_step = STEP_MAP.get(jump_state)
+
+                # Validar que sea un paso posterior para calificar como jump-ahead
+                if (suspended_step in VERIFICATION_STEP_ORDER and jump_step in VERIFICATION_STEP_ORDER 
+                    and VERIFICATION_STEP_ORDER.index(jump_step) > VERIFICATION_STEP_ORDER.index(suspended_step)):
+                    
+                    # 1. Guardar estado suspendido
+                    session.extra_json = session.extra_json or {}
+                    session.extra_json["verification_suspended_state"] = suspended_state_val
+                    
+                    # 2. Transicionar estado
+                    session.state = jump_state.value
+                    session.previous_state = suspended_state_val
+                    
+                    # 3. Renderizar el estado de información como respuesta
+                    reply_state, buttons, image_id = render_state(jump_state, session, db)
+                    
+                    _log(to_state_override=jump_state, from_state_override=current_state)
+                    
+                    return FlowResult(
+                        reply=reply_state,
+                        next_state=jump_state,
+                        buttons=buttons,
+                        previous_state=suspended_state_val,
+                        image_id=image_id
+                    )
 
     # ==========================================
     # DETECTAR SI TIENE VERIFICACIÓN ACTIVA Y TRATA DE CAMBIAR DE FOLIO
@@ -868,6 +1069,14 @@ def process_message(
     detected_folio_is_new = bool(folio_detectado and str(folio_detectado) != current_folio)
 
     if folio_detectado and (not session.folio or detected_folio_is_new) and current_state in STATES_ALLOW_AUTO_FOLIO:
+        if len(str(folio_detectado)) < 5 or len(str(folio_detectado)) > 10:
+            return FlowResult(
+                reply="⚠️ El folio ingresado no es válido. Por favor, verifícalo e inténtalo de nuevo.",
+                next_state=current_state,
+                buttons=[{"id": "CAMBIAR_FOLIO", "label": "🔄 Volver a intentar"}],
+                previous_state=previous_state
+            )
+
         venta = _venta_or_bridge_for_folio(db, session, folio_detectado, bridge_verification)
 
         if venta:
@@ -897,10 +1106,26 @@ def process_message(
             )
 
     # --------------------------------------
+    # 2.5 Validación de letras en estados de folio
+    # --------------------------------------
+
+    estados_folio = {ChatState.ESPERA, ChatState.CAMBIAR_FOLIO, ChatState.CAMBIAR_FOLIO_DEVOLUCION, ChatState.CAMBIAR_FOLIO_DESCUENTO, ChatState.INICIO}
+    
+    if current_state in estados_folio and not folio_detectado and not button_matched and detected_intent != "start_verification":
+        if text and not re.search(r"\d", text) and detected_intent in ("other", "ambiguous", None, "greeting"):
+            return FlowResult(
+                reply="⚠️ Parece que ingresaste solo letras. Recuerda que el folio es un código numérico. Por favor, intenta de nuevo escribiendo solo los números de tu folio.",
+                next_state=current_state,
+                buttons=[{"id": "CAMBIAR_FOLIO", "label": "🔄 Volver a intentar"}],
+                previous_state=previous_state
+            )
+
+    # --------------------------------------
     # 3. Menú fuera de flujo
     # --------------------------------------
 
     if current_state in [ChatState.ESPERA, ChatState.FUERA_DE_FLUJO] and action != "advance" and detected_intent != "start_verification":
+        #logger.info(f"⏭️ [Flujo] Redirigiendo a MENU_AYUDA (estado: {current_state.value}, sin avance).")
         return FlowResult(
             reply=messages.MENU_AYUDA,
             next_state=ChatState.MENU_AYUDA,
@@ -913,6 +1138,24 @@ def process_message(
 
     if detected_intent == "start_verification":
         folio_a_buscar = folio_detectado if folio_detectado else folio
+        
+        if not folio_a_buscar:
+            return FlowResult(
+                reply=messages.PEDIR_FOLIO_INICIO,
+                next_state=ChatState.CAMBIAR_FOLIO,
+                buttons=[],
+                previous_state=new_previous_state
+            )
+
+        if len(str(folio_a_buscar)) < 5 or len(str(folio_a_buscar)) > 10:
+            next_state_for_invalid = ChatState.CAMBIAR_FOLIO if current_state == ChatState.INICIO else current_state
+            return FlowResult(
+                reply="⚠️ El folio ingresado no es válido. Por favor, verifícalo e inténtalo de nuevo.",
+                next_state=next_state_for_invalid,
+                buttons=[{"id": "CAMBIAR_FOLIO", "label": "🔄 Volver a intentar"}],
+                previous_state=new_previous_state
+            )
+
         venta = _venta_or_bridge_for_folio(db, session, folio_a_buscar, bridge_verification)
 
         if not venta:
@@ -1111,6 +1354,7 @@ def process_message(
     if special:
         special_state = special.get("state")
         _log(special_state)
+        #logger.info(f"✨ [Flujo] Caso especial manejado → Siguiente estado: {special_state.value if hasattr(special_state, 'value') else special_state}")
 
         return FlowResult(
             reply=special.get("reply"),
@@ -1262,6 +1506,7 @@ def process_message(
             reply = f"{faq_response}\n\n{messages.CONTINUAR_VERIFICACION}\n\n{reply_state}"
             image_id = faq_image_id or image_id
         else:
+            #logger.info(f"⏭️ [Flujo] Redirigiendo a MENU_AYUDA (FAQ en estado {original_state_for_previous.value}).")
             current_state = ChatState.MENU_AYUDA
             reply = f"{faq_response}\n\n{messages.EN_QUE_MAS_AYUDAR}"
             buttons = get_menu_ayuda_buttons(new_previous_state)
@@ -1342,6 +1587,7 @@ def process_message(
         else:
             msg_reply = f"{messages.NO_ENTENDIDO}\n\n{messages.MENU_AYUDA}"
 
+        #logger.info(f"❓ [Flujo] Fallback de estado. Redirigiendo a MENU_AYUDA (no se entendió en {current_state.value}).")
         return FlowResult(
             reply=msg_reply,
             next_state=ChatState.MENU_AYUDA,
@@ -1417,6 +1663,7 @@ def process_message(
         elif not skip_verification_append and reply_state:
             reply = f"{ai_reply}\n\n{messages.CONTINUAR_VERIFICACION}\n\n{reply_state}"
         else:
+            #logger.info(f"⏭️ [Flujo] Redirigiendo a MENU_AYUDA (Duda IA en estado {original_state_for_previous.value}).")
             current_state = ChatState.MENU_AYUDA
             reply = f"{ai_reply}\n\n{messages.EN_QUE_MAS_AYUDAR}"
             buttons = get_menu_ayuda_buttons(new_previous_state)
@@ -1448,6 +1695,37 @@ def process_message(
         detected_intent=detected_intent,
         previous_state=previous_state
     )
+
+    # Interceptar si venimos de un estado saltado (jump-ahead) y el usuario confirmó/avanzó
+    if session.extra_json and "verification_suspended_state" in session.extra_json:
+        if action == "advance" or detected_intent == "affirmative":
+            # 1. Marcar el paso de información actual como completado en VerificacionCuenta
+            from app.services.verification_tracker import STEP_MAP
+            jumped_step = STEP_MAP.get(current_state)
+            if jumped_step and db and session.folio:
+                try:
+                    from app.services.verification_service import VerificationService
+                    service = VerificationService(db)
+                    no_cuenta = service.resolve_no_cuenta_from_folio(session.folio) or _no_cuenta_from_bridge(session, session.folio, bridge_verification)
+                    if no_cuenta:
+                        service.update_step_atomic(
+                            no_cuenta=no_cuenta,
+                            step=jumped_step,
+                            value=1,
+                            phone=session.phone,
+                            allow_out_of_order=True
+                        )
+                except Exception as e:
+                    logger.warning(f"Error marking jumped step {jumped_step} on confirm: {e}")
+            
+            # 2. Retomar el estado original suspendido
+            suspended_state_val = session.extra_json.pop("verification_suspended_state")
+            session.extra_json = dict(session.extra_json)
+            next_state = ChatState(suspended_state_val)
+
+    # Si el flujo va a un estado de cambio de folio, limpiar el folio de la sesión
+    if next_state in (ChatState.CAMBIAR_FOLIO, ChatState.CAMBIAR_FOLIO_DEVOLUCION, ChatState.CAMBIAR_FOLIO_DESCUENTO):
+        session.folio = None
 
     # --------------------------------------
     # FIX RESUME (__RESUME__)

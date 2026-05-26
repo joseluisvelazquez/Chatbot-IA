@@ -54,7 +54,6 @@ INTENT_KEYWORDS = {
     # Sociales
     # -------------------------
     "greeting": [
-        "hola",
         "buenas",
         "buen dia",
         "buenos dias",

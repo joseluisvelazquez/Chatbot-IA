@@ -68,6 +68,13 @@ def handle_cambiar_folio(context):
 
     nuevo_folio = extraer_folio(context.text)
     
+    if nuevo_folio and (len(str(nuevo_folio)) < 5 or len(str(nuevo_folio)) > 10):
+        return {
+            "reply": "⚠️ El folio ingresado no es válido. Por favor, verifícalo e inténtalo de nuevo.",
+            "state": context.state,
+            "buttons": [{"id": "CAMBIAR_FOLIO", "label": "🔄 Volver a intentar"}]
+        }
+    
     venta = obtener_venta_por_folio(context.db, nuevo_folio) if nuevo_folio else None
     if not venta and nuevo_folio:
         bridge_payload = getattr(context, "bridge_verification", None)
@@ -212,6 +219,7 @@ def handle_menu(context):
         except ValueError:
             resume_state = ChatState.INICIO
 
+        resume_state = handle_flow_skips(context, resume_state)
         rendered_reply, rendered_buttons, rendered_img = render_state(resume_state, context.session, context.db)
 
         reply_text = msg.CONTINUAR_VERIFICACION_MENU
@@ -509,6 +517,7 @@ def handle_devolucion(context):
                 }
             else:
                 # Estaba en medio de la verificación
+                prev_state = handle_flow_skips(context, prev_state)
                 from app.core.states.state_renderer import render_state
                 reply_state, buttons, img = render_state(prev_state, context.session, context.db)
                 
@@ -578,6 +587,33 @@ def handle_flow_skips(context, next_state):
     if not venta:
         return next_state
 
+    # 1. Saltos dinámicos basados en pasos ya verificados
+    if context.db and context.folio:
+        try:
+            from app.services.verification_service import VerificationService
+            from app.core.verification.verification_schema import normalize_progress_payload
+            from app.siga.siga_repository import obtener_verificacion_por_no_cuenta
+            from app.services.verification_tracker import STEP_MAP
+            from app.core.flow.flow import NEXT_STATE_MAP
+
+            no_cuenta = VerificationService(context.db).resolve_no_cuenta_from_folio(context.folio)
+            if no_cuenta:
+                verificacion = obtener_verificacion_por_no_cuenta(context.db, no_cuenta)
+                if verificacion:
+                    progress = normalize_progress_payload(verificacion.json)
+                    visited = set()
+                    while next_state in NEXT_STATE_MAP and next_state not in visited:
+                        visited.add(next_state)
+                        step = STEP_MAP.get(next_state)
+                        # Si el paso de verificación ya está marcado como completo (1), lo saltamos
+                        if step and progress.get(step) == 1:
+                            next_state = NEXT_STATE_MAP[next_state]
+                        else:
+                            break
+        except Exception:
+            pass
+
+    # 2. Saltos estáticos preexistentes
     if next_state == ChatState.COMPONENTES_FALTANTES:
         inc = get_open_inconsistencia(
             db=context.db,
@@ -596,15 +632,15 @@ def handle_flow_skips(context, next_state):
         }
 
         if not disponibles:
-            return ChatState.CONFIRMAR_PAGO_INICIAL
+            next_state = ChatState.CONFIRMAR_PAGO_INICIAL
 
     if next_state == ChatState.CONFIRMAR_COMPONENTES:
         if not requires_components_check(venta):
-            return ChatState.CONFIRMAR_ESTADO_PRODUCTO
+            next_state = ChatState.CONFIRMAR_ESTADO_PRODUCTO
 
     if next_state == ChatState.INFO_BENEFICIOS:
         if not requires_components_check(venta):
-            return ChatState.INFO_BENEFICIOS2
+            next_state = ChatState.INFO_BENEFICIOS2
 
     return next_state
 

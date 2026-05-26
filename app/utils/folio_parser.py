@@ -31,7 +31,8 @@ def extraer_folio_explicito(texto: str) -> str | None:
     folio = (match.group(1) or "").strip()
     if not re.search(r"\d", folio):
         return None
-    return folio or None
+    # Quitamos la restricción de longitud aquí para manejarla con un mensaje en flow_engine
+    return folio
 
 
 def extract_folio(text: str) -> str | None:
@@ -43,13 +44,14 @@ def extract_folio(text: str) -> str | None:
 def extraer_folio(texto: str) -> str | None:
     """
     Extrae un posible folio del texto enviado por el usuario.
-    Busca cualquier número de 4 a 7 dígitos dentro del mensaje.
+    Busca cualquier número de 1 o más dígitos dentro del mensaje.
     """
 
     if not texto:
         return None
 
-    match = re.search(r"\b\d{4,12}\b", texto)
+    # Se cambia a {1,} para atrapar todos los folios y validar su longitud en flow_engine
+    match = re.search(r"\b\d{1,}\b", texto)
 
     if match:
         return match.group()

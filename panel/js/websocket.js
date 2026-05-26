@@ -172,6 +172,9 @@ export function initWebSocket() {
                 last_message_at: conversationPatch.last_message_at || message.created_at || data.conversation?.last_message_at || "",
                 last_customer_message_at: data.conversation?.last_customer_message_at || null,
             };
+            
+            // 🛡️ Prevenir que el estado crudo (ej. "CONFIRMAR_NOMBRE") sobrescriba el estado mapeado ("inconsistent")
+            delete conversation.status;
 
             dispatch({
                 type: "conversations/upsert",
@@ -227,7 +230,18 @@ export function initWebSocket() {
             ["verification_update", "verification_updated", "siga_snapshot_updated"].includes(data.type)
             && extractVerificationPayload(data)
         ) {
-            queueVerificationPatch(extractVerificationPayload(data));
+            const payload = extractVerificationPayload(data);
+            queueVerificationPatch(payload);
+            dispatch({
+                type: "conversations/upsert",
+                payload: stripUndefinedEntries({
+                    id: payload.session_id,
+                    session_id: payload.session_id,
+                    status: payload.status,
+                    folio: payload.folio,
+                    no_cuenta: payload.no_cuenta
+                })
+            });
         }
         if (data.type === "verification_context_changed" && extractVerificationPayload(data)) {
             const payload = extractVerificationPayload(data);
@@ -249,6 +263,11 @@ export function initWebSocket() {
             const payload = data.payload || {};
             const patch = data.patch || {};
             const sessionId = payload.session_id || data.session_id;
+            
+            // 🛡️ Prevenir que el estado crudo sobrescriba el estado mapeado
+            delete patch.status;
+            delete payload.status;
+
             dispatch({
                 type: "conversations/upsert",
                 payload: {
