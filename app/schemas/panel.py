@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime
 
 
@@ -37,6 +37,7 @@ class MessageResponse(BaseModel):
     type: Optional[str] = None
     media_url: Optional[str] = None
     file_name: Optional[str] = None
+    extra_json: Optional[dict[str, Any]] = None
 
 
 class PaginatedMessagesResponse(BaseModel):

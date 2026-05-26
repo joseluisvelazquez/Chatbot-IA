@@ -532,6 +532,14 @@ function normalizeMessage(msg) {
         normalized.media_url = resolveMediaUrl(normalized.media_url)
     }
 
+    if (normalized.extra_json && typeof normalized.extra_json === "string") {
+        try {
+            normalized.extra_json = JSON.parse(normalized.extra_json)
+        } catch {
+            normalized.extra_json = null
+        }
+    }
+
     if (!normalized.created_at) {
         normalized.created_at = new Date().toISOString()
     }
@@ -706,7 +714,7 @@ function renderSidebarAccounts(value) {
 function formatWhatsAppText(text) {
     if (!text) return ""
 
-    let formatted = text
+    let formatted = escapeHtml(text)
         .replace(/\n/g, "<br>")
         .replace(/\*(.*?)\*/g, "<b>$1</b>")
         .replace(/_(.*?)_/g, "<i>$1</i>")
@@ -806,6 +814,78 @@ function formatButtonMessage(text) {
         ">
             🔘 ${label}
         </span>
+    `
+}
+
+function formatButtonMessageSafe(text) {
+    if (!text) return text
+    const match = text.match(/\[BOTON\]\s*(.+)/)
+    if (!match) return escapeHtml(text)
+
+    const key = match[1].trim()
+    let label = BUTTON_LABELS[key] || key
+
+    if (!BUTTON_LABELS[key]) {
+        if (key.endsWith("_SI")) label = "Confirmo " + key.replace("_SI", "").toLowerCase()
+        else if (key.endsWith("_NO")) label = "Rechazo " + key.replace("_NO", "").toLowerCase()
+        else if (key.endsWith("_DUDA")) label = "Tiene dudas"
+        else if (key.endsWith("_OK")) label = "Confirmo"
+        else label = key.replaceAll("_", " ").toLowerCase()
+    }
+
+    return `
+        <span class="inline-flex items-center gap-1 bg-gray-100 dark:bg-slate-500 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-400 px-3 py-1 rounded-md text-xs font-medium shadow-none dark:shadow-sm">
+            ${escapeHtml(label)}
+        </span>
+    `
+}
+
+function getMessageMetadata(msg) {
+    return msg?.extra_json && typeof msg.extra_json === "object" ? msg.extra_json : {}
+}
+
+function renderHistoricalButtons(msg) {
+    const metadata = getMessageMetadata(msg)
+    const interactive = metadata.interactive && typeof metadata.interactive === "object"
+        ? metadata.interactive
+        : null
+    const buttons = Array.isArray(interactive?.buttons) ? interactive.buttons : []
+    if (!buttons.length) return ""
+
+    const chips = buttons.map((button) => {
+        const title = button?.title || button?.label || button?.text || "Opcion"
+        return `
+            <span class="inline-flex items-center rounded-md border border-blue-200 bg-white/80 px-2.5 py-1 text-xs font-medium text-blue-800 shadow-sm dark:border-slate-500 dark:bg-slate-700 dark:text-slate-100">
+                ${escapeHtml(title)}
+            </span>
+        `
+    }).join("")
+
+    return `
+        <div class="mt-2 flex flex-col gap-1">
+            <span class="text-[11px] font-semibold uppercase text-gray-500 dark:text-gray-300">Opciones</span>
+            <div class="flex flex-wrap gap-1.5">${chips}</div>
+        </div>
+    `
+}
+
+function mediaLabel(type) {
+    if (type === "image") return "Imagen enviada"
+    if (type === "video") return "Video enviado"
+    if (type === "document") return "Documento enviado"
+    return "Media enviada"
+}
+
+function renderMediaFallbackCard(media) {
+    if (!media || typeof media !== "object") return ""
+    const type = String(media.type || "media").toLowerCase()
+    const caption = media.caption || ""
+    return `
+        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-100">
+            <div class="font-medium">${escapeHtml(mediaLabel(type))}</div>
+            ${caption ? `<div class="mt-1 text-xs text-gray-500 dark:text-gray-300">${formatWhatsAppText(caption)}</div>` : ""}
+            <div class="mt-1 text-[11px] text-gray-400 dark:text-gray-300">Enviado sin preview local</div>
+        </div>
     `
 }
 
@@ -1026,18 +1106,22 @@ function createMessageNode(rawMsg, timeOverride = "") {
                     ""
 
     let bodyContent = ""
-    const mediaUrl = msg.media_url
+    const metadata = getMessageMetadata(msg)
+    const mediaMeta = metadata.media && typeof metadata.media === "object" ? metadata.media : null
+    const mediaUrl = msg.media_url || (mediaMeta?.url ? resolveMediaUrl(mediaMeta.url) : null)
+    const messageType = msg.type || mediaMeta?.type
 
     if (mediaUrl) {
-        if (msg.type === "image") {
+        const safeMediaUrl = escapeHtml(mediaUrl)
+        if (messageType === "image") {
             trackImageUrl(mediaUrl)
             bodyContent = `
                 <div class="flex flex-col gap-1">
                     <img
-                        src="${mediaUrl}"
+                        src="${safeMediaUrl}"
                         data-open-viewer
+                        data-media-url="${safeMediaUrl}"
                         class="max-w-full sm:max-w-[380px] max-h-[420px] object-contain rounded-lg cursor-pointer hover:opacity-90"
-                        onclick="openImageViewer('${mediaUrl}')"
                         loading="lazy"
                     />
                     ${cleanContent
@@ -1046,9 +1130,24 @@ function createMessageNode(rawMsg, timeOverride = "") {
                 }
                 </div>
             `
+        } else if (messageType === "video") {
+            bodyContent = `
+                <div class="flex flex-col gap-1">
+                    <video
+                        src="${safeMediaUrl}"
+                        controls
+                        preload="metadata"
+                        class="max-w-full sm:max-w-[420px] max-h-[420px] rounded-lg bg-black"
+                    ></video>
+                    ${cleanContent
+                    ? `<span class="text-sm">${formatWhatsAppText(cleanContent)}</span>`
+                    : `<span class="text-sm font-medium">${escapeHtml(mediaLabel("video"))}</span>`
+                }
+                </div>
+            `
         } else {
             bodyContent = `
-                <a href="${mediaUrl}" target="_blank" rel="noopener noreferrer"
+                <a href="${safeMediaUrl}" target="_blank" rel="noopener noreferrer"
                     class="flex items-center gap-3 p-2 rounded-lg bg-gray-100 dark:bg-slate-600
                         hover:bg-gray-200 dark:hover:bg-slate-500 transition cursor-pointer">
 
@@ -1058,7 +1157,7 @@ function createMessageNode(rawMsg, timeOverride = "") {
 
                     <div class="flex flex-col min-w-0">
                         <span class="text-sm font-medium truncate">
-                            ${msg.file_name || "Archivo"}
+                            ${escapeHtml(msg.file_name || mediaLabel(messageType) || "Archivo")}
                         </span>
                         <span class="text-xs text-gray-500 dark:text-gray-300">
                             Abrir documento
@@ -1073,11 +1172,15 @@ function createMessageNode(rawMsg, timeOverride = "") {
                 }
             `
         }
+    } else if (mediaMeta) {
+        bodyContent = renderMediaFallbackCard(mediaMeta)
     } else if (typeof msg.content === "string" && msg.content.trim().startsWith("[BOTON]")) {
-        bodyContent = `<div>${formatButtonMessage(msg.content)}</div>`
+        bodyContent = `<div>${formatButtonMessageSafe(msg.content)}</div>`
     } else {
         bodyContent = `<div>${formatWhatsAppText(msg.content)}</div>`
     }
+
+    bodyContent += renderHistoricalButtons(msg)
 
     const metaClass =
         msg.direction === "in"
@@ -1090,6 +1193,13 @@ function createMessageNode(rawMsg, timeOverride = "") {
             ${label ? `${label} · ${time}` : time}
         </div>
     `
+
+    bubble.querySelectorAll("[data-open-viewer]").forEach((item) => {
+        item.addEventListener("click", () => {
+            const url = item.getAttribute("data-media-url")
+            if (url) openImageViewer(url)
+        })
+    })
 
     wrapper.appendChild(bubble)
     return wrapper

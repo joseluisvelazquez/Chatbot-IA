@@ -5,6 +5,7 @@ from app.services.siga_bridge_sale import (
     get_cached_bridge_verification_payload,
     normalize_siga_verification_snapshot,
 )
+from app.utils.money import format_money
 
 def _normalize(text: str) -> str:
     """Elimina acentos y pasa a minúsculas para mejorar el match."""
@@ -114,13 +115,13 @@ def _build_faq_response(item: dict, venta=None, session=None, bridge_verificatio
             
             response = item["response_dinamica"].format(
                 fecha_limite=calculos.get("fecha_limite", "la fecha indicada"),
-                importe_quincenal=calculos.get("importe_quincenal") or "no disponible",
-                importe_mensual=calculos.get("importe_mensual") or "no disponible",
+                importe_quincenal=format_money(calculos.get("importe_quincenal")) if calculos.get("importe_quincenal") else "no disponible",
+                importe_mensual=format_money(calculos.get("importe_mensual")) if calculos.get("importe_mensual") else "no disponible",
                 numero_cuenta=numero_cuenta or "",
                 numero_cuenta_referencia=numero_cuenta_referencia or "el numero de cuenta mostrado",
                 codigo_cliente=codigo_cliente or "el codigo de cliente mostrado",
-                pago_minimo=calculos.get("pago_minimo") or "no disponible",
-                importe_semanal_3m=calculos_3m.get("importe_semanal_3m") or "no disponible"
+                pago_minimo=format_money(calculos.get("pago_minimo")) if calculos.get("pago_minimo") else "no disponible",
+                importe_semanal_3m=format_money(calculos_3m.get("importe_semanal_3m")) if calculos_3m.get("importe_semanal_3m") else "no disponible"
             )
         except Exception:
             response = item["response"]

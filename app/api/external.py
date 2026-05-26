@@ -19,6 +19,11 @@ from app.core.states.states import ChatState
 from app.db.models import ChatSessions
 from app.db.session import get_db
 from app.services.message_service import save_message
+from app.services.message_metadata import (
+    build_outgoing_interactive_metadata,
+    build_outgoing_media_metadata,
+    merge_message_metadata,
+)
 from app.services.session_context import reset_verification_context_for_folio
 from app.services.siga_bridge import (
     SigaBridgeBadRequestError,
@@ -195,6 +200,24 @@ async def _send_pending_message(db: Session, chat: ChatSessions) -> None:
     await _send_and_broadcast(chat, bot_msg, messages.DATOS_VERIFICACION_PREPARANDO, [], None)
 
 
+def _outgoing_metadata(reply_text: str, buttons: list[dict], image_id: str | None) -> tuple[str, str | None, dict[str, Any] | None]:
+    flow_media_type = "video" if str(image_id or "").lower().endswith(".mp4") else "image" if image_id else None
+    media_metadata = build_outgoing_media_metadata(
+        source=image_id,
+        caption=reply_text,
+        media_type=flow_media_type,
+    )
+    media = media_metadata.get("media") if isinstance(media_metadata, dict) else None
+    return (
+        str(media.get("type") or "text") if isinstance(media, dict) else "text",
+        media.get("url") if isinstance(media, dict) else None,
+        merge_message_metadata(
+            build_outgoing_interactive_metadata(reply_text, buttons),
+            media_metadata,
+        ),
+    )
+
+
 @router.post("/api/external/ventas/trigger")
 async def trigger_verificacion(
     payload: dict[str, Any] = Body(default_factory=dict),
@@ -338,12 +361,20 @@ async def trigger_verificacion(
             },
         )
 
+    outgoing_type, outgoing_media_url, extra_json = _outgoing_metadata(
+        reply_text,
+        botones_inicio,
+        image_id,
+    )
     bot_msg = save_message(
         db=db,
         session_id=chat.id,
         phone=chat.phone,
         direction="out",
         content=reply_text,
+        type=outgoing_type,
+        media_url=outgoing_media_url,
+        extra_json=extra_json,
     )
     chat.state = ChatState.INICIO.value
     chat.previous_state = None

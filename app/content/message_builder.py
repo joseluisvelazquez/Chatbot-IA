@@ -1,9 +1,9 @@
 from app.content import messages
 from decimal import Decimal
 from app.pricing.payment_plans import PLANES_POR_MESES
-from decimal import Decimal
 from app.pricing.payment_plans import _redondear_entero_amigable
 from app.utils.account_reference import format_account_reference
+from app.utils.money import format_money
 
 
 def _clean_access_value(value) -> str | None:
@@ -16,15 +16,7 @@ def _clean_access_value(value) -> str | None:
 
 
 def _format_money_value(value) -> str:
-    clean = _clean_access_value(value)
-    if not clean:
-        return str(value)
-    normalized = clean.replace("$", "").replace(",", "").strip()
-    try:
-        amount = Decimal(normalized)
-    except Exception:
-        return clean
-    return f"{amount:,.2f}"
+    return format_money(value)
 
 
 class MessageBuilder:
@@ -118,7 +110,7 @@ class MessageBuilder:
         def money_aligned(val, prefix=''):
             # U+2007 es el "Figure Space", tiene el grosor exacto de un número en WhatsApp.
             # Nos ayuda a alinear los decimales verticalmente sin usar la fuente de código.
-            txt = f"{prefix}${val:,.2f}"
+            txt = f"{prefix}{format_money(val)}"
             return txt.rjust(11, '\u2007')
 
         # Usamos el Figure Space repetido para empujar las cantidades y alinearlas.
@@ -137,7 +129,7 @@ class MessageBuilder:
     def build_devolucion_confirmacion() -> str:
         return (
             "Si es posible realizar la devolución del equipo, solo necesitas seguir el siguiente proceso:\n\n"
-            "- Se deberá cubrir un cargo de $850 por gastos de traslado y gestión.\n"
+            "- Se deberá cubrir un cargo de $850.00 por gastos de traslado y gestión.\n"
             "- Posteriormente se le notificará el día de recolección.\n\n"
             "¿Deseas continuar con la devolución?"
         )

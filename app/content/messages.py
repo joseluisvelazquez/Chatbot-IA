@@ -42,14 +42,14 @@ CONFIRMAR_COMPONENTES = (
     "¿Recibiste los 7 componentes?"
 )
 
-CONFIRMAR_PAGO = "💲 ¿Tu pago inicial fue por *${importe_pago_inicial}*?"
+CONFIRMAR_PAGO = "💲 ¿Tu pago inicial fue por *{importe_pago_inicial}*?"
 
 INFO_PAGOS = (
     "⏳ Realiza tu primer pago a más tardar el *{fecha_limite}*.\n\n"
     "🪙 El importe mínimo semanal es por *{pago_minimo}*.\n\n"
     "Puedes realizar tus pagos:\n"
-    "• 📆 Quincenalmente por *${importe_quincenal}*\n"
-    "• 📆 Mensualmente por *${importe_mensual}*\n"
+    "• 📆 Quincenalmente por *{importe_quincenal}*\n"
+    "• 📆 Mensualmente por *{importe_mensual}*\n"
     "(siempre y cuando lo hagas por adelantado)\n\n"
     "¿Está claro o tienes alguna duda respecto a los pagos?"
 )
@@ -75,12 +75,12 @@ INFO_COMPROBANTE_ACCESO_FALLBACK = (
 )
 
 INFO_PLAN_3_MESES_DESCUENTO = (
-    "🎓 Tu estudiante ha sido acreedor a un descuento de *${subsidio}* por su buen desempeño académico.\n\n"
+    "🎓 Tu estudiante ha sido acreedor a un descuento de *{subsidio}* por su buen desempeño académico.\n\n"
 )
 
 INFO_PLAN_3_MESES = (
-    "💲 El saldo de tu cuenta es de *${saldo_3_meses}*.\n\n"
-    "⏳ Si deseas liquidar en 3 meses, tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) por *${importe_semanal_3m}*.\n\n"
+    "💲 El saldo de tu cuenta es de *{saldo_3_meses}*.\n\n"
+    "⏳ Si deseas liquidar en 3 meses, tienes hasta *{fecha_limite_3_meses}* para cubrirlo con 13 pagos semanales (sugeridos) por *{importe_semanal_3m}*.\n\n"
     "¿Tienes alguna duda respecto al plan de 3 meses?"
 )
 

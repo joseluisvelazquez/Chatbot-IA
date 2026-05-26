@@ -14,6 +14,7 @@ def save_message(
     media_url: str | None = None,
     file_name: str | None = None,
     created_at = None,
+    extra_json: dict | None = None,
 ):
 
     values = {
@@ -25,6 +26,7 @@ def save_message(
         "type": type,
         "media_url": media_url,
         "file_name": file_name,
+        "extra_json": extra_json,
     }
 
     values["created_at"] = created_at or mexico_now_naive()

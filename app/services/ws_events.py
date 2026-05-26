@@ -39,6 +39,7 @@ def build_message_payload(message: Any) -> dict[str, Any]:
         "type": getattr(message, "type", None),
         "media_url": getattr(message, "media_url", None),
         "file_name": getattr(message, "file_name", None),
+        "extra_json": getattr(message, "extra_json", None),
     }
 
 

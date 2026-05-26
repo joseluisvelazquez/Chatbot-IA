@@ -14,6 +14,7 @@ from app.services.ai.context_loader import load_business_context
 from app.core.states.state_types import get_state_type
 from app.services.faq.faq_data import FAQ_DATA
 from app.utils.product_mapping import get_product_info_for_sale
+from app.utils.money import format_money
 
 
 # --------------------------------------
@@ -22,6 +23,10 @@ from app.utils.product_mapping import get_product_info_for_sale
 
 def extract_context_info(context: ConversationContext) -> dict:
     venta = context.venta
+    payment = {}
+    bridge_payload = getattr(venta, "_bridge_payload", None) if venta else None
+    if isinstance(bridge_payload, dict) and isinstance(bridge_payload.get("payment"), dict):
+        payment = bridge_payload["payment"]
 
     return {
         "state": str(context.state),
@@ -33,6 +38,14 @@ def extract_context_info(context: ConversationContext) -> dict:
         "venta_info": {
             "producto": getattr(venta, "producto", None) if venta else None,
             "fecha": getattr(venta, "fecha", None) if venta else None,
+            "pago_inicial": format_money(getattr(venta, "pago", None)) if venta else "",
+            "subsidio": format_money(getattr(venta, "subsidio", None)) if venta else "",
+            "saldo": format_money(payment.get("saldo") or payment.get("balance")) if payment else "",
+            "pago_minimo": format_money(
+                payment.get("pago_minimo")
+                or payment.get("minimum_payment")
+                or payment.get("pago_semanal")
+            ) if payment else "",
         }
     }
 
@@ -151,6 +164,10 @@ En verificación: {ctx["is_verification"]}
 
 Producto: {ctx["venta_info"]["producto"]}
 Fecha: {ctx["venta_info"]["fecha"]}
+Pago inicial: {ctx["venta_info"]["pago_inicial"]}
+Subsidio/descuento: {ctx["venta_info"]["subsidio"]}
+Saldo: {ctx["venta_info"]["saldo"]}
+Pago minimo semanal: {ctx["venta_info"]["pago_minimo"]}
 
 --------------------------------------
 EXPECTATIVA SEGÚN ESTADO

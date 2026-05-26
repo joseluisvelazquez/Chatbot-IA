@@ -989,6 +989,7 @@ class Message(Base):
     type = Column(String(20), nullable=True)  # text, image, document
     media_url = Column(Text, nullable=True)
     file_name = Column(String(255), nullable=True)
+    extra_json: Mapped[Optional[dict[str, any]]] = mapped_column(MYSQL_JSON, nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime,

@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from app.core.states import ChatState
 from sqlalchemy import Column, Integer, String, Text, DateTime, Enum
+from sqlalchemy.dialects.mysql import JSON as MYSQL_JSON
 from datetime import datetime
 from app.db.base import Base
 
@@ -26,5 +27,6 @@ class Message(Base):
     content = Column(Text)
 
     message_id = Column(String(120), nullable=True)
+    extra_json = Column(MYSQL_JSON, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)

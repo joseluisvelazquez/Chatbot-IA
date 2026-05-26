@@ -32,6 +32,27 @@ def _response_failed(response) -> bool:
     return response is None or getattr(response, "status_code", 0) >= 400
 
 
+def _interactive_header_media_type(payload: dict) -> str | None:
+    interactive = payload.get("interactive") if isinstance(payload, dict) else None
+    header = interactive.get("header") if isinstance(interactive, dict) else None
+    media_type = header.get("type") if isinstance(header, dict) else None
+    return str(media_type) if media_type in {"image", "video", "document"} else None
+
+
+def _extract_meta_message_id(response) -> str | None:
+    if response is None:
+        return None
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    messages = body.get("messages") if isinstance(body, dict) else None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        message_id = messages[0].get("id")
+        return str(message_id) if message_id else None
+    return None
+
+
 def _meta_error_context(response) -> dict:
     if response is None:
         return {}
@@ -205,6 +226,7 @@ async def _send(payload: dict):
         "whatsapp_send_request",
         extra={
             "message_type": payload.get("type"),
+            "media_type": _interactive_header_media_type(payload),
             "phone_last4": _masked_phone(payload.get("to")),
         },
     )
@@ -230,8 +252,20 @@ async def _send(payload: dict):
             extra={
                 "status_code": response.status_code,
                 "message_type": payload.get("type"),
+                "media_type": _interactive_header_media_type(payload),
                 "phone_last4": _masked_phone(payload.get("to")),
                 **_meta_error_context(response),
+            },
+        )
+    else:
+        logger.info(
+            "whatsapp_send_accepted",
+            extra={
+                "status_code": response.status_code,
+                "message_type": payload.get("type"),
+                "media_type": _interactive_header_media_type(payload),
+                "phone_last4": _masked_phone(payload.get("to")),
+                "provider_message_id": _extract_meta_message_id(response),
             },
         )
 
@@ -477,6 +511,18 @@ async def send_whatsapp_media(phone, media_url, media_type, filename=None, capti
         if caption:
             payload["image"]["caption"] = caption
 
+    elif media_type == "video":
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "video",
+            "video": {
+                "link": clean_url
+            }
+        }
+        if caption:
+            payload["video"]["caption"] = caption
+
     elif media_type == "document":
         payload = {
             "messaging_product": "whatsapp",
@@ -498,16 +544,49 @@ async def send_whatsapp_media(phone, media_url, media_type, filename=None, capti
         "Content-Type": "application/json"
     }
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(
-            url,
-            headers=headers,
-            json=payload
+    logger.info(
+        "whatsapp_media_send_request",
+        extra={"media_type": media_type, "phone_last4": _masked_phone(phone)},
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                url,
+                headers=headers,
+                json=payload
+            )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "whatsapp_media_send_exception",
+            extra={
+                "media_type": media_type,
+                "phone_last4": _masked_phone(phone),
+                "error_type": type(exc).__name__,
+            },
         )
+        raise
 
     if response.status_code >= 400:
         logger.warning(
             "whatsapp_media_send_failed",
-            extra={"status_code": response.status_code, "media_type": media_type},
+            extra={
+                "status_code": response.status_code,
+                "media_type": media_type,
+                "phone_last4": _masked_phone(phone),
+                **_meta_error_context(response),
+            },
         )
         raise Exception(f"WhatsApp media send failed: {response.status_code}")
+
+    logger.info(
+        "whatsapp_media_send_accepted",
+        extra={
+            "status_code": response.status_code,
+            "media_type": media_type,
+            "phone_last4": _masked_phone(phone),
+            "provider_message_id": _extract_meta_message_id(response),
+        },
+    )
+
+    return response

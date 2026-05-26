@@ -69,6 +69,11 @@ from app.services.ws_events import (
 )
 from app.db.models import BitacoraVentas
 from app.config.settings import settings
+from app.services.message_metadata import (
+    build_outgoing_interactive_metadata,
+    build_outgoing_media_metadata,
+    merge_message_metadata,
+)
 
 # ORDEN REAL DEL FLOW 
 FUNNEL_STEPS = STEP_ORDER
@@ -1475,7 +1480,8 @@ def get_messages(
                 created_at=m.created_at,
                 type=m.type,
                 media_url=m.media_url,
-                file_name=m.file_name
+                file_name=m.file_name,
+                extra_json=m.extra_json,
             )
             for m in messages
         ],
@@ -1646,6 +1652,11 @@ async def send_agent_file(
             type=media_type,
             media_url=media_url,
             file_name=file_name,
+            extra_json=build_outgoing_media_metadata(
+                source=media_url,
+                caption=content,
+                media_type=media_type,
+            ),
             created_at=now,
         )
 
@@ -1872,12 +1883,25 @@ async def resume_bot_control(
     from app.services.message_service import save_message
     from app.utils.timezone import mexico_now_naive
     
+    flow_media_type = "video" if str(image_id or "").lower().endswith(".mp4") else "image" if image_id else None
+    media_metadata = build_outgoing_media_metadata(
+        source=image_id,
+        caption=reply_text,
+        media_type=flow_media_type,
+    )
+    media = media_metadata.get("media") if isinstance(media_metadata, dict) else None
     bot_msg = save_message(
         db=db,
         session_id=session.id,
         phone=session.phone,
         direction="out",
         content=reply_text,
+        type=str(media.get("type") or "text") if isinstance(media, dict) else "text",
+        media_url=media.get("url") if isinstance(media, dict) else None,
+        extra_json=merge_message_metadata(
+            build_outgoing_interactive_metadata(reply_text, botones),
+            media_metadata,
+        ),
     )
     
     session.last_message = "Retomó el chatbot"

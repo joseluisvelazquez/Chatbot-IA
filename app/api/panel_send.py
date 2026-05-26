@@ -16,6 +16,7 @@ from app.adapters.whatsapp_client import send_whatsapp_media
 from app.db.models import Message
 from app.utils.timezone import mexico_now_naive
 from app.services.ws_events import build_new_message_event
+from app.services.message_metadata import build_outgoing_media_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,11 @@ async def send_file_message(
         type=payload.type,
         media_url=payload.media_url,
         file_name=payload.file_name,
+        extra_json=build_outgoing_media_metadata(
+            source=payload.media_url,
+            caption=content,
+            media_type=payload.type,
+        ),
         created_at=now,
     )
 

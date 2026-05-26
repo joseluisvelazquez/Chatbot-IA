@@ -36,6 +36,11 @@ from app.services.inconsistencias_service import (
 )
 from app.services.media_service import handle_incoming_media
 from app.services.message_service import get_message_by_message_id, save_message
+from app.services.message_metadata import (
+    build_outgoing_interactive_metadata,
+    build_outgoing_media_metadata,
+    merge_message_metadata,
+)
 from app.services.reminder_service import upsert_inactivity_reminders
 from app.services.session_service import get_or_create_session, update_session
 from app.services.siga_bridge_integration import (
@@ -167,16 +172,21 @@ def _button_label_for_panel(button_id: str | None, chat: ChatSessions | None) ->
         for button in FLOW.get(state, {}).get("buttons", []):
             if button.get("id") == button_id:
                 label = str(button.get("label") or "").strip()
-                return f"[BOTON] {label} ({button_id})" if label else f"[BOTON] {button_id}"
+                return f"Cliente selecciono: {label}" if label else None
 
     if button_id.startswith("SELECCIONAR_FOLIO_"):
-        return f"[BOTON] Seleccionar folio {button_id.replace('SELECCIONAR_FOLIO_', '')}"
+        return f"Cliente selecciono: Seleccionar folio {button_id.replace('SELECCIONAR_FOLIO_', '')}"
 
-    return f"[BOTON] {button_id.replace('_', ' ').title()} ({button_id})"
+    return f"Cliente selecciono: {button_id.replace('_', ' ').title()}"
 
 
 def _event_content_for_panel(event: dict[str, Any], chat: ChatSessions | None = None) -> str:
     if event.get("button_id"):
+        metadata = event.get("extra_json") if isinstance(event.get("extra_json"), dict) else {}
+        reply = metadata.get("interactive_reply") if isinstance(metadata.get("interactive_reply"), dict) else {}
+        title = str(reply.get("title") or event.get("text") or "").strip()
+        if title:
+            return f"Cliente selecciono: {title}"
         return _button_label_for_panel(event.get("button_id"), chat) or "[BOTON]"
     text = event.get("text")
 
@@ -193,6 +203,19 @@ def _event_content_for_panel(event: dict[str, Any], chat: ChatSessions | None = 
     if text:
         return text
     return f"[ARCHIVO] Mensaje {event_type} recibido"
+
+
+def _outgoing_media_fields(image_id: str | None, reply: str | None) -> tuple[str, str | None, dict[str, Any] | None]:
+    flow_media_type = "video" if str(image_id or "").lower().endswith(".mp4") else "image" if image_id else None
+    media_metadata = build_outgoing_media_metadata(
+        source=image_id,
+        caption=reply,
+        media_type=flow_media_type,
+    )
+    media = media_metadata.get("media") if isinstance(media_metadata, dict) else None
+    if not isinstance(media, dict):
+        return "text", None, None
+    return str(media.get("type") or "text"), media.get("url"), media_metadata
 
 
 async def emit_ws_message(message: dict[str, Any], *, roles: set[str] | None = None) -> None:
@@ -479,6 +502,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                 message_id=message_id,
                 type=str(event.get("type") or "unsupported"),
                 created_at=event_time,
+                extra_json=event.get("extra_json"),
             )
             chat.unread_count = (chat.unread_count or 0) + 1
             reply = "Por favor responde usando las opciones del menu."
@@ -558,6 +582,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             media_url=media_msg.media_url if media_msg else None,
             file_name=media_msg.file_name if media_msg else None,
             created_at=event_time,
+            extra_json=event.get("extra_json"),
         )
         chat.unread_count = (chat.unread_count or 0) + 1
         db.flush()
@@ -728,12 +753,20 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         )
 
         if reply:
+            outgoing_type, outgoing_media_url, media_metadata = _outgoing_media_fields(image_id, reply)
+            outgoing_metadata = merge_message_metadata(
+                build_outgoing_interactive_metadata(reply, buttons),
+                media_metadata,
+            )
             bot_msg = save_message(
                 db=db,
                 session_id=chat.id,
                 phone=phone,
                 direction="out",
                 content=reply,
+                type=outgoing_type,
+                media_url=outgoing_media_url,
+                extra_json=outgoing_metadata,
             )
 
         if result.inconsistencia_patch:
