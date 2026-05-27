@@ -168,12 +168,13 @@ class VerificationService:
         value: int,
         *,
         allow_override: bool,
+        allow_out_of_order: bool = False,
     ) -> None:
         index = VERIFICATION_STEP_ORDER.index(step)
         previous_steps = VERIFICATION_STEP_ORDER[:index]
         previous_incomplete = [item for item in previous_steps if progress.get(item, 0) == 0]
 
-        if previous_incomplete:
+        if previous_incomplete and not allow_out_of_order:
             raise VerificationTransitionError(
                 f"No se puede marcar {step}; pasos previos incompletos: {', '.join(previous_incomplete)}"
             )
@@ -214,6 +215,7 @@ class VerificationService:
         *,
         allow_override: bool = False,
         event_id: str | None = None,
+        allow_out_of_order: bool = False,
     ) -> VerificationResult:
         if not no_cuenta:
             raise ValueError("no_cuenta requerido")
@@ -254,6 +256,7 @@ class VerificationService:
             step,
             value,
             allow_override=allow_override,
+            allow_out_of_order=allow_out_of_order,
         )
 
         next_progress = progress.copy()
@@ -306,6 +309,7 @@ class VerificationService:
         *,
         allow_override: bool = False,
         event_id: str | None = None,
+        allow_out_of_order: bool = False,
     ) -> Optional[VerificationResult]:
         no_cuenta = self.resolve_no_cuenta_from_folio(folio)
         if not no_cuenta:
@@ -318,4 +322,5 @@ class VerificationService:
             phone=phone,
             allow_override=allow_override,
             event_id=event_id,
+            allow_out_of_order=allow_out_of_order,
         )

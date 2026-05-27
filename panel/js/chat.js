@@ -368,6 +368,7 @@ export async function initConversationsPage() {
                 const currentSession = state.conversations.byId[currentSessionId]
                 if (currentSession) {
                     updateChatInputState(currentSession)
+                    updateChatHeaderControlState(currentSession)
                 }
             }
         }
@@ -1506,6 +1507,22 @@ function updateChatInputState(session) {
     }
 }
 
+// =========================
+// ACTUALIZAR ESTADO DE BOTON DE TRANSFERENCIA
+// =========================
+function updateChatHeaderControlState(session) {
+    const container = document.getElementById("transferControlContainer")
+    if (!container) return
+    
+    const isBotStopped = session?.status === "calls" || session?.status === "doubts" || session?.status === "inconsistent" || session?.status === "LLAMADA" || session?.status === "ACLARACION"
+    
+    if (isBotStopped) {
+        container.classList.remove("hidden")
+    } else {
+        container.classList.add("hidden")
+    }
+}
+
 // Monitoreo automático de la ventana cada 10 segundos
 let windowValidationTimer = null
 function startWindowValidationTimer() {
@@ -1516,6 +1533,7 @@ function startWindowValidationTimer() {
             const session = state.conversations.byId[currentSessionId]
             if (session) {
                 updateChatInputState(session)
+                updateChatHeaderControlState(session)
             }
         }
     }, 30000) // Revisar cada 30 segundos
@@ -1616,9 +1634,11 @@ export async function loadChat(sessionId, phone, name = null) {
                         </div>
                     </div>
                     
-                    <button onclick="resumeBotControl(${numericSessionId})" class="shrink-0 ml-2 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Devolver control al chatbot">
-                        <span class="inline">🔄</span> <span class="hidden sm:inline">Transferir Control</span>
-                    </button>
+                    <div id="transferControlContainer" class="${(sessionInfo?.status === 'calls' || sessionInfo?.status === 'doubts' || sessionInfo?.status === 'inconsistent' || sessionInfo?.status === 'LLAMADA' || sessionInfo?.status === 'ACLARACION') ? '' : 'hidden'} shrink-0 ml-2">
+                        <button onclick="resumeBotControl(${numericSessionId})" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Devolver control al chatbot">
+                            <span class="inline">🔄</span> <span class="hidden sm:inline">Transferir Control</span>
+                        </button>
+                    </div>
                 </div>
             `
             if (window.lucide) lucide.createIcons()
