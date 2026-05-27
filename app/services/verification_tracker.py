@@ -100,6 +100,7 @@ def _mark_bridge_step_with_backfill(
             value=value,
             phone=phone,
             event_id=event_id,
+            allow_override=True,
         )
         return
 
@@ -123,6 +124,7 @@ def _mark_bridge_step_with_backfill(
         value=value,
         phone=phone,
         event_id=event_id,
+        allow_override=True,
     )
 
 
@@ -132,6 +134,7 @@ def track_verification(
     current_state,
     detected_intent,
     bridge_verification=None,
+    allow_out_of_order=False,
 ):
     """
     Guarda el progreso de verificación.
@@ -173,6 +176,8 @@ def track_verification(
                 value=value,
                 phone=session.phone,
                 event_id=getattr(session, "last_message_id", None),
+                allow_override=True,
+                allow_out_of_order=allow_out_of_order,
             )
         except VerificationTransitionError:
             no_cuenta = service.resolve_no_cuenta_from_folio(str(folio))

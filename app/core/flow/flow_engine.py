@@ -109,25 +109,22 @@ def _classify_doubt_to_info_state(text: str) -> ChatState | None:
         return ChatState.INFO_COMPROBANTE_ACCESO
         
     # 2. Métodos de pago
-    if any(k in text_lower for k in ["donde pago", "donde pagar", "dónde pago", "dónde pagar", "oxxo", "transferencia", "deposito", "depósito", "spei", "banco", "tarjeta", "clabe"]):
+    if any(k in text_lower for k in ["opciones para realizar tus pagos", "concepto o referencia", "concepto", "referencia"]):
         return ChatState.INFO_METODOS_PAGO
         
     # 3. Plan 3 meses
-    if any(k in text_lower for k in ["3 meses", "tres meses", "plan de 3", "plan 3", "liquidar a los 3", "liquidar en 3"]):
+    if any(k in text_lower for k in ["3 meses", "tres meses", "saldo a 3 meses", "plan 3", "fecha limite plan 3 meses", "liquidar en 3 meses", "saldo cuenta"]):
         return ChatState.INFO_PLAN_3_MESES
         
     # 4. Otros planes
-    if any(k in text_lower for k in ["otros planes", "planes de pago", "cambiar plan", "mas largo", "más largo", "contrato"]):
+    if any(k in text_lower for k in ["otros planes", "planes de pago", "cambiar plan", "exceder fecha limite", "precios otros planes"]):
         return ChatState.INFO_OTROS_PLANES
         
     # 5. Pagos (semanal, quincenal, mensual, montos)
-    if any(k in text_lower for k in ["semanal", "quincenal", "mensual", "cuanto pago", "cuánto pago", "cada cuanto", "cada cuándo", "pagos quincenales", "pagos mensuales"]):
+    if any(k in text_lower for k in ["semanal", "quincenal", "mensual", "importe minimo", "cuánto pago", "cada cuanto", "primer pago", "pagos quincenales", "pagos mensuales"]):
         return ChatState.INFO_PAGOS
         
-    # 6. Beneficios
-    if any(k in text_lower for k in ["beneficios", "mis beneficios", "activar beneficios", "regalo", "promocion", "promoción", "descuento de estudiante"]):
-        return ChatState.INFO_BENEFICIOS
-        
+    # (Beneficios removido de saltos directos por petición del usuario)        
     # 7. Fallback por IA
     try:
         from app.services.ai.ai_service import generate_raw_ai_response
@@ -139,7 +136,6 @@ Clasifica la duda del usuario en uno de los siguientes estados informativos del 
 - INFO_COMPROBANTE_ACCESO: Preguntas sobre dónde subir el comprobante de pago, el sitio mxcomp.mx, o cómo obtener el código de cliente.
 - INFO_PLAN_3_MESES: Preguntas sobre el plan de liquidación a 3 meses (o 13 semanas).
 - INFO_OTROS_PLANES: Preguntas sobre plazos más largos o cambio de planes.
-- INFO_BENEFICIOS: Preguntas sobre los beneficios adicionales, regalos o promociones.
 
 Responde ÚNICAMENTE con el nombre exacto del estado en mayúsculas (ej: INFO_METODOS_PAGO) o la palabra NONE si no corresponde a ninguna de las opciones anteriores de forma clara.
 
@@ -158,8 +154,6 @@ Respuesta:"""
                 return ChatState.INFO_PLAN_3_MESES
             if "INFO_OTROS_PLANES" in res:
                 return ChatState.INFO_OTROS_PLANES
-            if "INFO_BENEFICIOS" in res:
-                return ChatState.INFO_BENEFICIOS
     except Exception:
         pass
         
@@ -985,9 +979,18 @@ def process_message(
         # ==========================================
         if (detected_intent == "doubt" or action == "ai_doubt") and not (intent and intent.isupper()):
             jump_state = _classify_doubt_to_info_state(text)
+
+            # Evitar saltar a la misma pregunta de información actual o previa (previene loops)
+            if jump_state and jump_state == current_state:
+                jump_state = None
+            if jump_state and session.previous_state and jump_state.value == session.previous_state:
+                jump_state = None
+
             if jump_state:
                 # Determinar punto de retorno
-                if current_state in {ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.FUERA_DE_FLUJO, ChatState.ESPERA}:
+                if session.extra_json and "verification_suspended_state" in session.extra_json:
+                    suspended_state_val = session.extra_json["verification_suspended_state"]
+                elif current_state in {ChatState.MENU_AYUDA, ChatState.MENU_DUDA, ChatState.DUDA, ChatState.FUERA_DE_FLUJO, ChatState.ESPERA}:
                     suspended_state_val = session.previous_state or ChatState.INICIO2.value
                 else:
                     suspended_state_val = current_state.value
@@ -1003,8 +1006,9 @@ def process_message(
                     and VERIFICATION_STEP_ORDER.index(jump_step) > VERIFICATION_STEP_ORDER.index(suspended_step)):
                     
                     # 1. Guardar estado suspendido
-                    session.extra_json = session.extra_json or {}
-                    session.extra_json["verification_suspended_state"] = suspended_state_val
+                    new_extra = dict(session.extra_json or {})
+                    new_extra["verification_suspended_state"] = suspended_state_val
+                    session.extra_json = new_extra
                     
                     # 2. Transicionar estado
                     session.state = jump_state.value
@@ -1109,7 +1113,7 @@ def process_message(
     # 2.5 Validación de letras en estados de folio
     # --------------------------------------
 
-    estados_folio = {ChatState.ESPERA, ChatState.CAMBIAR_FOLIO, ChatState.CAMBIAR_FOLIO_DEVOLUCION, ChatState.CAMBIAR_FOLIO_DESCUENTO, ChatState.INICIO}
+    estados_folio = {ChatState.CAMBIAR_FOLIO, ChatState.CAMBIAR_FOLIO_DEVOLUCION, ChatState.CAMBIAR_FOLIO_DESCUENTO, ChatState.INICIO}
     
     if current_state in estados_folio and not folio_detectado and not button_matched and detected_intent != "start_verification":
         if text and not re.search(r"\d", text) and detected_intent in ("other", "ambiguous", None, "greeting"):
@@ -1696,15 +1700,30 @@ def process_message(
         previous_state=previous_state
     )
 
+    skip_tracking = False
+    is_jump_ahead_active = session.extra_json and "verification_suspended_state" in session.extra_json
+    returned_from_jump = False
+
+    # Limpieza de seguridad: Si el usuario ya regresó a una pregunta de confirmación, 
+    # pero el estado suspendido seguía en BD por caché de SQLAlchemy, lo limpiamos para evitar loops.
+    if is_jump_ahead_active and get_state_type(current_state) == "confirmation":
+        new_extra = dict(session.extra_json)
+        new_extra.pop("verification_suspended_state", None)
+        session.extra_json = new_extra
+        is_jump_ahead_active = False
+
     # Interceptar si venimos de un estado saltado (jump-ahead) y el usuario confirmó/avanzó
-    if session.extra_json and "verification_suspended_state" in session.extra_json:
-        if action == "advance" or detected_intent == "affirmative":
+    if is_jump_ahead_active and get_state_type(current_state) == "information":
+        if next_state in (ChatState.DUDA, ChatState.MENU_DUDA):
+            # El usuario tiene una duda sobre la información saltada, le permitimos ir a preguntar.
+            pass
+        elif action == "advance" or detected_intent == "affirmative":
+            skip_tracking = True
             # 1. Marcar el paso de información actual como completado en VerificacionCuenta
             from app.services.verification_tracker import STEP_MAP
             jumped_step = STEP_MAP.get(current_state)
             if jumped_step and db and session.folio:
                 try:
-                    from app.services.verification_service import VerificationService
                     service = VerificationService(db)
                     no_cuenta = service.resolve_no_cuenta_from_folio(session.folio) or _no_cuenta_from_bridge(session, session.folio, bridge_verification)
                     if no_cuenta:
@@ -1713,14 +1732,26 @@ def process_message(
                             step=jumped_step,
                             value=1,
                             phone=session.phone,
-                            allow_out_of_order=True
+                            allow_out_of_order=True,
+                            allow_override=True
                         )
                 except Exception as e:
                     logger.warning(f"Error marking jumped step {jumped_step} on confirm: {e}")
             
             # 2. Retomar el estado original suspendido
-            suspended_state_val = session.extra_json.pop("verification_suspended_state")
-            session.extra_json = dict(session.extra_json)
+            new_extra = dict(session.extra_json)
+            suspended_state_val = new_extra.pop("verification_suspended_state", ChatState.INICIO.value)
+            session.extra_json = new_extra
+            next_state = ChatState(suspended_state_val)
+            returned_from_jump = True
+
+        elif detected_intent == "negative":
+            skip_tracking = True
+            # El usuario explícitamente no entendió o no confirmó la información saltada.
+            # Retornamos al estado original SIN marcar el paso, para que se le muestre de nuevo más adelante.
+            new_extra = dict(session.extra_json)
+            suspended_state_val = new_extra.pop("verification_suspended_state", ChatState.INICIO.value)
+            session.extra_json = new_extra
             next_state = ChatState(suspended_state_val)
 
     # Si el flujo va a un estado de cambio de folio, limpiar el folio de la sesión
@@ -1767,13 +1798,15 @@ def process_message(
     # 10. Tracking
     # --------------------------------------
 
-    track_verification(
-        db=db,
-        session=session,
-        current_state=current_state,
-        detected_intent=detected_intent,
-        bridge_verification=bridge_verification,
-    )
+    if not skip_tracking:
+        track_verification(
+            db=db,
+            session=session,
+            current_state=current_state,
+            detected_intent=detected_intent,
+            bridge_verification=bridge_verification,
+            allow_out_of_order=is_jump_ahead_active,
+        )
 
     # --------------------------------------
     # 11. Saltos
@@ -1790,6 +1823,11 @@ def process_message(
         session,
         db
     )
+    
+    if returned_from_jump:
+        prefix = "🔁 ¡Excelente! Volvamos a donde nos quedamos en tu verificación para terminar tu registro."
+        reply = f"{prefix}\n\n{reply}" if reply else prefix
+        
     _log()
         
 

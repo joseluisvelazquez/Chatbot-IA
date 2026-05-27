@@ -196,8 +196,16 @@ def handle_menu(context):
                 }
 
         # si ya tiene estado → continuar (al anterior)
+        is_from_jump = False
         try:
-            resume_state = ChatState(context.previous_state) if context.previous_state else ChatState.INICIO
+            if context.session.extra_json and "verification_suspended_state" in context.session.extra_json:
+                new_extra = dict(context.session.extra_json)
+                resume_state_val = new_extra.pop("verification_suspended_state", ChatState.INICIO.value)
+                context.session.extra_json = new_extra
+                resume_state = ChatState(resume_state_val)
+                is_from_jump = True
+            else:
+                resume_state = ChatState(context.previous_state) if context.previous_state else ChatState.INICIO
             ignore_states = {
                 ChatState.INICIO,
                 ChatState.MENU_AYUDA, 
@@ -222,7 +230,11 @@ def handle_menu(context):
         resume_state = handle_flow_skips(context, resume_state)
         rendered_reply, rendered_buttons, rendered_img = render_state(resume_state, context.session, context.db)
 
-        reply_text = msg.CONTINUAR_VERIFICACION_MENU
+        if is_from_jump:
+            reply_text = "🔁 ¡Excelente! Volvamos a donde nos quedamos en tu verificación para terminar tu registro."
+        else:
+            reply_text = msg.CONTINUAR_VERIFICACION_MENU
+            
         if rendered_reply:
             reply_text += f"\n\n{rendered_reply}"
 
