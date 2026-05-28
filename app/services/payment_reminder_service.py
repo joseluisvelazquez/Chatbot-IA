@@ -9,7 +9,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.adapters.whatsapp_client import send_template_message
@@ -351,10 +351,22 @@ def _session_folio_candidate(session: ChatSessions) -> str | None:
 
 
 def _chat_session_payment_candidates(db: Session, *, limit: int) -> list[ChatSessions]:
+    has_folio = ChatSessions.folio.isnot(None) & (ChatSessions.folio != "")
+    has_account_in_extra = or_(
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.no_cuenta")).isnot(None),
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.cuenta")).isnot(None),
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.account")).isnot(None),
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.siga_bridge.lookup.no_cuenta")).isnot(None),
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.siga_bridge.lookup.cuenta")).isnot(None),
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.siga_bridge.verification_cache.snapshot.no_cuenta")).isnot(None),
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.siga_bridge.verification_cache.snapshot.cuenta")).isnot(None),
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.siga_bridge.verification_cache.lookup.no_cuenta")).isnot(None),
+        func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, "$.siga_bridge.verification_cache.lookup.cuenta")).isnot(None),
+    )
     return (
         db.query(ChatSessions)
         .filter(ChatSessions.phone.isnot(None))
-        .filter(or_(ChatSessions.folio.isnot(None), ChatSessions.extra_json.isnot(None)))
+        .filter(or_(has_folio, has_account_in_extra))
         .order_by(ChatSessions.last_message_at.desc(), ChatSessions.id.desc())
         .limit(limit)
         .all()
