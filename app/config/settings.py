@@ -91,11 +91,10 @@ class Settings(BaseSettings):
     # ============================================================
     # development/testing
     # ============================================================
-    TEST_PHONE_ONLY: list[str] = []
     ADVISOR_PHONES: list[str] = []
     DEBUG: bool = True
 
-    @field_validator("TEST_PHONE_ONLY", "ADVISOR_PHONES", mode="before")
+    @field_validator("ADVISOR_PHONES", mode="before")
     @classmethod
     def parse_csv_lists(cls, value):
         if value is None or value == "":

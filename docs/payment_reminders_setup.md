@@ -19,11 +19,10 @@ Para recordatorios solo existen dos estados operativos: `pagado` y `no_pagado`. 
 5. Reutiliza la logica de cobranza/pagos para resolver `pagado` o `no_pagado`.
 6. Valida que exista una `chat_session` local confiable para ese telefono y, cuando existan, que folio/cuenta coincidan.
 7. Clasifica si corresponde enviar por vencimiento, omitir por no vencido, cancelar por pagado o saltar por datos insuficientes.
-8. Aplica el candado temporal `TEST_PHONE_ONLY`.
-9. Envia plantilla Meta, o registra que se omitio.
-10. Guarda el envio exitoso como mensaje visible en conversaciones.
-11. Programa siguiente recordatorio o cancela futuros por pago confirmado.
-12. Guarda auditoria en `payment_reminders`.
+8. Envia plantilla Meta, o registra que se omitio.
+9. Guarda el envio exitoso como mensaje visible en conversaciones.
+10. Programa siguiente recordatorio o cancela futuros por pago confirmado.
+11. Guarda auditoria en `payment_reminders`.
 
 ## Ciclo semanal por cliente
 
@@ -51,7 +50,6 @@ La cuenta enviada en recordatorios debe usar el mismo formato operativo que el f
 - `PAYMENT_REMINDER_SEND_HOUR`: hora local en la que se programan o envian recordatorios vencidos. No define el dia del cliente, solo la hora.
 - `PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES`: frecuencia con la que corre el job del scheduler.
 - `PAYMENT_REMINDER_DEFAULT_WEEKDAY`: fallback opcional, NO regla principal. Solo se usa si se decide explicitamente permitir programacion cuando Bridge no entregue fecha base confiable. En operacion normal, el dia se calcula desde la fecha de pago del cliente y se repite cada 7 dias.
-- `TEST_PHONE_ONLY`: candado temporal para pruebas. Solo permite enviar a telefonos definidos. Debe ser facil de remover quitando el bloque marcado como `TEMPORARY TEST_PHONE_ONLY GATE`.
 - `META_PAYMENT_PENDING_TEMPLATE_NAME`: nombre de plantilla Meta aprobada para pago pendiente o proximo a vencer.
 - `META_PAYMENT_OVERDUE_TEMPLATE_NAME`: nombre de plantilla Meta aprobada para pago vencido.
 - `META_NEXT_PAYMENT_TEMPLATE_NAME`: plantilla para avisar proximo pago cuando aplique.
@@ -84,16 +82,6 @@ Campos principales: `session_id`, telefono, folio, cuenta, fecha de vencimiento,
 - `cancelled_settled`: cancelado por liquidacion confirmada por Bridge.
 - `failed`: fallo Bridge, Meta o configuracion.
 
-## Como quitar TEST_PHONE_ONLY
-
-El candado esta concentrado en `app/services/payment_reminder_service.py`, funcion `is_test_phone_allowed`, marcada como:
-
-```python
-# TEMPORARY TEST_PHONE_ONLY GATE
-```
-
-Para produccion, retirar ese bloque y ajustar la llamada previa al envio real.
-
 ## Dry-run
 
 Endpoint protegido:
@@ -102,7 +90,7 @@ Endpoint protegido:
 POST /api/panel/payment-reminders/dry-run?cuenta={{CUENTA}}&folio={{FOLIO}}
 ```
 
-Devuelve cuenta, `cuenta_raw`, `cuenta_formateada`, `prefijo_cuenta`, `fuente_formato_cuenta`, `cuenta_formateada_valida`, telefono enmascarado, saldo, `fecha_base`, `due_date`, `next_due_date`, `scheduled_at`, `estado_pago`, `fuente_estado_pago`, `should_send`, si pasa `TEST_PHONE_ONLY`, plantilla que se usaria y motivo si no se envia.
+Devuelve cuenta, `cuenta_raw`, `cuenta_formateada`, `prefijo_cuenta`, `fuente_formato_cuenta`, `cuenta_formateada_valida`, telefono enmascarado, saldo, `fecha_base`, `due_date`, `next_due_date`, `scheduled_at`, `estado_pago`, `fuente_estado_pago`, `should_send`, plantilla que se usaria y motivo si no se envia.
 
 Tambien devuelve datos de integracion con conversaciones: `session_id`, `chat_session_found`, `chat_session_match_reason`, `would_create_conversation_message`, `conversation_message_preview`, `next_payment_reminder_at`, `sent_count_prev` y `last_payment_reminder_at`.
 
@@ -120,17 +108,14 @@ Para evaluar recordatorios vencidos sin enviar:
 POST /api/panel/payment-reminders/run-due?dry_run=true&limit=25
 ```
 
-## Envio real controlado
+## Envio real
 
-1. Configurar `TEST_PHONE_ONLY=5214420001679`.
-2. Configurar plantillas Meta.
-3. Mantener `PAYMENT_REMINDERS_DRY_RUN=false`.
-4. Activar `PAYMENT_REMINDERS_ENABLED=true`.
-5. Ejecutar `sync` y luego `run-due` con `dry_run=false`, o esperar el scheduler.
+1. Configurar plantillas Meta.
+2. Mantener `PAYMENT_REMINDERS_DRY_RUN=false` solo cuando ya se valido el flujo en dry-run.
+3. Activar `PAYMENT_REMINDERS_ENABLED=true` cuando se quiera que el scheduler corra automaticamente.
+4. Ejecutar `sync` y luego `run-due` con `dry_run=false`, o esperar el scheduler.
 
-Si el telefono no esta en `TEST_PHONE_ONLY`, se registra `skipped_test_phone_only` y no se envia nada.
-
-Ademas de pasar `TEST_PHONE_ONLY`, debe existir `chat_session` local. El filtro de sesion no reemplaza el candado de pruebas: ambos deben cumplirse.
+Debe existir `chat_session` local y datos confiables de Bridge. Si falta sesion local, no se envia y se reporta `missing_chat_session`, `ambiguous_chat_session` o `chat_session_account_mismatch`.
 
 ## Conversaciones y cobranza
 
@@ -168,7 +153,6 @@ ORDER BY created_at DESC;
 - `payment_reminder_bridge_lookup`
 - `payment_reminder_bridge_error`
 - `payment_reminder_missing_bridge_fields`
-- `payment_reminder_skipped_test_phone_only`
 - `payment_reminder_skipped_chat_session`
 - `payment_reminder_conversation_message_failed`
 - `collections_payment_reminder_summary_failed`
@@ -199,5 +183,4 @@ El intento queda como `failed` con `meta_error` y mensaje sanitizado. No se expo
 - Confirmar nombres y orden de variables de cada plantilla Meta.
 - Confirmar que Bridge entregue saldo y fecha de venta confiables.
 - Confirmar que en produccion el ciclo se derive de fecha base de Bridge; usar `PAYMENT_REMINDER_DEFAULT_WEEKDAY` solo como fallback temporal y documentado.
-- Quitar el candado `TEST_PHONE_ONLY` solo con aprobacion operativa.
 - Ejecutar primero varios ciclos en `PAYMENT_REMINDERS_DRY_RUN=true`.

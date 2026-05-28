@@ -23,24 +23,15 @@ from app.services.payment_reminder_service import (
     STATUS_SCHEDULED,
     calculate_due_schedule,
     classify_reminder_case,
-    is_test_phone_allowed,
     normalize_phone_for_whatsapp,
     upsert_scheduled_reminder,
 )
 
 
-def test_normalizes_local_mexico_phone_and_applies_test_gate(monkeypatch):
-    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", ["5214420001679"])
-
+def test_normalizes_local_mexico_phone():
     assert normalize_phone_for_whatsapp("4420001679") == "5214420001679"
-    assert is_test_phone_allowed("4420001679") is True
-    assert is_test_phone_allowed("4270000000") is False
-
-
-def test_empty_test_phone_only_blocks_real_send(monkeypatch):
-    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", [])
-
-    assert is_test_phone_allowed("5214420001679") is False
+    assert normalize_phone_for_whatsapp("524421234567") == "5214421234567"
+    assert normalize_phone_for_whatsapp("5214421234567") == "5214421234567"
 
 
 def test_bridge_next_payment_date_has_priority_over_default_weekday():
@@ -363,8 +354,7 @@ def test_reminder_and_comprobante_access_share_account_reference_format():
     assert "*B4260506*" in MessageBuilder.info_comprobante_acceso("B4260506", "CLI-123")
 
 
-def test_dry_run_payload_has_simple_payment_state_and_no_receipt_status(monkeypatch):
-    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", ["5214420001679"])
+def test_dry_run_payload_has_simple_payment_state_and_no_receipt_status():
     snapshot = BridgeAccountSnapshot(
         bridge_found=True,
         company_id=1,
@@ -634,8 +624,7 @@ def test_reminder_detects_chat_session_account_mismatch():
     assert resolution.reason == payment_service.CLASS_CHAT_SESSION_ACCOUNT_MISMATCH
 
 
-def test_dry_run_result_blocks_send_without_chat_session(monkeypatch):
-    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", ["5214420001679"])
+def test_dry_run_result_blocks_send_without_chat_session():
     snapshot = BridgeAccountSnapshot(
         bridge_found=True,
         company_id=1,
@@ -670,43 +659,6 @@ def test_dry_run_result_blocks_send_without_chat_session(monkeypatch):
     assert result["chat_session_found"] is False
     assert result["chat_session_match_reason"] == payment_service.CLASS_MISSING_CHAT_SESSION
     assert result["would_create_conversation_message"] is False
-
-
-def test_dry_run_result_reports_test_phone_only_gate(monkeypatch):
-    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", ["5214420000000"])
-    snapshot = BridgeAccountSnapshot(
-        bridge_found=True,
-        company_id=1,
-        cuenta="A900001",
-        phone="5214420001679",
-        balance=Decimal("100.00"),
-        minimum_payment=Decimal("50.00"),
-        payment_status=PAYMENT_STATUS_UNPAID,
-    )
-    schedule = PaymentSchedule(
-        due_date=date(2026, 6, 9),
-        next_due_date=date(2026, 6, 16),
-        weekday=1,
-        source="bridge_fecha_venta_plus_7",
-    )
-
-    result = payment_service._build_process_result(
-        snapshot=snapshot,
-        schedule=schedule,
-        classification=CLASS_DUE_TODAY_UNPAID,
-        template_name="payment_pending",
-        reminder_type=REMINDER_PAYMENT_PENDING,
-        dry_run=True,
-        session_resolution=payment_service.ChatSessionResolution(
-            chat_session(id=10),
-            True,
-            "single_phone_match",
-        ),
-    )
-
-    assert result["should_send"] is False
-    assert result["test_phone_allowed"] is False
-    assert result["reason"] == payment_service.CLASS_SKIPPED_TEST_PHONE_ONLY
 
 
 def test_sent_reminder_is_saved_as_conversation_message(monkeypatch):

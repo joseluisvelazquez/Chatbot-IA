@@ -50,7 +50,6 @@ CLASS_INSUFFICIENT_BRIDGE_DATA = "insufficient_bridge_data"
 CLASS_BRIDGE_ERROR = "bridge_error"
 CLASS_ALREADY_SCHEDULED = "already_scheduled"
 CLASS_ALREADY_SENT = "already_sent"
-CLASS_SKIPPED_TEST_PHONE_ONLY = "skipped_test_phone_only"
 CLASS_MISSING_CHAT_SESSION = "missing_chat_session"
 CLASS_AMBIGUOUS_CHAT_SESSION = "ambiguous_chat_session"
 CLASS_CHAT_SESSION_ACCOUNT_MISMATCH = "chat_session_account_mismatch"
@@ -414,17 +413,6 @@ def resolve_chat_session_for_reminder(
         return ChatSessionResolution(session, True, "single_phone_match", "phone", 1)
 
     return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
-
-
-# TEMPORARY TEST_PHONE_ONLY GATE - remove this block when production sends are approved.
-def is_test_phone_allowed(phone: Any) -> bool:
-    allowed = {
-        normalized
-        for raw in (settings.TEST_PHONE_ONLY or [])
-        if (normalized := normalize_phone_for_whatsapp(raw))
-    }
-    normalized_phone = normalize_phone_for_whatsapp(phone)
-    return bool(allowed and normalized_phone in allowed)
 
 
 def _safe_decimal(value: Any) -> Decimal | None:
@@ -1256,18 +1244,13 @@ def _build_process_result(
         (snapshot.account_reference_valid and snapshot.account_reference_formatted)
         or (cuenta_formateada and not snapshot.account_reference_reason)
     )
-    test_phone_allowed = is_test_phone_allowed(snapshot.phone)
-    send_candidate = bool(
+    should_send = bool(
         template_name
         and snapshot.payment_status == PAYMENT_STATUS_UNPAID
         and cuenta_formateada_valida
         and classification not in {CLASS_NOT_DUE, CLASS_SETTLED, CLASS_BRIDGE_ERROR, CLASS_INSUFFICIENT_BRIDGE_DATA}
         and (session_resolution is None or session_resolution.found)
     )
-    should_send = bool(send_candidate and test_phone_allowed)
-    resolved_reason = reason
-    if resolved_reason is None and send_candidate and not test_phone_allowed:
-        resolved_reason = CLASS_SKIPPED_TEST_PHONE_ONLY
     preview = _build_conversation_message_preview(snapshot=snapshot, schedule=schedule) if schedule else None
     session_found = bool(session_resolution.found) if session_resolution else None
     session_id = session_resolution.session_id if session_resolution else None
@@ -1290,8 +1273,7 @@ def _build_process_result(
         "estado_pago": snapshot.payment_status,
         "fuente_estado_pago": snapshot.payment_status_source,
         "should_send": should_send,
-        "reason": resolved_reason,
-        "test_phone_allowed": test_phone_allowed,
+        "reason": reason,
         "bridge_endpoint": "collections/account/payments",
         "bridge_found": snapshot.bridge_found,
         "fecha_venta": snapshot.sale_date.isoformat() if snapshot.sale_date else None,
@@ -1661,24 +1643,6 @@ async def process_due_payment_reminder(
         )
         result["classification"] = CLASS_ALREADY_SENT
         result["reason"] = CLASS_ALREADY_SENT
-        return result
-
-    if not is_test_phone_allowed(snapshot.phone):
-        _mark_result(
-            reminder,
-            status=STATUS_SKIPPED,
-            error_code=CLASS_SKIPPED_TEST_PHONE_ONLY,
-            error_message="phone_not_allowed_by_TEST_PHONE_ONLY",
-        )
-        result["classification"] = CLASS_SKIPPED_TEST_PHONE_ONLY
-        result["reason"] = CLASS_SKIPPED_TEST_PHONE_ONLY
-        logger.info(
-            "payment_reminder_skipped_test_phone_only",
-            extra={
-                "cuenta_masked": _mask(snapshot.cuenta),
-                "phone_last4": _mask(snapshot.phone),
-            },
-        )
         return result
 
     parameters = build_template_parameters(
