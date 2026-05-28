@@ -9,19 +9,23 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.adapters.whatsapp_client import send_template_message
 from app.config.settings import settings
-from app.db.models import PaymentReminder
+from app.db.models import ChatSessions, Message, PaymentReminder
+from app.services.message_service import save_message
 from app.services.collections_panel_service import (
     normalize_collection_record,
     normalize_payments,
     resolve_collection_payment_state,
 )
 from app.services.siga_bridge import SigaBridgeError, get_siga_bridge_client
+from app.services.ws_events import build_new_message_event
 from app.utils.account_reference import format_account_reference, resolve_payment_account_reference
 from app.utils.timezone import mexico_now_naive
+from app.websockets.manager import manager
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,9 @@ CLASS_BRIDGE_ERROR = "bridge_error"
 CLASS_ALREADY_SCHEDULED = "already_scheduled"
 CLASS_ALREADY_SENT = "already_sent"
 CLASS_SKIPPED_TEST_PHONE_ONLY = "skipped_test_phone_only"
+CLASS_MISSING_CHAT_SESSION = "missing_chat_session"
+CLASS_AMBIGUOUS_CHAT_SESSION = "ambiguous_chat_session"
+CLASS_CHAT_SESSION_ACCOUNT_MISMATCH = "chat_session_account_mismatch"
 
 REMINDER_PAYMENT_PENDING = "payment_pending"
 REMINDER_PAYMENT_OVERDUE = "payment_overdue"
@@ -88,6 +95,26 @@ class PaymentSchedule:
 
 class PaymentScheduleError(ValueError):
     pass
+
+
+@dataclass(slots=True)
+class ChatSessionResolution:
+    session: ChatSessions | None
+    found: bool
+    reason: str
+    matched_by: str | None = None
+    candidates_count: int = 0
+
+    @property
+    def session_id(self) -> int | None:
+        return getattr(self.session, "id", None) if self.session else None
+
+
+@dataclass(slots=True)
+class ReminderStats:
+    sent_count: int = 0
+    last_sent_at: datetime | None = None
+    next_scheduled_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -177,6 +204,216 @@ def normalize_phone_for_whatsapp(value: Any) -> str | None:
 def is_valid_whatsapp_phone(value: Any) -> bool:
     phone = normalize_phone_for_whatsapp(value)
     return bool(phone and phone.isdigit() and 12 <= len(phone) <= 15)
+
+
+def _conversation_phone_key(value: Any) -> str | None:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if not digits:
+        return None
+    if digits.startswith("52") and len(digits) > 10:
+        digits = digits[2:]
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def _phone_lookup_values(value: Any) -> list[str]:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    normalized = normalize_phone_for_whatsapp(value)
+    local10 = _conversation_phone_key(value)
+    candidates = [
+        normalized,
+        digits or None,
+        local10,
+        f"52{local10}" if local10 and len(local10) == 10 else None,
+        f"521{local10}" if local10 and len(local10) == 10 else None,
+    ]
+    seen: set[str] = set()
+    values: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            values.append(candidate)
+            seen.add(candidate)
+    return values
+
+
+def _clean_match_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _normalized_folio(value: Any) -> str | None:
+    text = _clean_match_text(value)
+    return text.upper() if text else None
+
+
+def _normalized_account(value: Any) -> str | None:
+    text = _clean_match_text(value)
+    return text.upper() if text else None
+
+
+def _account_values_match(candidate: Any, expected: Any) -> bool:
+    candidate_text = _normalized_account(candidate)
+    expected_text = _normalized_account(expected)
+    if not candidate_text or not expected_text:
+        return False
+    if candidate_text == expected_text:
+        return True
+    candidate_prefixed = candidate_text[:1] in {"A", "B"}
+    expected_prefixed = expected_text[:1] in {"A", "B"}
+    if candidate_prefixed and not expected_prefixed:
+        return candidate_text[1:] == expected_text
+    if expected_prefixed and candidate_prefixed:
+        return candidate_text == expected_text
+    return False
+
+
+def _collect_values_by_keys(data: Any, keys: set[str]) -> list[str]:
+    values: list[str] = []
+    if isinstance(data, Mapping):
+        for key, value in data.items():
+            key_text = str(key).lower()
+            if key_text in keys and value not in (None, "", [], {}):
+                if isinstance(value, Mapping):
+                    nested = value.get("value") or value.get("id") or value.get("cuenta")
+                    if nested not in (None, "", [], {}):
+                        values.append(str(nested).strip())
+                elif not isinstance(value, list):
+                    values.append(str(value).strip())
+            if isinstance(value, (Mapping, list)):
+                values.extend(_collect_values_by_keys(value, keys))
+    elif isinstance(data, list):
+        for item in data:
+            values.extend(_collect_values_by_keys(item, keys))
+    return [value for value in values if value]
+
+
+def _session_folio_match(session: ChatSessions, folio: str | None) -> bool | None:
+    expected = _normalized_folio(folio)
+    if not expected:
+        return None
+    values = []
+    direct = _normalized_folio(getattr(session, "folio", None))
+    if direct:
+        values.append(direct)
+    values.extend(
+        _normalized_folio(value)
+        for value in _collect_values_by_keys(getattr(session, "extra_json", None), {"folio"})
+    )
+    clean_values = [value for value in values if value]
+    if not clean_values:
+        return None
+    return expected in clean_values
+
+
+def _session_account_match(session: ChatSessions, cuenta: str | None) -> bool | None:
+    expected = _normalized_account(cuenta)
+    if not expected:
+        return None
+    values = _collect_values_by_keys(
+        getattr(session, "extra_json", None),
+        {
+            "no_cuenta",
+            "cuenta",
+            "numero_cuenta",
+            "account",
+            "account_number",
+            "account_reference",
+            "cuenta_formateada",
+            "numero_cuenta_referencia",
+        },
+    )
+    if not values:
+        return None
+    return any(_account_values_match(value, expected) for value in values)
+
+
+def resolve_chat_session_for_reminder(
+    db: Session,
+    *,
+    snapshot: BridgeAccountSnapshot | None = None,
+    phone: str | None = None,
+    folio: str | None = None,
+    cuenta: str | None = None,
+    session_id: int | None = None,
+) -> ChatSessionResolution:
+    expected_phone = normalize_phone_for_whatsapp(phone or (snapshot.phone if snapshot else None))
+    expected_folio = folio or (snapshot.folio if snapshot else None)
+    expected_account = (
+        cuenta
+        or (snapshot.account_reference_formatted if snapshot else None)
+        or (snapshot.cuenta if snapshot else None)
+    )
+
+    if session_id:
+        session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
+        if not session:
+            return ChatSessionResolution(None, False, CLASS_MISSING_CHAT_SESSION)
+        phone_key = _conversation_phone_key(expected_phone)
+        session_phone_key = _conversation_phone_key(session.phone)
+        if phone_key and session_phone_key and phone_key != session_phone_key:
+            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
+        folio_match = _session_folio_match(session, expected_folio)
+        if folio_match is False:
+            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
+        account_match = _session_account_match(session, expected_account)
+        if account_match is False:
+            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
+        return ChatSessionResolution(session, True, "existing_session_id", "session_id", 1)
+
+    lookup_values = _phone_lookup_values(expected_phone)
+    if not lookup_values:
+        return ChatSessionResolution(None, False, CLASS_MISSING_CHAT_SESSION)
+
+    local10 = _conversation_phone_key(expected_phone)
+    phone_filter = ChatSessions.phone.in_(lookup_values)
+    if local10 and len(local10) == 10:
+        phone_filter = or_(phone_filter, ChatSessions.phone.like(f"%{local10}"))
+    sessions = (
+        db.query(ChatSessions)
+        .filter(phone_filter)
+        .order_by(ChatSessions.last_message_at.desc(), ChatSessions.id.desc())
+        .all()
+    )
+
+    phone_key = _conversation_phone_key(expected_phone)
+    sessions = [
+        session
+        for session in sessions
+        if not phone_key or _conversation_phone_key(session.phone) == phone_key
+    ]
+    if not sessions:
+        return ChatSessionResolution(None, False, CLASS_MISSING_CHAT_SESSION)
+
+    folio_matches = [session for session in sessions if _session_folio_match(session, expected_folio) is True]
+    if len(folio_matches) == 1:
+        account_match = _session_account_match(folio_matches[0], expected_account)
+        if account_match is False:
+            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=len(sessions))
+        return ChatSessionResolution(folio_matches[0], True, "folio_match", "folio", len(sessions))
+    if len(folio_matches) > 1:
+        account_matches = [
+            session for session in folio_matches if _session_account_match(session, expected_account) is True
+        ]
+        if len(account_matches) == 1:
+            return ChatSessionResolution(account_matches[0], True, "folio_account_match", "folio_account", len(sessions))
+        return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
+
+    account_matches = [session for session in sessions if _session_account_match(session, expected_account) is True]
+    if len(account_matches) == 1:
+        return ChatSessionResolution(account_matches[0], True, "account_match", "account", len(sessions))
+    if len(account_matches) > 1:
+        return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
+
+    if len(sessions) == 1:
+        session = sessions[0]
+        folio_match = _session_folio_match(session, expected_folio)
+        if folio_match is False:
+            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
+        account_match = _session_account_match(session, expected_account)
+        if account_match is False:
+            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
+        return ChatSessionResolution(session, True, "single_phone_match", "phone", 1)
+
+    return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
 
 
 # TEMPORARY TEST_PHONE_ONLY GATE - remove this block when production sends are approved.
@@ -746,6 +983,64 @@ def _response_meta_message_id(response: Any) -> str | None:
     return None
 
 
+async def _record_sent_conversation_message(
+    db: Session,
+    *,
+    session: ChatSessions,
+    reminder: PaymentReminder,
+    snapshot: BridgeAccountSnapshot,
+    schedule: PaymentSchedule,
+    reminder_type: str,
+    meta_message_id: str | None,
+) -> Message | None:
+    if meta_message_id:
+        existing = db.query(Message).filter(Message.message_id == meta_message_id).first()
+        if existing:
+            return existing
+
+    now = mexico_now_naive()
+    content = _build_conversation_message_preview(snapshot=snapshot, schedule=schedule)
+    message = save_message(
+        db=db,
+        session_id=session.id,
+        phone=session.phone or snapshot.phone or reminder.phone,
+        direction="out",
+        content=content,
+        message_id=meta_message_id,
+        type="payment_reminder",
+        created_at=now,
+        extra_json={
+            "source": "payment_reminder",
+            "reminder_id": reminder.id,
+            "cuenta": snapshot.account_reference_formatted or snapshot.cuenta,
+            "folio": snapshot.folio,
+            "due_date": schedule.due_date.isoformat(),
+            "next_due_date": schedule.next_due_date.isoformat(),
+            "reminder_type": reminder_type,
+            "template_name": reminder.template_name,
+            "meta_message_id": meta_message_id,
+        },
+    )
+    session.last_message = content
+    session.last_message_at = now
+    if meta_message_id:
+        session.last_message_id = meta_message_id
+    session.unread_count = 0
+    db.flush()
+    await manager.send_to_all(build_new_message_event(session, message))
+    await manager.send_to_all(
+        {
+            "type": "dashboard_update",
+            "payload": {
+                "messages_in_delta": 0,
+                "messages_out_delta": 1,
+                "session_id": session.id,
+            },
+        }
+    )
+    return message
+
+
 def _existing_reminder(
     db: Session,
     *,
@@ -768,7 +1063,10 @@ def _update_reminder_from_snapshot(
     snapshot: BridgeAccountSnapshot,
     schedule: PaymentSchedule,
     template_name: str | None,
+    session_id: int | None = None,
 ) -> None:
+    if session_id is not None:
+        reminder.session_id = session_id
     reminder.phone = snapshot.phone or reminder.phone
     reminder.folio = snapshot.folio or reminder.folio
     reminder.cuenta = snapshot.cuenta or reminder.cuenta
@@ -790,10 +1088,13 @@ def upsert_scheduled_reminder(
     schedule: PaymentSchedule,
     reminder_type: str,
     template_name: str | None,
+    session_id: int | None = None,
     dry_run: bool = False,
 ) -> tuple[PaymentReminder | None, str]:
     if not snapshot.cuenta or not snapshot.phone:
         return None, CLASS_INSUFFICIENT_BRIDGE_DATA
+    if session_id is None and not dry_run:
+        return None, CLASS_MISSING_CHAT_SESSION
     existing = _existing_reminder(
         db,
         cuenta=snapshot.cuenta,
@@ -809,6 +1110,7 @@ def upsert_scheduled_reminder(
                 snapshot=snapshot,
                 schedule=schedule,
                 template_name=template_name,
+                session_id=session_id,
             )
             existing.status = STATUS_SCHEDULED
         return existing, CLASS_ALREADY_SCHEDULED
@@ -821,6 +1123,7 @@ def upsert_scheduled_reminder(
             snapshot=snapshot,
             schedule=schedule,
             template_name=template_name,
+            session_id=session_id,
         )
         existing.status = STATUS_SCHEDULED
         existing.error_code = None
@@ -828,6 +1131,7 @@ def upsert_scheduled_reminder(
         return existing, STATUS_SCHEDULED
 
     reminder = PaymentReminder(
+        session_id=session_id,
         phone=snapshot.phone,
         folio=snapshot.folio,
         cuenta=snapshot.cuenta,
@@ -887,6 +1191,54 @@ def _cancel_future_settled(db: Session, *, cuenta: str, current_id: int | None =
     )
 
 
+def _reminder_stats(
+    db: Session,
+    *,
+    cuenta: str | None = None,
+    session_id: int | None = None,
+) -> ReminderStats:
+    try:
+        query = db.query(PaymentReminder)
+        if cuenta:
+            query = query.filter(PaymentReminder.cuenta == cuenta)
+        elif session_id:
+            query = query.filter(PaymentReminder.session_id == session_id)
+        else:
+            return ReminderStats()
+
+        sent_rows = query.filter(PaymentReminder.status == STATUS_SENT).all()
+        scheduled_rows = query.filter(PaymentReminder.status == STATUS_SCHEDULED).all()
+        return ReminderStats(
+            sent_count=len(sent_rows),
+            last_sent_at=max(
+                (row.sent_at for row in sent_rows if row.sent_at),
+                default=None,
+            ),
+            next_scheduled_at=min(
+                (row.scheduled_for for row in scheduled_rows if row.scheduled_for),
+                default=None,
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "payment_reminder_stats_failed",
+            extra={"cuenta_masked": _mask(cuenta), "session_id": session_id},
+            exc_info=True,
+        )
+        return ReminderStats()
+
+
+def _build_conversation_message_preview(
+    *,
+    snapshot: BridgeAccountSnapshot,
+    schedule: PaymentSchedule | None,
+) -> str:
+    cuenta = snapshot.account_reference_formatted or format_account_reference(snapshot.cuenta) or snapshot.cuenta or "N/D"
+    minimum = _money_text(snapshot.minimum_payment)
+    due = _date_text(schedule.due_date if schedule else None)
+    return f"Recordatorio de pago enviado: cuenta {cuenta}, pago minimo {minimum}, vencimiento {due}."
+
+
 def _build_process_result(
     *,
     snapshot: BridgeAccountSnapshot,
@@ -895,6 +1247,8 @@ def _build_process_result(
     template_name: str | None,
     reminder_type: str | None,
     dry_run: bool,
+    session_resolution: ChatSessionResolution | None = None,
+    reminder_stats: ReminderStats | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
     cuenta_formateada = snapshot.account_reference_formatted or format_account_reference(snapshot.cuenta)
@@ -902,12 +1256,22 @@ def _build_process_result(
         (snapshot.account_reference_valid and snapshot.account_reference_formatted)
         or (cuenta_formateada and not snapshot.account_reference_reason)
     )
-    should_send = bool(
+    test_phone_allowed = is_test_phone_allowed(snapshot.phone)
+    send_candidate = bool(
         template_name
         and snapshot.payment_status == PAYMENT_STATUS_UNPAID
         and cuenta_formateada_valida
         and classification not in {CLASS_NOT_DUE, CLASS_SETTLED, CLASS_BRIDGE_ERROR, CLASS_INSUFFICIENT_BRIDGE_DATA}
+        and (session_resolution is None or session_resolution.found)
     )
+    should_send = bool(send_candidate and test_phone_allowed)
+    resolved_reason = reason
+    if resolved_reason is None and send_candidate and not test_phone_allowed:
+        resolved_reason = CLASS_SKIPPED_TEST_PHONE_ONLY
+    preview = _build_conversation_message_preview(snapshot=snapshot, schedule=schedule) if schedule else None
+    session_found = bool(session_resolution.found) if session_resolution else None
+    session_id = session_resolution.session_id if session_resolution else None
+    stats = reminder_stats or ReminderStats()
     return {
         "cuenta": snapshot.cuenta,
         "cuenta_raw": snapshot.account_reference_raw or snapshot.cuenta,
@@ -926,8 +1290,8 @@ def _build_process_result(
         "estado_pago": snapshot.payment_status,
         "fuente_estado_pago": snapshot.payment_status_source,
         "should_send": should_send,
-        "reason": reason,
-        "test_phone_allowed": is_test_phone_allowed(snapshot.phone),
+        "reason": resolved_reason,
+        "test_phone_allowed": test_phone_allowed,
         "bridge_endpoint": "collections/account/payments",
         "bridge_found": snapshot.bridge_found,
         "fecha_venta": snapshot.sale_date.isoformat() if snapshot.sale_date else None,
@@ -942,6 +1306,15 @@ def _build_process_result(
         "would_schedule_next": bool(schedule and classification not in {CLASS_SETTLED, CLASS_BRIDGE_ERROR, CLASS_INSUFFICIENT_BRIDGE_DATA}),
         "would_cancel_settled": classification == CLASS_SETTLED,
         "missing_fields": snapshot.missing_fields or [],
+        "session_id": session_id,
+        "chat_session_found": session_found,
+        "chat_session_match_reason": session_resolution.reason if session_resolution else None,
+        "chat_session_candidates_count": session_resolution.candidates_count if session_resolution else None,
+        "would_create_conversation_message": bool(should_send and session_found),
+        "conversation_message_preview": preview if should_send else None,
+        "next_payment_reminder_at": stats.next_scheduled_at.isoformat() if stats.next_scheduled_at else None,
+        "sent_count_prev": stats.sent_count,
+        "last_payment_reminder_at": stats.last_sent_at.isoformat() if stats.last_sent_at else None,
     }
 
 
@@ -962,6 +1335,18 @@ async def dry_run_payment_reminder(
         company_id=company_id,
         client=client,
     )
+    session_resolution = resolve_chat_session_for_reminder(
+        db,
+        snapshot=snapshot,
+        phone=snapshot.phone,
+        folio=snapshot.folio or folio,
+        cuenta=snapshot.account_reference_formatted or snapshot.cuenta or cuenta,
+    )
+    stats = _reminder_stats(
+        db,
+        cuenta=snapshot.cuenta or cuenta,
+        session_id=session_resolution.session_id,
+    )
     if snapshot.error_code:
         return _build_process_result(
             snapshot=snapshot,
@@ -970,6 +1355,8 @@ async def dry_run_payment_reminder(
             template_name=None,
             reminder_type=None,
             dry_run=True,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason=snapshot.error_message_sanitized,
         )
     if snapshot.settled:
@@ -980,6 +1367,8 @@ async def dry_run_payment_reminder(
             template_name=None,
             reminder_type=None,
             dry_run=True,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason="settled_confirmed_by_bridge",
         )
     if snapshot.missing_fields:
@@ -990,7 +1379,21 @@ async def dry_run_payment_reminder(
             template_name=None,
             reminder_type=None,
             dry_run=True,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason="missing_bridge_fields",
+        )
+    if not session_resolution.found:
+        return _build_process_result(
+            snapshot=snapshot,
+            schedule=None,
+            classification=session_resolution.reason,
+            template_name=None,
+            reminder_type=None,
+            dry_run=True,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
+            reason=session_resolution.reason,
         )
 
     try:
@@ -1003,6 +1406,8 @@ async def dry_run_payment_reminder(
             template_name=None,
             reminder_type=None,
             dry_run=True,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason=str(exc),
         )
     classification = classify_reminder_case(
@@ -1020,6 +1425,8 @@ async def dry_run_payment_reminder(
         template_name=template_name,
         reminder_type=reminder_type,
         dry_run=True,
+        session_resolution=session_resolution,
+        reminder_stats=stats,
         reason=None,
     )
 
@@ -1043,6 +1450,19 @@ async def process_due_payment_reminder(
         company_id=company_id,
         client=client,
     )
+    session_resolution = resolve_chat_session_for_reminder(
+        db,
+        snapshot=snapshot,
+        phone=snapshot.phone or reminder.phone,
+        folio=snapshot.folio or reminder.folio,
+        cuenta=snapshot.account_reference_formatted or snapshot.cuenta or reminder.cuenta,
+        session_id=getattr(reminder, "session_id", None),
+    )
+    stats = _reminder_stats(
+        db,
+        cuenta=snapshot.cuenta or reminder.cuenta,
+        session_id=session_resolution.session_id,
+    )
 
     if snapshot.error_code:
         if not dry_run:
@@ -1059,6 +1479,8 @@ async def process_due_payment_reminder(
             template_name=None,
             reminder_type=None,
             dry_run=dry_run,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason=snapshot.error_message_sanitized,
         )
 
@@ -1070,6 +1492,8 @@ async def process_due_payment_reminder(
             template_name=None,
             reminder_type=None,
             dry_run=dry_run,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason="settled_confirmed_by_bridge",
         )
         if not dry_run:
@@ -1107,7 +1531,39 @@ async def process_due_payment_reminder(
             template_name=None,
             reminder_type=None,
             dry_run=dry_run,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason="missing_bridge_fields",
+        )
+
+    if not session_resolution.found:
+        if not dry_run:
+            _mark_result(
+                reminder,
+                status=STATUS_SKIPPED,
+                error_code=session_resolution.reason,
+                error_message=session_resolution.reason,
+            )
+        logger.info(
+            "payment_reminder_skipped_chat_session",
+            extra={
+                "cuenta_masked": _mask(snapshot.cuenta or reminder.cuenta),
+                "folio_masked": _mask(snapshot.folio or reminder.folio),
+                "phone_last4": _mask(snapshot.phone or reminder.phone),
+                "reason": session_resolution.reason,
+                "candidates_count": session_resolution.candidates_count,
+            },
+        )
+        return _build_process_result(
+            snapshot=snapshot,
+            schedule=None,
+            classification=session_resolution.reason,
+            template_name=None,
+            reminder_type=None,
+            dry_run=dry_run,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
+            reason=session_resolution.reason,
         )
 
     try:
@@ -1129,6 +1585,8 @@ async def process_due_payment_reminder(
             template_name=None,
             reminder_type=None,
             dry_run=dry_run,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason=str(exc),
         )
     classification = classify_reminder_case(
@@ -1147,6 +1605,8 @@ async def process_due_payment_reminder(
         template_name=template_name,
         reminder_type=reminder_type,
         dry_run=dry_run,
+        session_resolution=session_resolution,
+        reminder_stats=stats,
     )
 
     if dry_run:
@@ -1157,6 +1617,7 @@ async def process_due_payment_reminder(
         snapshot=snapshot,
         schedule=schedule,
         template_name=template_name,
+        session_id=session_resolution.session_id,
     )
     reminder.dry_run = False
 
@@ -1245,6 +1706,27 @@ async def process_due_payment_reminder(
     reminder.reminder_type = reminder_type
     reminder.meta_message_id = _response_meta_message_id(response)
     _mark_result(reminder, status=STATUS_SENT)
+    result["conversation_message_created"] = False
+    try:
+        message = await _record_sent_conversation_message(
+            db,
+            session=session_resolution.session,
+            reminder=reminder,
+            snapshot=snapshot,
+            schedule=schedule,
+            reminder_type=reminder_type,
+            meta_message_id=reminder.meta_message_id,
+        )
+        result["conversation_message_created"] = bool(message)
+    except Exception:
+        logger.exception(
+            "payment_reminder_conversation_message_failed",
+            extra={
+                "reminder_id": getattr(reminder, "id", None),
+                "session_id": session_resolution.session_id,
+                "cuenta_masked": _mask(snapshot.cuenta),
+            },
+        )
 
     next_template, next_type = _template_for_classification(CLASS_NOT_DUE)
     upsert_scheduled_reminder(
@@ -1258,6 +1740,7 @@ async def process_due_payment_reminder(
         ),
         reminder_type=next_type or REMINDER_PAYMENT_PENDING,
         template_name=next_template,
+        session_id=session_resolution.session_id,
     )
     result["reason"] = "sent"
     result["meta_message_id"] = reminder.meta_message_id
@@ -1352,6 +1835,18 @@ async def sync_payment_reminder_candidates(
         )
         normalized = _preserve_payment_schedule_fields(normalized, record)
         snapshot = _snapshot_from_item(normalized, company_id=company_id)
+        session_resolution = resolve_chat_session_for_reminder(
+            db,
+            snapshot=snapshot,
+            phone=snapshot.phone,
+            folio=snapshot.folio,
+            cuenta=snapshot.account_reference_formatted or snapshot.cuenta,
+        )
+        stats = _reminder_stats(
+            db,
+            cuenta=snapshot.cuenta,
+            session_id=session_resolution.session_id,
+        )
         if snapshot.settled:
             if not dry_run and snapshot.cuenta:
                 _cancel_future_settled(db, cuenta=snapshot.cuenta)
@@ -1363,6 +1858,8 @@ async def sync_payment_reminder_candidates(
                     template_name=None,
                     reminder_type=None,
                     dry_run=dry_run,
+                    session_resolution=session_resolution,
+                    reminder_stats=stats,
                     reason="settled_confirmed_by_bridge",
                 )
             )
@@ -1376,7 +1873,25 @@ async def sync_payment_reminder_candidates(
                     template_name=None,
                     reminder_type=None,
                     dry_run=dry_run,
+                    session_resolution=session_resolution,
+                    reminder_stats=stats,
                     reason="missing_bridge_fields",
+                )
+            )
+            continue
+
+        if not session_resolution.found:
+            results.append(
+                _build_process_result(
+                    snapshot=snapshot,
+                    schedule=None,
+                    classification=session_resolution.reason,
+                    template_name=None,
+                    reminder_type=None,
+                    dry_run=dry_run,
+                    session_resolution=session_resolution,
+                    reminder_stats=stats,
+                    reason=session_resolution.reason,
                 )
             )
             continue
@@ -1392,6 +1907,8 @@ async def sync_payment_reminder_candidates(
                     template_name=None,
                     reminder_type=None,
                     dry_run=dry_run,
+                    session_resolution=session_resolution,
+                    reminder_stats=stats,
                     reason=str(exc),
                 )
             )
@@ -1413,6 +1930,7 @@ async def sync_payment_reminder_candidates(
             schedule=schedule,
             reminder_type=reminder_type,
             template_name=template_name,
+            session_id=session_resolution.session_id,
             dry_run=dry_run,
         )
         result = _build_process_result(
@@ -1422,6 +1940,8 @@ async def sync_payment_reminder_candidates(
             template_name=template_name,
             reminder_type=reminder_type,
             dry_run=dry_run,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
             reason=status,
         )
         results.append(result)

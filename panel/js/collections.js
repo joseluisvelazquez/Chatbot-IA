@@ -138,6 +138,8 @@ function rowSignature(item = {}) {
         item.sale_date || "",
         item.days_overdue || "",
         item.total_paid || "",
+        item.next_payment_reminder_at || "",
+        item.payment_reminders_sent_count ?? "",
     ]);
 }
 
@@ -212,7 +214,16 @@ function formatDays(value) {
     return number === 1 ? "1 dia" : `${number} dias`;
 }
 
+function formatReminderSummary(item = {}) {
+    const sent = Number(item.payment_reminders_sent_count || item.payment_reminders?.sent_count || 0);
+    const next = item.next_payment_reminder_at || item.payment_reminders?.next_scheduled_for;
+    const nextText = next ? ui.formatDateTime(next) : "Sin programar";
+    const sentText = sent > 0 ? `${sent} enviado${sent === 1 ? "" : "s"}` : "Sin enviados";
+    return { nextText, sentText };
+}
+
 function updateCollectionRow(row, item) {
+    const reminder = formatReminderSummary(item);
     row.className = "cursor-pointer border-b border-gray-100 transition hover:bg-gray-50 dark:border-slate-700 dark:hover:bg-slate-700/40";
     row.innerHTML = `
         <td data-label="No. cuenta" class="px-4 py-4 font-medium">${ui.escapeHtml(ui.safeText(item.no_cuenta))}</td>
@@ -230,6 +241,12 @@ function updateCollectionRow(row, item) {
         <td data-label="Fecha venta" class="px-4 py-4 whitespace-nowrap">${ui.escapeHtml(ui.formatDateTime(item.sale_date))}</td>
         <td data-label="Atraso" class="px-4 py-4">${ui.escapeHtml(formatDays(item.days_overdue))}</td>
         <td data-label="Total pagado" class="px-4 py-4 whitespace-nowrap">${ui.escapeHtml(ui.formatMoney(item.total_paid))}</td>
+        <td data-label="Recordatorios" class="px-4 py-4 min-w-[170px]">
+            <div class="flex flex-col gap-1 text-xs">
+                <span class="font-medium text-gray-700 dark:text-slate-200">Prox: ${ui.escapeHtml(reminder.nextText)}</span>
+                <span class="text-gray-500 dark:text-slate-400">${ui.escapeHtml(reminder.sentText)}</span>
+            </div>
+        </td>
     `;
 }
 
@@ -658,12 +675,15 @@ function updateDrawer(item) {
 
         const account = document.getElementById("collectionsDrawerAccount");
         if (account) {
+            const reminder = formatReminderSummary(item);
             account.innerHTML = ui.renderKeyValueGrid([
                 { label: "No. cuenta", value: item.no_cuenta },
                 { label: "Folio", value: item.folio },
                 { label: "Estado de cuenta", value: item.account_status },
                 { label: "Proceso", value: item.process },
                 { label: "Clasificacion", value: classificationLabel(item) },
+                { label: "Proximo recordatorio", value: reminder.nextText },
+                { label: "Recordatorios enviados", value: reminder.sentText },
                 { label: "Producto", value: item.product },
                 { label: "Fecha venta", value: ui.formatDateTime(item.sale_date) },
                 { label: "Ultimo pago", value: ui.formatDateTime(item.last_payment) },

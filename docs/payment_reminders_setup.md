@@ -17,11 +17,13 @@ Para recordatorios solo existen dos estados operativos: `pagado` y `no_pagado`. 
 3. Normaliza cuenta, folio, telefono, cliente, saldo, pago minimo y fechas.
 4. Resuelve la referencia operativa de cuenta con el mismo formato usado por `INFO_COMPROBANTE_ACCESO`.
 5. Reutiliza la logica de cobranza/pagos para resolver `pagado` o `no_pagado`.
-6. Clasifica si corresponde enviar por vencimiento, omitir por no vencido, cancelar por pagado o saltar por datos insuficientes.
-7. Aplica el candado temporal `TEST_PHONE_ONLY`.
-8. Envia plantilla Meta, o registra que se omitio.
-9. Programa siguiente recordatorio o cancela futuros por pago confirmado.
-10. Guarda auditoria en `payment_reminders`.
+6. Valida que exista una `chat_session` local confiable para ese telefono y, cuando existan, que folio/cuenta coincidan.
+7. Clasifica si corresponde enviar por vencimiento, omitir por no vencido, cancelar por pagado o saltar por datos insuficientes.
+8. Aplica el candado temporal `TEST_PHONE_ONLY`.
+9. Envia plantilla Meta, o registra que se omitio.
+10. Guarda el envio exitoso como mensaje visible en conversaciones.
+11. Programa siguiente recordatorio o cancela futuros por pago confirmado.
+12. Guarda auditoria en `payment_reminders`.
 
 ## Ciclo semanal por cliente
 
@@ -60,15 +62,18 @@ La cuenta enviada en recordatorios debe usar el mismo formato operativo que el f
 
 ## Base de datos
 
-Ejecutar la migracion manual:
+Ejecutar las migraciones manuales:
 
 ```sql
 app/db/migrations/20260525_payment_reminders.sql
+app/db/migrations/20260527_payment_reminders_session_id.sql
 ```
 
 Tabla nueva: `payment_reminders`.
 
-Campos principales: telefono, folio, cuenta, fecha de vencimiento, proxima fecha, fecha programada, tipo de recordatorio, plantilla, estado, snapshots de saldo/monto minimo, hash de Bridge, id de Meta, errores sanitizados y timestamps de auditoria.
+Campos principales: `session_id`, telefono, folio, cuenta, fecha de vencimiento, proxima fecha, fecha programada, tipo de recordatorio, plantilla, estado, snapshots de saldo/monto minimo, hash de Bridge, id de Meta, errores sanitizados y timestamps de auditoria.
+
+`session_id` es nullable para compatibilidad con registros historicos, pero los envios nuevos deben resolver una `chat_session` antes de programar o enviar.
 
 ## Estados de recordatorio
 
@@ -99,6 +104,10 @@ POST /api/panel/payment-reminders/dry-run?cuenta={{CUENTA}}&folio={{FOLIO}}
 
 Devuelve cuenta, `cuenta_raw`, `cuenta_formateada`, `prefijo_cuenta`, `fuente_formato_cuenta`, `cuenta_formateada_valida`, telefono enmascarado, saldo, `fecha_base`, `due_date`, `next_due_date`, `scheduled_at`, `estado_pago`, `fuente_estado_pago`, `should_send`, si pasa `TEST_PHONE_ONLY`, plantilla que se usaria y motivo si no se envia.
 
+Tambien devuelve datos de integracion con conversaciones: `session_id`, `chat_session_found`, `chat_session_match_reason`, `would_create_conversation_message`, `conversation_message_preview`, `next_payment_reminder_at`, `sent_count_prev` y `last_payment_reminder_at`.
+
+Si no existe `chat_session`, el resultado debe quedar con `should_send=false` y reason `missing_chat_session`. Si hay varias sesiones posibles sin folio/cuenta concluyente, reason `ambiguous_chat_session`. Si la sesion existe pero folio/cuenta no coincide, reason `chat_session_account_mismatch`.
+
 Para sincronizar sin escribir:
 
 ```http
@@ -121,12 +130,48 @@ POST /api/panel/payment-reminders/run-due?dry_run=true&limit=25
 
 Si el telefono no esta en `TEST_PHONE_ONLY`, se registra `skipped_test_phone_only` y no se envia nada.
 
+Ademas de pasar `TEST_PHONE_ONLY`, debe existir `chat_session` local. El filtro de sesion no reemplaza el candado de pruebas: ambos deben cumplirse.
+
+## Conversaciones y cobranza
+
+Cuando Meta confirma un envio, el modulo crea un mensaje saliente visible en conversaciones con `type=payment_reminder`, `direction=out` y metadata con cuenta, folio, vencimiento, plantilla e id de Meta. Tambien actualiza `chat_sessions.last_message` y `chat_sessions.last_message_at`, y emite el evento WebSocket de nuevo mensaje para el panel.
+
+El modulo de cobranza agrega un resumen por cuenta:
+
+- `next_payment_reminder_at`: proximo recordatorio programado.
+- `payment_reminders_sent_count`: cantidad de recordatorios enviados.
+- `last_payment_reminder_at`: ultimo recordatorio enviado.
+
+En el panel de cobranza se muestra una columna compacta con el proximo recordatorio y el total enviado. Si no hay datos, se muestra como sin programar o sin enviados.
+
+Para verificar por SQL:
+
+```sql
+SELECT id, session_id, phone, folio, cuenta, status, due_date, scheduled_for, sent_at
+FROM payment_reminders
+WHERE session_id = {{SESSION_ID}}
+ORDER BY scheduled_for DESC;
+```
+
+Y para confirmar que el mensaje quedo visible:
+
+```sql
+SELECT id, session_id, direction, type, content, message_id, created_at
+FROM messages
+WHERE session_id = {{SESSION_ID}}
+  AND type = 'payment_reminder'
+ORDER BY created_at DESC;
+```
+
 ## Logs a revisar
 
 - `payment_reminder_bridge_lookup`
 - `payment_reminder_bridge_error`
 - `payment_reminder_missing_bridge_fields`
 - `payment_reminder_skipped_test_phone_only`
+- `payment_reminder_skipped_chat_session`
+- `payment_reminder_conversation_message_failed`
+- `collections_payment_reminder_summary_failed`
 - `payment_reminders_job_finished`
 - `whatsapp_send_request`
 - `whatsapp_send_failed`

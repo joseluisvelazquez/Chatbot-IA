@@ -10,10 +10,11 @@ import time
 import unicodedata
 from typing import Any, Mapping
 
-from sqlalchemy import text
+from sqlalchemy import case, func, text
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
+from app.db.models import PaymentReminder
 from app.security.auth_service import get_nombre_resumido
 from app.services.siga_bridge import SigaBridgeError, get_siga_bridge_client
 from app.services.siga_navigation import build_siga_account_url
@@ -998,6 +999,84 @@ def _collections_response(
     }
 
 
+def _iso_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def attach_payment_reminder_summary(
+    db: Session | None,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not db or not items:
+        return items
+
+    accounts = sorted({
+        str(item.get("no_cuenta") or "").strip()
+        for item in items
+        if str(item.get("no_cuenta") or "").strip()
+    })
+    if not accounts:
+        return items
+
+    try:
+        rows = (
+            db.query(
+                PaymentReminder.cuenta.label("cuenta"),
+                func.count(case((PaymentReminder.status == "sent", 1))).label("sent_count"),
+                func.max(case((PaymentReminder.status == "sent", PaymentReminder.sent_at))).label("last_sent_at"),
+                func.min(case((PaymentReminder.status == "scheduled", PaymentReminder.scheduled_for))).label("next_scheduled_for"),
+            )
+            .filter(PaymentReminder.cuenta.in_(accounts))
+            .group_by(PaymentReminder.cuenta)
+            .all()
+        )
+    except Exception:
+        logger.warning(
+            "collections_payment_reminder_summary_failed",
+            extra={"accounts_count": len(accounts)},
+            exc_info=True,
+        )
+        return items
+
+    summary_by_account = {
+        row.cuenta: {
+            "next_scheduled_for": _iso_or_none(row.next_scheduled_for),
+            "sent_count": int(row.sent_count or 0),
+            "last_sent_at": _iso_or_none(row.last_sent_at),
+        }
+        for row in rows
+    }
+
+    for item in items:
+        cuenta = str(item.get("no_cuenta") or "").strip()
+        summary = summary_by_account.get(cuenta) or {
+            "next_scheduled_for": None,
+            "sent_count": 0,
+            "last_sent_at": None,
+        }
+        item["payment_reminders"] = summary
+        item["next_payment_reminder_at"] = summary["next_scheduled_for"]
+        item["payment_reminders_sent_count"] = summary["sent_count"]
+        item["last_payment_reminder_at"] = summary["last_sent_at"]
+    return items
+
+
+def attach_payment_reminder_summary_to_item(
+    db: Session | None,
+    item: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if item:
+        attach_payment_reminder_summary(db, [item])
+    return item
+
+
 def normalize_collection_manager(record: Any) -> dict[str, Any] | None:
     item = _as_mapping(record)
     if not item:
@@ -1850,6 +1929,7 @@ async def list_collections(
                         if item.get("classification") == filters.status
                     ]
                 items = await enrich_collection_list_with_bridge_payment_summary(bridge_client, user, items)
+                items = attach_payment_reminder_summary(db, items)
                 total = int(payload.get("total")) if payload.get("total") is not None else None
                 bridge_warnings = warnings + [
                     str(warning)
@@ -1907,6 +1987,7 @@ async def list_collections(
             )
 
     items, total = _local_list_collections(db, user, filters, collector=collector)
+    items = attach_payment_reminder_summary(db, items)
     response = _collections_response(
         filters,
         items=items,
@@ -1969,7 +2050,7 @@ async def get_collection_detail(
             return None
         local_item["payments"] = _local_payments(db, user, no_cuenta)
         local_item["payments_count"] = len(local_item["payments"])
-        return local_item
+        return attach_payment_reminder_summary_to_item(db, local_item)
 
     try:
         client = get_siga_bridge_client()
@@ -2076,7 +2157,7 @@ async def get_collection_detail(
                 return None
             local_item["payments"] = _local_payments_with_initial(db, user, no_cuenta, local_item)
             local_item["payments_count"] = len(local_item["payments"])
-            return local_item
+            return attach_payment_reminder_summary_to_item(db, local_item)
         account_object = _as_mapping(account_data.get("account"))
         account_record = {
             **collection_record,
@@ -2110,8 +2191,8 @@ async def get_collection_detail(
                 return None
             local_item["payments"] = _local_payments_with_initial(db, user, no_cuenta, local_item)
             local_item["payments_count"] = len(local_item["payments"])
-            return local_item
-        return _merge_collection(bridge_item, local_item)
+            return attach_payment_reminder_summary_to_item(db, local_item)
+        return attach_payment_reminder_summary_to_item(db, _merge_collection(bridge_item, local_item))
     except SigaBridgeError as exc:
         logger.warning(
             "collections_bridge_detail_failed",
@@ -2144,7 +2225,7 @@ async def get_collection_detail(
         "source": "local_fallback",
         "available": False,
     }
-    return local_item
+    return attach_payment_reminder_summary_to_item(db, local_item)
 
 
 async def get_collection_payments(

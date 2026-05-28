@@ -295,10 +295,12 @@ class PaymentReminder(Base):
         Index("idx_payment_reminders_phone", "phone"),
         Index("idx_payment_reminders_folio", "folio"),
         Index("idx_payment_reminders_cuenta", "cuenta"),
+        Index("idx_payment_reminders_session_id", "session_id"),
         Index("idx_payment_reminders_receipt_status", "receipt_status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[Optional[int]] = mapped_column(Integer)
     phone: Mapped[str] = mapped_column(VARCHAR(20), nullable=False)
     folio: Mapped[Optional[str]] = mapped_column(VARCHAR(50))
     cuenta: Mapped[str] = mapped_column(VARCHAR(50), nullable=False)

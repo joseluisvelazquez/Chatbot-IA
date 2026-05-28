@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -362,7 +363,8 @@ def test_reminder_and_comprobante_access_share_account_reference_format():
     assert "*B4260506*" in MessageBuilder.info_comprobante_acceso("B4260506", "CLI-123")
 
 
-def test_dry_run_payload_has_simple_payment_state_and_no_receipt_status():
+def test_dry_run_payload_has_simple_payment_state_and_no_receipt_status(monkeypatch):
+    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", ["5214420001679"])
     snapshot = BridgeAccountSnapshot(
         bridge_found=True,
         company_id=1,
@@ -389,6 +391,13 @@ def test_dry_run_payload_has_simple_payment_state_and_no_receipt_status():
         template_name="payment_pending",
         reminder_type=REMINDER_PAYMENT_PENDING,
         dry_run=True,
+        session_resolution=payment_service.ChatSessionResolution(
+            SimpleNamespace(id=10),
+            True,
+            "single_phone_match",
+            "phone",
+            1,
+        ),
     )
 
     assert result["estado_pago"] == PAYMENT_STATUS_UNPAID
@@ -398,6 +407,8 @@ def test_dry_run_payload_has_simple_payment_state_and_no_receipt_status():
     assert "fuente_formato_cuenta" in result
     assert "cuenta_formateada_valida" in result
     assert result["should_send"] is True
+    assert result["chat_session_found"] is True
+    assert result["would_create_conversation_message"] is True
     assert "receipt_status" not in result
 
 
@@ -454,8 +465,295 @@ def test_existing_active_reminder_is_not_duplicated(monkeypatch):
         schedule=schedule,
         reminder_type=REMINDER_PAYMENT_PENDING,
         template_name="payment_pending",
+        session_id=10,
         dry_run=False,
     )
 
     assert reminder is existing
     assert status == CLASS_ALREADY_SCHEDULED
+
+
+def test_upsert_does_not_schedule_without_session_id():
+    fake_db = SimpleNamespace(add=lambda reminder: pytest.fail("should not add without chat session"))
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="CTA-1",
+        phone="5214420001679",
+        balance=Decimal("100.00"),
+        minimum_payment=Decimal("50.00"),
+        payment_status=PAYMENT_STATUS_UNPAID,
+    )
+    schedule = PaymentSchedule(
+        due_date=date(2026, 6, 9),
+        next_due_date=date(2026, 6, 16),
+        weekday=1,
+        source="bridge_fecha_venta_plus_7",
+    )
+
+    reminder, status = upsert_scheduled_reminder(
+        fake_db,
+        snapshot=snapshot,
+        schedule=schedule,
+        reminder_type=REMINDER_PAYMENT_PENDING,
+        template_name="payment_pending",
+        dry_run=False,
+    )
+
+    assert reminder is None
+    assert status == payment_service.CLASS_MISSING_CHAT_SESSION
+
+
+class FakeQuery:
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def all(self):
+        return list(self.rows)
+
+    def first(self):
+        return self.rows[0] if self.rows else None
+
+
+class FakeDb:
+    def __init__(self, rows=None):
+        self.rows = rows or []
+        self.added = []
+
+    def query(self, *_args, **_kwargs):
+        return FakeQuery(self.rows)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    def flush(self):
+        return None
+
+
+def chat_session(**overrides):
+    values = {
+        "id": 1,
+        "phone": "5214420001679",
+        "folio": "990001",
+        "extra_json": {},
+        "last_message": None,
+        "last_message_at": None,
+        "last_message_id": None,
+        "unread_count": 0,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_reminder_requires_existing_chat_session():
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214420001679",
+        folio="990001",
+    )
+
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([]),
+        snapshot=snapshot,
+    )
+
+    assert resolution.found is False
+    assert resolution.reason == payment_service.CLASS_MISSING_CHAT_SESSION
+
+
+def test_reminder_resolves_session_by_folio_when_phone_has_multiple_sessions():
+    session_a = chat_session(id=1, folio="OLD")
+    session_b = chat_session(id=2, folio="990001")
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214420001679",
+        folio="990001",
+    )
+
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session_a, session_b]),
+        snapshot=snapshot,
+    )
+
+    assert resolution.found is True
+    assert resolution.session_id == 2
+    assert resolution.reason == "folio_match"
+
+
+def test_reminder_does_not_resolve_ambiguous_chat_sessions():
+    session_a = chat_session(id=1, folio=None)
+    session_b = chat_session(id=2, folio=None)
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214420001679",
+        folio="990001",
+    )
+
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session_a, session_b]),
+        snapshot=snapshot,
+    )
+
+    assert resolution.found is False
+    assert resolution.reason == payment_service.CLASS_AMBIGUOUS_CHAT_SESSION
+
+
+def test_reminder_detects_chat_session_account_mismatch():
+    session = chat_session(
+        id=1,
+        folio="990001",
+        extra_json={"siga_bridge": {"verification_cache": {"snapshot": {"no_cuenta": "B900001"}}}},
+    )
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214420001679",
+        folio="990001",
+        account_reference_formatted="A900001",
+    )
+
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session]),
+        snapshot=snapshot,
+    )
+
+    assert resolution.found is False
+    assert resolution.reason == payment_service.CLASS_CHAT_SESSION_ACCOUNT_MISMATCH
+
+
+def test_dry_run_result_blocks_send_without_chat_session(monkeypatch):
+    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", ["5214420001679"])
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214420001679",
+        balance=Decimal("100.00"),
+        minimum_payment=Decimal("50.00"),
+        payment_status=PAYMENT_STATUS_UNPAID,
+    )
+    schedule = PaymentSchedule(
+        due_date=date(2026, 6, 9),
+        next_due_date=date(2026, 6, 16),
+        weekday=1,
+        source="bridge_fecha_venta_plus_7",
+    )
+
+    result = payment_service._build_process_result(
+        snapshot=snapshot,
+        schedule=schedule,
+        classification=CLASS_DUE_TODAY_UNPAID,
+        template_name="payment_pending",
+        reminder_type=REMINDER_PAYMENT_PENDING,
+        dry_run=True,
+        session_resolution=payment_service.ChatSessionResolution(
+            None,
+            False,
+            payment_service.CLASS_MISSING_CHAT_SESSION,
+        ),
+    )
+
+    assert result["should_send"] is False
+    assert result["chat_session_found"] is False
+    assert result["chat_session_match_reason"] == payment_service.CLASS_MISSING_CHAT_SESSION
+    assert result["would_create_conversation_message"] is False
+
+
+def test_dry_run_result_reports_test_phone_only_gate(monkeypatch):
+    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", ["5214420000000"])
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214420001679",
+        balance=Decimal("100.00"),
+        minimum_payment=Decimal("50.00"),
+        payment_status=PAYMENT_STATUS_UNPAID,
+    )
+    schedule = PaymentSchedule(
+        due_date=date(2026, 6, 9),
+        next_due_date=date(2026, 6, 16),
+        weekday=1,
+        source="bridge_fecha_venta_plus_7",
+    )
+
+    result = payment_service._build_process_result(
+        snapshot=snapshot,
+        schedule=schedule,
+        classification=CLASS_DUE_TODAY_UNPAID,
+        template_name="payment_pending",
+        reminder_type=REMINDER_PAYMENT_PENDING,
+        dry_run=True,
+        session_resolution=payment_service.ChatSessionResolution(
+            chat_session(id=10),
+            True,
+            "single_phone_match",
+        ),
+    )
+
+    assert result["should_send"] is False
+    assert result["test_phone_allowed"] is False
+    assert result["reason"] == payment_service.CLASS_SKIPPED_TEST_PHONE_ONLY
+
+
+def test_sent_reminder_is_saved_as_conversation_message(monkeypatch):
+    events = []
+
+    async def send_to_all(event, **_kwargs):
+        events.append(event)
+
+    monkeypatch.setattr(payment_service, "manager", SimpleNamespace(send_to_all=send_to_all))
+
+    db = FakeDb([])
+    session = chat_session(id=7, phone="5214420001679")
+    reminder = SimpleNamespace(id=99, phone="5214420001679", template_name="mxcomp_pago_vencido_v1")
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        folio="990001",
+        phone="5214420001679",
+        customer_name="Cliente Prueba",
+        balance=Decimal("100.00"),
+        minimum_payment=Decimal("50.00"),
+        account_reference_formatted="A900001",
+    )
+    schedule = PaymentSchedule(
+        due_date=date(2026, 6, 9),
+        next_due_date=date(2026, 6, 16),
+        weekday=1,
+        source="bridge_fecha_venta_plus_7",
+    )
+
+    message = asyncio.run(
+        payment_service._record_sent_conversation_message(
+            db,
+            session=session,
+            reminder=reminder,
+            snapshot=snapshot,
+            schedule=schedule,
+            reminder_type=REMINDER_PAYMENT_PENDING,
+            meta_message_id="wamid.test.payment_reminder",
+        )
+    )
+
+    assert message in db.added
+    assert message.direction == "out"
+    assert message.type == "payment_reminder"
+    assert message.message_id == "wamid.test.payment_reminder"
+    assert session.last_message.startswith("Recordatorio de pago enviado")
+    assert session.last_message_at is not None
+    assert any(event.get("type") == "new_message" for event in events)
