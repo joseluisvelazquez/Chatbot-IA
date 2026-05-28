@@ -12,8 +12,8 @@ Para recordatorios solo existen dos estados operativos: `pagado` y `no_pagado`. 
 
 ## Flujo general
 
-1. Obtiene candidatos de cobranza desde SIGA Bridge.
-2. Consulta Bridge antes de enviar cualquier recordatorio.
+1. Obtiene candidatos desde `chat_sessions` locales con folio o cuenta asociada.
+2. Consulta Bridge antes de programar o enviar cualquier recordatorio.
 3. Normaliza cuenta, folio, telefono, cliente, saldo, pago minimo y fechas.
 4. Resuelve la referencia operativa de cuenta con el mismo formato usado por `INFO_COMPROBANTE_ACCESO`.
 5. Reutiliza la logica de cobranza/pagos para resolver `pagado` o `no_pagado`.
@@ -45,7 +45,7 @@ La cuenta enviada en recordatorios debe usar el mismo formato operativo que el f
 
 - `PAYMENT_REMINDERS_ENABLED`: activa o desactiva el scheduler automatico. En produccion solo debe activarse despues de probar con dry-run.
 - `PAYMENT_REMINDERS_DRY_RUN`: si esta en `true`, simula sincronizacion y clasificacion sin enviar plantillas Meta reales ni escribir cambios operativos.
-- `PAYMENT_REMINDER_COMPANY_ID`: empresa usada para filtrar candidatos de cobranza. Por defecto `1`.
+- `PAYMENT_REMINDER_COMPANY_ID`: empresa usada para consultar datos frescos en Bridge. Por defecto `1`.
 - `PAYMENT_REMINDER_SYNC_LIMIT`: maximo de cuentas procesadas por corrida para evitar cargas grandes contra Bridge o base local.
 - `PAYMENT_REMINDER_SEND_HOUR`: hora local en la que se programan o envian recordatorios vencidos. No define el dia del cliente, solo la hora.
 - `PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES`: frecuencia con la que corre el job del scheduler.
@@ -101,6 +101,8 @@ Para sincronizar sin escribir:
 ```http
 POST /api/panel/payment-reminders/sync?dry_run=true&limit=25
 ```
+
+El `sync` recorre `chat_sessions` locales y solo programa recordatorios para sesiones que tengan folio/cuenta resoluble y datos confiables en Bridge. `run-due` no descubre clientes nuevos: solo procesa recordatorios ya existentes en `payment_reminders`.
 
 Para evaluar recordatorios vencidos sin enviar:
 

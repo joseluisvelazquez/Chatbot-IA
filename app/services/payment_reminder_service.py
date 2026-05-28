@@ -325,6 +325,42 @@ def _session_account_match(session: ChatSessions, cuenta: str | None) -> bool | 
     return any(_account_values_match(value, expected) for value in values)
 
 
+def _session_account_candidate(session: ChatSessions) -> str | None:
+    values = _collect_values_by_keys(
+        getattr(session, "extra_json", None),
+        {
+            "no_cuenta",
+            "cuenta",
+            "numero_cuenta",
+            "account",
+            "account_number",
+            "account_reference",
+            "cuenta_formateada",
+            "numero_cuenta_referencia",
+        },
+    )
+    return values[0] if values else None
+
+
+def _session_folio_candidate(session: ChatSessions) -> str | None:
+    direct = _clean_text(getattr(session, "folio", None))
+    if direct:
+        return direct
+    values = _collect_values_by_keys(getattr(session, "extra_json", None), {"folio"})
+    return values[0] if values else None
+
+
+def _chat_session_payment_candidates(db: Session, *, limit: int) -> list[ChatSessions]:
+    return (
+        db.query(ChatSessions)
+        .filter(ChatSessions.phone.isnot(None))
+        .filter(or_(ChatSessions.folio.isnot(None), ChatSessions.extra_json.isnot(None)))
+        .order_by(ChatSessions.last_message_at.desc(), ChatSessions.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
 def resolve_chat_session_for_reminder(
     db: Session,
     *,
@@ -1770,47 +1806,51 @@ async def sync_payment_reminder_candidates(
     today = today or mexico_now_naive().date()
     client = client or get_siga_bridge_client()
 
-    try:
-        payload = await client.get_collections(
-            company_id,
-            include_paid=False,
-            active_only=True,
-            limit=limit,
-            bypass_cache=True,
-        )
-    except SigaBridgeError as exc:
-        logger.warning(
-            "payment_reminder_candidate_sync_bridge_error",
-            extra={
-                "company_id": company_id,
-                "error_type": exc.__class__.__name__,
-                "status_code": getattr(exc, "status_code", None),
-            },
-        )
-        return {"synced": 0, "error": "bridge_error", "results": []}
-
     results = []
-    for record in _collection_records_from_payload(payload):
-        normalized = normalize_collection_record(
-            record,
-            source="siga_bridge",
-            bridge_status="ok",
-            prefer_payment_total=False,
+    sessions = _chat_session_payment_candidates(db, limit=max(limit * 3, limit))
+    for session in sessions:
+        if len(results) >= limit:
+            break
+
+        session_cuenta = _session_account_candidate(session)
+        session_folio = _session_folio_candidate(session)
+        if not session_cuenta and not session_folio:
+            continue
+
+        snapshot = await fetch_bridge_account_snapshot(
+            cuenta=session_cuenta,
+            folio=session_folio,
+            company_id=company_id,
+            client=client,
         )
-        normalized = _preserve_payment_schedule_fields(normalized, record)
-        snapshot = _snapshot_from_item(normalized, company_id=company_id)
         session_resolution = resolve_chat_session_for_reminder(
             db,
             snapshot=snapshot,
-            phone=snapshot.phone,
-            folio=snapshot.folio,
-            cuenta=snapshot.account_reference_formatted or snapshot.cuenta,
+            phone=snapshot.phone or getattr(session, "phone", None),
+            folio=snapshot.folio or session_folio,
+            cuenta=snapshot.account_reference_formatted or snapshot.cuenta or session_cuenta,
+            session_id=getattr(session, "id", None),
         )
         stats = _reminder_stats(
             db,
-            cuenta=snapshot.cuenta,
+            cuenta=snapshot.cuenta or session_cuenta,
             session_id=session_resolution.session_id,
         )
+        if snapshot.error_code:
+            results.append(
+                _build_process_result(
+                    snapshot=snapshot,
+                    schedule=None,
+                    classification=CLASS_BRIDGE_ERROR,
+                    template_name=None,
+                    reminder_type=None,
+                    dry_run=dry_run,
+                    session_resolution=session_resolution,
+                    reminder_stats=stats,
+                    reason=snapshot.error_message_sanitized or snapshot.error_code,
+                )
+            )
+            continue
         if snapshot.settled:
             if not dry_run and snapshot.cuenta:
                 _cancel_future_settled(db, cuenta=snapshot.cuenta)

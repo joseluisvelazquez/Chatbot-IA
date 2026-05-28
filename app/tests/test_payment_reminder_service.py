@@ -504,6 +504,10 @@ class FakeQuery:
     def order_by(self, *_args, **_kwargs):
         return self
 
+    def limit(self, limit):
+        self.rows = self.rows[:limit]
+        return self
+
     def all(self):
         return list(self.rows)
 
@@ -515,6 +519,7 @@ class FakeDb:
     def __init__(self, rows=None):
         self.rows = rows or []
         self.added = []
+        self.committed = False
 
     def query(self, *_args, **_kwargs):
         return FakeQuery(self.rows)
@@ -524,6 +529,9 @@ class FakeDb:
 
     def flush(self):
         return None
+
+    def commit(self):
+        self.committed = True
 
 
 def chat_session(**overrides):
@@ -539,6 +547,42 @@ def chat_session(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+class FakePaymentReminderBridge:
+    def __init__(self):
+        self.collection_calls = []
+
+    async def get_collections(self, company_id, **kwargs):
+        self.collection_calls.append(kwargs)
+        cuenta = kwargs.get("cuenta") or "A900001"
+        folio = kwargs.get("folio") or "990001"
+        return {
+            "items": [
+                {
+                    "no_cuenta": cuenta,
+                    "folio": folio,
+                    "phone": "5214420001679",
+                    "customer_name": "Cliente Prueba",
+                    "sale_date": "2026-05-19",
+                    "balance": "100.00",
+                    "minimum_payment": "50.00",
+                    "account_status": "ACTIVA",
+                    "process": "ACTIVO",
+                }
+            ]
+        }
+
+    async def get_account(self, cuenta, company_id, **kwargs):
+        return {
+            "account": cuenta,
+            "sale_date": "2026-05-19",
+            "status": "ACTIVA",
+            "plan": {"minimum_payment": "50.00"},
+        }
+
+    async def get_payments(self, cuenta, company_id, **kwargs):
+        return {"items": []}
 
 
 def test_reminder_requires_existing_chat_session():
@@ -557,6 +601,42 @@ def test_reminder_requires_existing_chat_session():
 
     assert resolution.found is False
     assert resolution.reason == payment_service.CLASS_MISSING_CHAT_SESSION
+
+
+def test_sync_uses_chat_sessions_as_candidate_source(monkeypatch):
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb(
+        [
+            chat_session(
+                id=10,
+                phone="5214420001679",
+                folio="990001",
+                extra_json={"siga_bridge": {"verification_cache": {"snapshot": {"no_cuenta": "A900001"}}}},
+            )
+        ]
+    )
+    bridge = FakePaymentReminderBridge()
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            client=bridge,
+            today=date(2026, 5, 26),
+        )
+    )
+
+    assert result["synced"] == 1
+    assert db.added
+    reminder = db.added[0]
+    assert reminder.session_id == 10
+    assert reminder.cuenta == "A900001"
+    assert reminder.due_date == date(2026, 5, 26)
+    assert bridge.collection_calls[0]["folio"] == "990001"
+    assert bridge.collection_calls[0]["cuenta"] == "A900001"
 
 
 def test_reminder_resolves_session_by_folio_when_phone_has_multiple_sessions():
