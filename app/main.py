@@ -72,6 +72,7 @@ def startup():
         id="inactivity_reminders",
         max_instances=1,  # solo dentro del mismo proceso
         coalesce=True,
+        replace_existing=True,
     )
     if settings.PAYMENT_REMINDERS_ENABLED:
         interval_minutes = max(1, int(settings.PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES or 15))
@@ -94,15 +95,27 @@ def startup():
             replace_existing=True,
             next_run_time=datetime.now(timezone.utc),
         )
+        logger.info(
+            "payment_reminders_scheduler_registered",
+            extra={
+                "job_id": "payment_reminders",
+                "next_run_time": "startup_immediate",
+                "interval_minutes": interval_minutes,
+            },
+        )
     else:
         logger.info("payment_reminders_scheduler_disabled")
-    scheduler.start()
+    if not scheduler.running:
+        scheduler.start()
+    else:
+        logger.info("scheduler_already_running")
     logger.info("scheduler_startup_finished")
 
 
 @app.on_event("shutdown")
 def shutdown():
-    scheduler.shutdown(wait=False)
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 @app.get("/")

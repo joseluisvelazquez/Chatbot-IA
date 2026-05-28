@@ -43,7 +43,12 @@ async def _run_payment_reminders() -> None:
             extra={
                 "dry_run": settings.PAYMENT_REMINDERS_DRY_RUN,
                 "synced": sync_result.get("synced"),
+                "chat_sessions_scanned": sync_result.get("chat_sessions_scanned"),
+                "chat_sessions_with_context": sync_result.get("chat_sessions_with_context"),
                 "processed": due_result.get("processed"),
+                "due_count": due_result.get("due_count"),
+                "sync_reason_counts": sync_result.get("reason_counts"),
+                "due_reason_counts": due_result.get("reason_counts"),
                 "sync_error": sync_result.get("error"),
                 "duration_ms": round((perf_counter() - started) * 1000, 2),
             },

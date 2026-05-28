@@ -335,6 +335,40 @@ def test_missing_required_account_prefix_blocks_reminder():
     assert "cuenta_formateada" in snapshot.missing_fields
 
 
+def test_missing_bridge_payment_date_is_required_without_explicit_fallback(monkeypatch):
+    monkeypatch.setattr(settings, "PAYMENT_REMINDER_DEFAULT_WEEKDAY", None)
+    snapshot = payment_service._snapshot_from_item(
+        {
+            "source": "siga_bridge",
+            "no_cuenta": "A4260506",
+            "phone": "5214420001679",
+            "customer_name": "Cliente Prueba",
+            "balance": "100.00",
+            "financial_summary": {"minimum_payment": "50.00"},
+        },
+        company_id=1,
+    )
+
+    assert "fecha_base_o_fecha_venta" in snapshot.missing_fields
+
+
+def test_explicit_default_weekday_allows_missing_bridge_payment_date(monkeypatch):
+    monkeypatch.setattr(settings, "PAYMENT_REMINDER_DEFAULT_WEEKDAY", "FRIDAY")
+    snapshot = payment_service._snapshot_from_item(
+        {
+            "source": "siga_bridge",
+            "no_cuenta": "A4260506",
+            "phone": "5214420001679",
+            "customer_name": "Cliente Prueba",
+            "balance": "100.00",
+            "financial_summary": {"minimum_payment": "50.00"},
+        },
+        company_id=1,
+    )
+
+    assert "fecha_base_o_fecha_venta" not in snapshot.missing_fields
+
+
 def test_reminder_and_comprobante_access_share_account_reference_format():
     snapshot = payment_service._snapshot_from_item(
         {
@@ -702,6 +736,30 @@ def test_reminder_detects_chat_session_account_mismatch():
 
     assert resolution.found is False
     assert resolution.reason == payment_service.CLASS_CHAT_SESSION_ACCOUNT_MISMATCH
+
+
+def test_reminder_matches_raw_session_account_to_prefixed_bridge_account():
+    session = chat_session(
+        id=1,
+        folio="990001",
+        extra_json={"siga_bridge": {"verification_cache": {"snapshot": {"no_cuenta": "900001"}}}},
+    )
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214420001679",
+        folio="990001",
+        account_reference_formatted="A900001",
+    )
+
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session]),
+        snapshot=snapshot,
+    )
+
+    assert resolution.found is True
+    assert resolution.session_id == 1
 
 
 def test_dry_run_result_blocks_send_without_chat_session():
