@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime, timezone
+import logging
 
 from app.api.webhook import router as webhook_router
 
@@ -38,6 +40,7 @@ app.mount("/panel", StaticFiles(directory=str(PANEL_DIR), html=True), name="pane
 app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
 scheduler = BackgroundScheduler(timezone="UTC")
+logger = logging.getLogger(__name__)
 
 
 app.add_middleware(
@@ -61,6 +64,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup():
+    logger.info("scheduler_startup_begin")
     scheduler.add_job(
         run_inactivity_reminders_job,
         "interval",
@@ -70,15 +74,30 @@ def startup():
         coalesce=True,
     )
     if settings.PAYMENT_REMINDERS_ENABLED:
+        interval_minutes = max(1, int(settings.PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES or 15))
+        logger.info(
+            "payment_reminders_scheduler_enabled",
+            extra={
+                "interval_minutes": interval_minutes,
+                "dry_run": settings.PAYMENT_REMINDERS_DRY_RUN,
+                "company_id": settings.PAYMENT_REMINDER_COMPANY_ID,
+                "limit": settings.PAYMENT_REMINDER_SYNC_LIMIT,
+            },
+        )
         scheduler.add_job(
             run_payment_reminders_job,
             "interval",
-            minutes=settings.PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES,
+            minutes=interval_minutes,
             id="payment_reminders",
             max_instances=1,
             coalesce=True,
+            replace_existing=True,
+            next_run_time=datetime.now(timezone.utc),
         )
+    else:
+        logger.info("payment_reminders_scheduler_disabled")
     scheduler.start()
+    logger.info("scheduler_startup_finished")
 
 
 @app.on_event("shutdown")

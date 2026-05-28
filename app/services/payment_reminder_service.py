@@ -1807,7 +1807,19 @@ async def sync_payment_reminder_candidates(
     client = client or get_siga_bridge_client()
 
     results = []
-    sessions = _chat_session_payment_candidates(db, limit=max(limit * 3, limit))
+    scan_limit = max(limit * 20, 250)
+    sessions = _chat_session_payment_candidates(db, limit=scan_limit)
+    sessions_with_context = 0
+    logger.info(
+        "payment_reminder_candidate_sync_started",
+        extra={
+            "company_id": company_id,
+            "dry_run": dry_run,
+            "limit": limit,
+            "chat_sessions_scanned": len(sessions),
+            "scan_limit": scan_limit,
+        },
+    )
     for session in sessions:
         if len(results) >= limit:
             break
@@ -1816,6 +1828,7 @@ async def sync_payment_reminder_candidates(
         session_folio = _session_folio_candidate(session)
         if not session_cuenta and not session_folio:
             continue
+        sessions_with_context += 1
 
         snapshot = await fetch_bridge_account_snapshot(
             cuenta=session_cuenta,
@@ -1952,4 +1965,19 @@ async def sync_payment_reminder_candidates(
 
     if not dry_run:
         db.commit()
-    return {"synced": len(results), "results": results}
+    logger.info(
+        "payment_reminder_candidate_sync_finished",
+        extra={
+            "company_id": company_id,
+            "dry_run": dry_run,
+            "chat_sessions_scanned": len(sessions),
+            "chat_sessions_with_context": sessions_with_context,
+            "synced": len(results),
+        },
+    )
+    return {
+        "synced": len(results),
+        "chat_sessions_scanned": len(sessions),
+        "chat_sessions_with_context": sessions_with_context,
+        "results": results,
+    }
