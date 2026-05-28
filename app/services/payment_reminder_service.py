@@ -1870,6 +1870,12 @@ async def process_due_payment_reminder(
             },
         )
 
+    chat_session = session_resolution.session
+    if chat_session and chat_session.status != "COBRANZA":
+        chat_session.status = "COBRANZA"
+        db.add(chat_session)
+        # db.commit() is usually handled by the caller transaction
+
     next_template, next_type = _template_for_classification(CLASS_NOT_DUE)
     upsert_scheduled_reminder(
         db,

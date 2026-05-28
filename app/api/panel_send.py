@@ -12,7 +12,7 @@ from app.security.auth_service import is_allowed_panel_company, restrict_to_assi
 #Para enviar mensajes desde el panel de administración a WhatsApp
 
 from pydantic import BaseModel
-from app.adapters.whatsapp_client import send_whatsapp_media
+from app.adapters.whatsapp_client import _extract_meta_message_id, send_whatsapp_message, send_whatsapp_media, send_template_message
 from app.db.models import Message
 from app.utils.timezone import mexico_now_naive
 from app.services.ws_events import build_new_message_event
@@ -21,12 +21,16 @@ from app.services.message_metadata import build_outgoing_media_metadata
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/panel", tags=["panel"])
+
 class SendFileRequest(BaseModel):
     session_id: int
     media_url: str
     file_name: str | None = None
     type: str  # image | document
     content: str | None = None
+
+class ReactivateRequest(BaseModel):
+    template_key: str
 
 @router.post("/send")
 async def send_message(
@@ -158,4 +162,73 @@ async def send_file_message(
             extra={"session_id": chat.id, "error_type": e.__class__.__name__},
         )
 
+    return {"status": "sent"}
+
+@router.post("/conversations/{session_id}/reactivate")
+async def reactivate_conversation(
+    session_id: int,
+    payload: ReactivateRequest,
+    db: Session = Depends(get_db),
+    user = Depends(require_roles("ventas", "admin", "cobranza", "jefe_operativo", "sistemas")),
+):
+    chat = (
+        restrict_to_assigned(db.query(ChatSessions), user, db)
+        .filter(ChatSessions.id == session_id)
+        .first()
+    )
+
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not is_allowed_panel_company(user.empresa_id):
+        raise HTTPException(status_code=403, detail="Acceso no permitido")
+
+    TEMPLATE_MAP = {
+        "inactivity": ("reactivacion_inactividad", "👋🏻 Hola, notamos que tu proceso quedó en pausa.\n\n⏳ Toca el botón de abajo o responde este mensaje para retomar tu verificación y asegurar tus beneficios."),
+        "advisor": ("reactivacion_asesor", "👋🏻 Hola, un asesor ha revisado tu caso y está listo para ayudarte.\n\n🧑‍💻 Por favor, toca el botón de abajo para que podamos brindarte atención personalizada."),
+        "data_ready": ("reactivacion_datos_listos", "👋🏻 Hola, te informamos que los datos de tu compra ya están registrados en nuestro sistema.\n\n✅ Toca el botón de abajo para iniciar tu proceso de verificación."),
+        "call_failed": ("reactivacion_llamada", "👋🏻 Hola, intentamos comunicarnos contigo por llamada telefónica pero no tuvimos éxito.\n\n📞 Por favor, toca el botón de abajo para indicarnos en qué horario podemos marcarte."),
+    }
+
+    if payload.template_key not in TEMPLATE_MAP:
+        raise HTTPException(status_code=400, detail="Plantilla no válida")
+        
+    template_name, text_content = TEMPLATE_MAP[payload.template_key]
+
+    response = await send_template_message(
+        phone=chat.phone,
+        template_name=template_name
+    )
+    provider_message_id = _extract_meta_message_id(response)
+
+    # guardar mensaje
+    msg = save_message(
+        db=db,
+        session_id=session_id,
+        phone=chat.phone,
+        direction="agent",
+        content=text_content, 
+        message_id=provider_message_id,
+    )
+    msg.type = "template" 
+    
+    now = mexico_now_naive()
+    chat.last_message = "Plantilla enviada"
+    chat.last_message_at = now
+    chat.unread_count = 0
+    
+    db.commit()
+    db.refresh(msg)
+    
+    from app.websockets.manager import manager
+    await manager.send_to_all(build_new_message_event(chat, msg))
+    await manager.send_to_all({
+        "type": "dashboard_update",
+        "payload": {
+            "messages_in_delta": 0,
+            "messages_out_delta": 1,
+            "session_id": chat.id,
+        },
+    })
+    
     return {"status": "sent"}

@@ -33,6 +33,7 @@ const DASHBOARD_STATE_LABELS = {
     INFO_OTROS_PLANES: "Otros planes",
     INFO_BENEFICIOS: "Beneficios",
     FINALIZADO: "Finalizado",
+    COBRANZA: "Cobranza",
 }
 
 function dashboardLabel(key) {

@@ -315,12 +315,13 @@ def build_inconsistency_prompt(user_text: str, context: ConversationContext) -> 
 
     elif campo == "fecha":
         detalle_campo = """
-    - critica: Cuando la fecha que proporciona el cliente es diferente a la fecha mostrada o dice que no firmó nada y desconoce la fecha.
+    - critica: ¡Cualquier diferencia, por mínima que sea! Si la fecha proporcionada por el cliente está desfasada incluso por 1 solo día respecto a la fecha mostrada, o si dice que no firmó nada, DEBE marcarse como crítica obligatoriamente. No asumas errores de dedo.
+    Nota: Debes interpretar y entender fechas escritas por el cliente en cualquier formato (incluyendo formatos numéricos con diagonales/guiones como "dd/mm" o "dd/mm/aaaa", así como en lenguaje natural como "25 de mayo") y compararlas de forma exacta con la fecha esperada.
     """
 
     elif campo == "producto":
         detalle_campo = """
-    - critica: Cuando el cliente indica que compró cualquier otro producto diferente al mostrado o niega haber comprado el producto.
+    - critica: ¡Cualquier diferencia, por mínima que sea! Si el cliente indica cualquier variación en el nombre, modelo, o dice haber comprado un producto distinto al mostrado, DEBE marcarse como crítica obligatoriamente.
     """
 
     elif campo == "estado_producto":
@@ -332,7 +333,7 @@ def build_inconsistency_prompt(user_text: str, context: ConversationContext) -> 
 
     elif campo == "pago_inicial":
         detalle_campo = """
-    - critica: Si la cantidad proporcionada por el cliente es diferente a la cantidad mostrada. Se interpreta como un error al registrar la venta.
+    - critica: ¡Cualquier diferencia, por mínima que sea! Si la cantidad proporcionada por el cliente difiere incluso por un peso (o menos) de la cantidad mostrada, DEBE marcarse como crítica obligatoriamente.
     """
 
     # -------------------------

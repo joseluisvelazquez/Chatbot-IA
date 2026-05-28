@@ -395,7 +395,8 @@ function statusLabel(status) {
         calls: "Llamada",
         human_required: "Asesor",   // compatibilidad con datos viejos
         stalled: "Inactiva",
-        completed: "Finalizada"
+        completed: "Finalizada",
+        cobranza: "Cobranza"
     };
     return map[status] || status || "-";
 }
@@ -408,7 +409,8 @@ function statusClass(status) {
         calls: "bg-purple-500/20 text-purple-400",
         human_required: "bg-blue-500/20 text-blue-400",   // compatibilidad
         stalled: "bg-gray-500/20 text-gray-400",
-        completed: "bg-green-500/20 text-green-400"
+        completed: "bg-green-500/20 text-green-400",
+        cobranza: "bg-teal-500/20 text-teal-400"
     };
 
     return `inline-flex items-center px-2.5 py-1 text-xs rounded-full font-medium ${map[status] || "bg-gray-400/20 text-gray-300"}`;

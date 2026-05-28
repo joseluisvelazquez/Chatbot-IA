@@ -13,31 +13,12 @@ Es por eso que además de su característico hardware de alto desempeño, ésta 
 - Sábados: Cerrado
 - Domingos: Cerrado
 
-## Contrato: Términos y Condiciones
-
-* Depósito de productos: Mientras no se haya pagado el total, el cliente asume la calidad de depositario de los productos, debiendo conservarlos en perfecto estado.
-* Liquidación anticipada: El cliente puede liquidar su saldo vigente en cualquier momento para obtener descuentos, según el tiempo transcurrido desde la recepción del producto.
-* Software: MXCOMP no distribuye ni fomenta software sin licencia y se deslinda de responsabilidades por la instalación de programas ilegales por parte del cliente.
-
-## Póliza de Garantía: Términos y Condiciones
-
-* Cobertura: Garantía técnica contra defectos de fabricación o ensamble de hardware. No cubre pérdida de información (datos, fotos, música, etc.).
-* Vigencia: Estipulada en la descripción de los mismos al momento del pedido (en ningún caso será inferior a 60 días naturales a partir de la entrega).
-* Requisitos: Presentar contrato original y póliza de garantía.
-* Servicio: Se puede acudir a la sucursal o solicitar un técnico a domicilio (el cliente cubre costos de traslado/fletes).
-
 ## Instrucciones de Uso y Cuidado
 * Uso obligatorio de regulador de voltaje (no usar "ladrones").
 * Esperar a que los componentes se apaguen totalmente (ventiladores y LEDs) antes de desconectar.
 * Apagar equipos ante variaciones de voltaje o tormentas eléctricas.
 * Mantener en áreas ventiladas, lejos de fuentes de calor y polvo.
 * No ingerir alimentos cerca de los equipos ni exponerlos al fuego o humedad.
-
-## Exclusiones de Garantía
-* Intervención por personas ajenas a la empresa.
-* Maltrato, accidentes, uso indebido o modificaciones.
-* Falta de pago puntual.
-* Omisión total o parcial de las instrucciones de uso.
 
 ## Planes de Financiamiento
 

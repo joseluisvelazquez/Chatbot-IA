@@ -19,11 +19,13 @@ INTENTS_CONTROL = {
     "human",              # quiere asesor (chat)
     "call",               # quiere llamada
     "start_verification", # inicio con folio
+    "resume",             # reanudar o continuar
 }
 
 # Sociales
 INTENTS_SOCIAL = {
     "greeting",
+    "thanks",
 }
 
 # IA / fallback
@@ -60,6 +62,17 @@ INTENT_KEYWORDS = {
         "buenas tardes",
         "buenas noches",
         "que tal"
+    ],
+
+    "thanks": [
+        "gracias",
+        "todo bien",
+        "ya nada",
+        "es todo",
+        "ninguna duda",
+        "sin dudas",
+        "muy amable",
+        "no gracias"
     ],
 
     # -------------------------
@@ -104,6 +117,7 @@ INTENT_KEYWORDS = {
         "no entiendo bien",
         "tengo duda",
         "tengo dudas",
+        "tengo una duda",
         "explicame",
         "explicar",
     ],
@@ -130,7 +144,16 @@ INTENT_KEYWORDS = {
         "marcar",
         "que me llamen",
         "puedes llamarme",
+        "agendar llamada",
     ],
+
+    "resume": [
+        "continuar",
+        "iniciar verificacion",
+        "reanudar",
+        "seguir",
+        "listo",
+    ]
 }
 
 
@@ -192,12 +215,16 @@ def detect_intent(text: str, state: ChatState | None = None):
                 return intent, None
 
     # -------------------------------------------------
-    # Saludos
+    # Saludos y Agradecimientos
     # -------------------------------------------------
 
     for keyword in INTENT_KEYWORDS["greeting"]:
         if keyword in text_l:
             return "greeting", None
+
+    for keyword in INTENT_KEYWORDS["thanks"]:
+        if keyword in text_l:
+            return "thanks", None
 
     # -------------------------------------------------
     # Binario simple

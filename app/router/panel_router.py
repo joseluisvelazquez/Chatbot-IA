@@ -1748,6 +1748,96 @@ async def send_agent_file(
     return {"status": "sent"}
 
 # =========================================
+# Enviar plantilla de reactivación
+# =========================================
+from pydantic import BaseModel
+
+class ReactivateRequest(BaseModel):
+    template_key: str
+
+@router.post("/conversations/{session_id}/reactivate")
+async def reactivate_conversation(
+    session_id: int,
+    payload: ReactivateRequest,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    require_company_scope(user)
+
+    chat = get_scoped_session_or_404(
+        db,
+        user,
+        session_id,
+        detail="Sesion no encontrada"
+    )
+
+    TEMPLATE_MAP = {
+        "inactivity": ("reactivacion_inactividad", "👋🏻 Hola, notamos que tu proceso quedó en pausa.\n\n⏳ Toca el botón de abajo o responde este mensaje para retomar tu verificación y asegurar tus beneficios."),
+        "advisor": ("reactivacion_asesor", "👋🏻 Hola, un asesor ha revisado tu caso y está listo para ayudarte.\n\n🧑🏻‍💻 Por favor, toca el botón de abajo para que podamos brindarte atención personalizada."),
+        "data_ready": ("reactivacion_datos_listos", "👋🏻 Hola, te informamos que los datos de tu compra ya están registrados en nuestro sistema.\n\n✅ Toca el botón de abajo para iniciar tu proceso de verificación."),
+        "collections": ("reactivacion_cobranza", "👋🏻 Hola, nos ponemos en contacto contigo para darle seguimiento al estado de tu cuenta.\n\n🤝🏻 Si tienes alguna duda con tus pagos o necesitas asistencia, toca el botón de abajo para que un asesor te atienda personalmente."),
+    }
+
+    if payload.template_key not in TEMPLATE_MAP:
+        raise HTTPException(status_code=400, detail="Plantilla no válida")
+
+    template_name, text_content = TEMPLATE_MAP[payload.template_key]
+
+    from app.adapters.whatsapp_client import send_template_message, _extract_meta_message_id
+    from app.services.message_service import save_message
+    from app.utils.timezone import mexico_now_naive
+    from app.services.ws_events import build_new_message_event
+
+    response = await send_template_message(
+        phone=chat.phone,
+        template_name=template_name
+    )
+    
+    if not response or response.status_code >= 400:
+        error_msg = "Error desconocido de Meta"
+        if response:
+            try:
+                error_msg = response.json().get("error", {}).get("message", error_msg)
+            except:
+                error_msg = response.text
+        raise HTTPException(status_code=400, detail=f"No se pudo enviar la plantilla a Meta: {error_msg}")
+        
+    provider_message_id = _extract_meta_message_id(response)
+
+    msg = save_message(
+        db=db,
+        session_id=session_id,
+        phone=chat.phone,
+        direction="agent",
+        content=text_content,
+        message_id=provider_message_id,
+    )
+    msg.type = "template"
+
+    now = mexico_now_naive()
+    chat.last_message = "Plantilla enviada"
+    chat.last_message_at = now
+    chat.unread_count = 0
+    if payload.template_key == "collections":
+        chat.status = "COBRANZA"
+
+    db.commit()
+    db.refresh(msg)
+
+    from app.websockets.manager import manager
+    await manager.send_to_all(build_new_message_event(chat, msg))
+    await manager.send_to_all({
+        "type": "dashboard_update",
+        "payload": {
+            "messages_in_delta": 0,
+            "messages_out_delta": 1,
+            "session_id": chat.id,
+        },
+    })
+
+    return {"status": "sent"}
+
+# =========================================
 # Retomar control del chatbot
 # =========================================
 @router.post("/conversations/{session_id}/resume-bot")

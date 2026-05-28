@@ -22,6 +22,19 @@ def route_intent(state, intent):
     # NORMALIZACIÓN GLOBAL (ANTES DE TODO)
     # =================================================
 
+    # Si estamos en atención humana (o en fase de cobranza/finalizada), el bot no interfiere.
+    # Excepción: "resume" o "start" para reiniciar flujos.
+    if state_type == "human" or state in ("finalizado", "despedida", "cobranza"):
+        if intent == "affirmative":
+            return "resume"
+        if intent == "start_verification":
+            return "start"
+        return "ignore"
+
+    if intent == "resume":
+        # Repite el estado actual (re-envía la pregunta/mensaje donde se quedó atorado)
+        return "repeat"
+
     # saludo → respuesta estática (se maneja en flow_engine)
     if intent == "greeting":
         return "greeting"
@@ -107,17 +120,6 @@ def route_intent(state, intent):
         return "ai"
 
     # =================================================
-    # HUMAN STATES (ACLARACION / LLAMADA)
-    # =================================================
-
-    if state_type == "human":
-
-        if intent == "affirmative":
-            return "resume"
-
-        return "ignore"
-
-    # =================================================
     # SYSTEM STATES
     # =================================================
 
@@ -126,7 +128,7 @@ def route_intent(state, intent):
         if intent == "start_verification":
             return "start"
             
-        if intent == "affirmative":
+        if intent in ("affirmative", "negative", "thanks"):
             return "advance"
 
         return "ignore"

@@ -207,6 +207,65 @@ function clearPreviewFiles() {
 export async function initConversationsPage() {
     window.send = send
     window.resumeBotControl = async function (sessionId) {
+        const state = getState()
+        const session = state.conversations.byId[sessionId]
+
+        if (session && session.last_customer_message_at) {
+            const lastMsgDate = new Date(session.last_customer_message_at)
+            const now = new Date()
+            const diffMs = now - lastMsgDate
+            const diffHours = diffMs / (1000 * 60 * 60)
+            const diffMinutes = diffMs / (1000 * 60)
+            const isExpired = diffHours >= 24 || (session.phone === "5214271644542" && diffMinutes >= 5)
+
+            if (isExpired) {
+                const overlay = document.createElement("div")
+                overlay.className = "fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm transition-opacity"
+
+                const modal = document.createElement("div")
+                modal.className = "bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4 transform scale-95 transition-transform"
+
+                modal.innerHTML = `
+                    <div class="flex items-center gap-3 mb-4 text-orange-500">
+                        <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Acción no permitida</h3>
+                    </div>
+                    <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">
+                        No puedes devolver el control al Chatbot porque la ventana de atención de 24 horas ha expirado y los mensajes del bot no llegarán al cliente. Por favor envía un mensaje de reactivación primero.
+                    </p>
+                    <div class="flex justify-end gap-3">
+                        <button id="okAlertBtn" class="px-4 py-2 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors shadow-sm">
+                            Entendido
+                        </button>
+                    </div>
+                `
+
+                overlay.appendChild(modal)
+                document.body.appendChild(overlay)
+
+                if (window.lucide) lucide.createIcons({ root: modal })
+
+                requestAnimationFrame(() => {
+                    modal.classList.remove("scale-95")
+                    modal.classList.add("scale-100")
+                })
+
+                const cleanup = () => {
+                    overlay.classList.add("opacity-0")
+                    setTimeout(() => {
+                        if (document.body.contains(overlay)) document.body.removeChild(overlay)
+                    }, 200)
+                }
+
+                modal.querySelector("#okAlertBtn").addEventListener("click", cleanup)
+                overlay.addEventListener("click", (e) => {
+                    if (e.target === overlay) cleanup()
+                })
+
+                return // Stop execution here
+            }
+        }
+
         const confirmed = await new Promise((resolve) => {
             const overlay = document.createElement("div")
             overlay.className = "fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm transition-opacity"
@@ -311,7 +370,7 @@ export async function initConversationsPage() {
     window.handleTyping = handleTyping
     window.handleKeyDown = handleKeyDown
     window.autoResize = autoResize
-    
+
     startWindowValidationTimer()
     setupRealtimeRecovery()
 
@@ -1492,18 +1551,38 @@ function updateChatInputState(session) {
     const now = new Date()
     const diffMs = now - lastMsgDate
     const diffHours = diffMs / (1000 * 60 * 60)
+    const diffMinutes = diffMs / (1000 * 60)
 
-    const isExpired = diffHours >= 24
+    const isExpired = diffHours >= 24 || (session.phone === "5214271644542" && diffMinutes >= 5)
+
+    const reactivateContainer = document.getElementById("reactivateControlContainer")
+    const expiredWarningText = document.getElementById("expiredWarningText")
 
     if (isExpired) {
         warning.classList.remove("hidden")
         inputControls.classList.add("hidden")
         input.disabled = true
+
+        // Mostrar botón de reactivación SOLO para tu número de pruebas
+        if (session.phone === "5214271644542") {
+            if (reactivateContainer) reactivateContainer.classList.remove("hidden")
+            if (expiredWarningText) {
+                expiredWarningText.textContent = "Para contactarlo, por favor realice una llamada telefónica o envíe un mensaje de reactivación usando el botón en la parte superior derecha."
+            }
+        } else {
+            // Ocultar botón y mantener texto original para asesores reales
+            if (reactivateContainer) reactivateContainer.classList.add("hidden")
+            if (expiredWarningText) {
+                expiredWarningText.textContent = "El cliente no ha enviado mensajes en las últimas 24 horas. Para contactarlo, por favor realice una llamada telefónica."
+            }
+        }
+
         if (window.lucide) lucide.createIcons()
     } else {
         warning.classList.add("hidden")
         inputControls.classList.remove("hidden")
         input.disabled = false
+        if (reactivateContainer) reactivateContainer.classList.add("hidden")
     }
 }
 
@@ -1513,9 +1592,9 @@ function updateChatInputState(session) {
 function updateChatHeaderControlState(session) {
     const container = document.getElementById("transferControlContainer")
     if (!container) return
-    
+
     const isBotStopped = session?.status === "calls" || session?.status === "doubts" || session?.status === "inconsistent" || session?.status === "LLAMADA" || session?.status === "ACLARACION"
-    
+
     if (isBotStopped) {
         container.classList.remove("hidden")
     } else {
@@ -1633,11 +1712,18 @@ export async function loadChat(sessionId, phone, name = null) {
                             </span>
                         </div>
                     </div>
-                    
-                    <div id="transferControlContainer" class="${(sessionInfo?.status === 'calls' || sessionInfo?.status === 'doubts' || sessionInfo?.status === 'inconsistent' || sessionInfo?.status === 'LLAMADA' || sessionInfo?.status === 'ACLARACION') ? '' : 'hidden'} shrink-0 ml-2">
-                        <button onclick="resumeBotControl(${numericSessionId})" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Devolver control al chatbot">
-                            <span class="inline">🔄</span> <span class="hidden sm:inline">Transferir Control</span>
-                        </button>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <div id="transferControlContainer" class="${(sessionInfo?.status === 'calls' || sessionInfo?.status === 'doubts' || sessionInfo?.status === 'inconsistent' || sessionInfo?.status === 'LLAMADA' || sessionInfo?.status === 'ACLARACION') ? '' : 'hidden'}">
+                            <button onclick="resumeBotControl(${numericSessionId})" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Devolver control al chatbot">
+                                <span class="inline">🔄</span> <span class="hidden sm:inline">Transferir Control</span>
+                            </button>
+                        </div>
+
+                        <div id="reactivateControlContainer" class="hidden">
+                            <button onclick="openReactivationModal()" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Mandar mensaje de reactivación">
+                                <i data-lucide="message-square-plus" class="w-4 h-4"></i> <span class="hidden sm:inline">Mandar mensaje de reactivación</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             `
@@ -2546,4 +2632,37 @@ window.removeCurrentFile = function (event) {
     }
 
     renderMultiPreview()
+}
+
+// ========================================================
+// REACTIVATION MODAL LOGIC
+// ========================================================
+
+window.openReactivationModal = function () {
+    const modal = document.getElementById('reactivationModal');
+    if (modal) modal.classList.remove('hidden');
+}
+
+window.closeReactivationModal = function () {
+    const modal = document.getElementById('reactivationModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+window.sendReactivationTemplate = async function () {
+    if (!currentSessionId) return;
+    const templateInput = document.querySelector('input[name="reactivation_template"]:checked');
+    if (!templateInput) return;
+
+    const templateKey = templateInput.value;
+
+    try {
+        await apiRequest(`/panel/conversations/${currentSessionId}/reactivate`, {
+            method: 'POST',
+            body: JSON.stringify({ template_key: templateKey })
+        });
+
+        closeReactivationModal();
+    } catch (e) {
+        alert(`Error: ${e.message || "No se pudo mandar el mensaje"}`);
+    }
 }

@@ -113,6 +113,8 @@ FINALIZADO = (
     "¿Hay algo más en lo que te pueda ayudar?"
 )
 
+DESPEDIDA = "Entendido, que tengas un buen día."
+
 INCONSISTENCIA = "Entiendo. Por favor, indícame qué parte de la información está incorrecta."
 INCONSISTENCIA_NOMBRE = "Entiendo. ¿Me podrías escribir cómo es tu nombre correcto, por favor?"
 INCONSISTENCIA_DOMICILIO = "Entiendo. Para tenerlo registrado, ¿me podrías indicar brevemente qué dato falta o está equivocado en tu domicilio?"

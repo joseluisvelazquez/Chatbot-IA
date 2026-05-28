@@ -93,6 +93,8 @@ STATE_SYSTEM = {
     ChatState.RECORDATORIO_2H,
     ChatState.RECORDATORIO,
     ChatState.FINALIZADO,
+    ChatState.DESPEDIDA,
+    ChatState.COBRANZA,
 }
 
 
@@ -142,6 +144,7 @@ def is_terminal_state(state: ChatState) -> bool:
     """
     return state in {
         ChatState.FINALIZADO,
+        ChatState.DESPEDIDA,
         ChatState.ACLARACION,
         ChatState.LLAMADA,
         ChatState.DEVOLUCION_FINALIZADA
@@ -149,6 +152,8 @@ def is_terminal_state(state: ChatState) -> bool:
 
 TERMINAL_STATES_FOR_LOCK = {
     ChatState.FINALIZADO,
+    ChatState.DESPEDIDA,
+    ChatState.COBRANZA,
     ChatState.ACLARACION,
     ChatState.LLAMADA,
     ChatState.DEVOLUCION_FINALIZADA,

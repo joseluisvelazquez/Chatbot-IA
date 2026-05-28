@@ -347,42 +347,75 @@ async def trigger_verificacion(
             },
         )
 
-    reply_text, botones_inicio, image_id = render_state(ChatState.INICIO, chat, db)
-    if not reply_text or "{" in reply_text:
-        chat.state = ChatState.ESPERANDO_REGISTRO.value
-        chat.previous_state = None
-        await _send_pending_message(db, chat)
-        db.commit()
-        db.refresh(chat)
-        logger.error(
-            "external_sale_trigger_render_blocked",
-            extra={"session_id": chat.id, "folio_masked": _mask(data.folio)},
-        )
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                "status": "pending",
-                "message": "No se pudo renderizar verificacion con datos completos.",
-                "session_id": chat.id,
-                "folio": data.folio,
-            },
-        )
+    is_expired = False
+    if chat.last_customer_message_at:
+        diff = now - chat.last_customer_message_at
+        
+        # 1. Regla oficial para todos los clientes (24 horas)
+        if diff.total_seconds() >= 24 * 3600:
+            is_expired = True
+            
+        # 2. Excepción SOLO para pruebas (5 minutos)
+        if chat.phone == "5214271644542" and diff.total_seconds() >= 5 * 60:
+            is_expired = True
 
-    outgoing_type, outgoing_media_url, extra_json = _outgoing_metadata(
-        reply_text,
-        botones_inicio,
-        image_id,
-    )
-    bot_msg = save_message(
-        db=db,
-        session_id=chat.id,
-        phone=chat.phone,
-        direction="out",
-        content=reply_text,
-        type=outgoing_type,
-        media_url=outgoing_media_url,
-        extra_json=extra_json,
-    )
+    if is_expired:
+        from app.adapters.whatsapp_client import send_template_message, _extract_meta_message_id
+        response = await send_template_message(chat.phone, "reactivacion_datos_listos")
+        provider_message_id = _extract_meta_message_id(response)
+        
+        reply_text = "👋🏻 Hola, te informamos que los datos de tu compra ya están registrados en nuestro sistema.\n\n✅ Toca el botón de abajo para iniciar tu proceso de verificación."
+        outgoing_type = "template"
+        outgoing_media_url = None
+        extra_json = None
+        botones_inicio = []
+        image_id = None
+        bot_msg = save_message(
+            db=db,
+            session_id=chat.id,
+            phone=chat.phone,
+            direction="out",
+            content=reply_text,
+            type=outgoing_type,
+            message_id=provider_message_id
+        )
+    else:
+        reply_text, botones_inicio, image_id = render_state(ChatState.INICIO, chat, db)
+        if not reply_text or "{" in reply_text:
+            chat.state = ChatState.ESPERANDO_REGISTRO.value
+            chat.previous_state = None
+            await _send_pending_message(db, chat)
+            db.commit()
+            db.refresh(chat)
+            logger.error(
+                "external_sale_trigger_render_blocked",
+                extra={"session_id": chat.id, "folio_masked": _mask(data.folio)},
+            )
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "status": "pending",
+                    "message": "No se pudo renderizar verificacion con datos completos.",
+                    "session_id": chat.id,
+                    "folio": data.folio,
+                },
+            )
+
+        outgoing_type, outgoing_media_url, extra_json = _outgoing_metadata(
+            reply_text,
+            botones_inicio,
+            image_id,
+        )
+        bot_msg = save_message(
+            db=db,
+            session_id=chat.id,
+            phone=chat.phone,
+            direction="out",
+            content=reply_text,
+            type=outgoing_type,
+            media_url=outgoing_media_url,
+            extra_json=extra_json,
+        )
     chat.state = ChatState.INICIO.value
     chat.previous_state = None
     chat.last_message = "Inicio de verificacion desde SIGA"
@@ -403,7 +436,12 @@ async def trigger_verificacion(
         },
     )
 
-    await _send_and_broadcast(chat, bot_msg, reply_text, botones_inicio, image_id)
+    if is_expired:
+        from app.api.webhook import broadcast_new_message
+        await broadcast_new_message(chat, bot_msg)
+    else:
+        await _send_and_broadcast(chat, bot_msg, reply_text, botones_inicio, image_id)
+        
     return {
         "status": "success",
         "message": "Sesion actualizada y verificacion iniciada.",

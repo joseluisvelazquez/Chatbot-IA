@@ -485,6 +485,15 @@ FLOW = {
         ],
         "options": {
             "MENU_DUDA": ChatState.MENU_DUDA,
+            "thanks": ChatState.DESPEDIDA,
+            "affirmative": ChatState.DESPEDIDA,
+            "negative": ChatState.DESPEDIDA,
         },
+    },
+
+    ChatState.DESPEDIDA: {
+        "text": msg.DESPEDIDA,
+        "buttons": [],
+        "options": {},
     },
 }

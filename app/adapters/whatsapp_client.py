@@ -247,6 +247,7 @@ async def _send(payload: dict):
 
     # si Meta falla, no truenes el bot
     if response.status_code >= 400:
+        print(f"ERROR DE META: {response.status_code} - {response.text}")
         logger.warning(
             "whatsapp_send_failed",
             extra={

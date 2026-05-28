@@ -290,6 +290,10 @@ def classify_panel_status(
     """
     state_upper = (session_state or "").upper()
 
+    # 💰 PRIORIDAD 0: Cobranza (ignora verificación)
+    if state_upper == "COBRANZA":
+        return "cobranza"
+
     # 📞 PRIORIDAD 1: llamada explícita
     if state_upper == "LLAMADA":
         return "calls"
