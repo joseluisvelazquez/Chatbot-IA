@@ -467,6 +467,14 @@ export async function navigateTo(page, push = true) {
         if (page !== "conversations") {
             url.searchParams.delete("session_id");
             url.searchParams.delete("phone");
+        } else {
+            const selected = getSelectedSession();
+            const sessionId = Number(selected?.sessionId);
+            const explicitSessionId = Number(url.searchParams.get("session_id"));
+            const hasExplicitSessionId = Number.isFinite(explicitSessionId) && explicitSessionId > 0;
+            if (!hasExplicitSessionId && Number.isFinite(sessionId) && sessionId > 0) {
+                url.searchParams.set("session_id", String(sessionId));
+            }
         }
 
         if (push) {

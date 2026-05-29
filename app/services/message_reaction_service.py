@@ -68,6 +68,7 @@ def upsert_reaction(
         existing.message_id = target_message.id
         existing.reaction_emoji = reaction_emoji
         existing.updated_at = now
+        setattr(existing, "_reaction_action", "update")
         return existing
 
     reaction = MessageReaction(
@@ -78,6 +79,7 @@ def upsert_reaction(
         created_at=now,
         updated_at=now,
     )
+    setattr(reaction, "_reaction_action", "add")
     db.add(reaction)
     return reaction
 

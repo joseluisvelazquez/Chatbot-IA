@@ -74,6 +74,19 @@ function extractMessagesList(response) {
     return []
 }
 
+function isPanelDebugEnabled() {
+    try {
+        return localStorage.getItem("panelDebug") === "1"
+    } catch {
+        return false
+    }
+}
+
+function debugChat(label, payload = {}) {
+    if (!isPanelDebugEnabled()) return
+    console.debug(`[chat] ${label}`, payload)
+}
+
 function setupRealtimeRecovery() {
     if (realtimeRecoveryBound) return
 
@@ -458,22 +471,32 @@ export async function initConversationsPage() {
     console.timeEnd("renderSidebar initial")
 
     const state = getState()
-    let selected = getSelectedSession()
+    const params = new URLSearchParams(window.location.search)
+    const sessionIdFromUrl = params.get("session_id")
+    const explicitSessionId = Number(sessionIdFromUrl)
+    const hasExplicitSessionId = Number.isFinite(explicitSessionId) && explicitSessionId > 0
+    let selected = null
 
-    if (!selected) {
-        const params = new URLSearchParams(window.location.search)
-        const sessionIdFromUrl = params.get("session_id")
-
-        if (sessionIdFromUrl) {
-            const sessionFromStore = state.conversations.byId[Number(sessionIdFromUrl)]
-            selected = {
-                sessionId: Number(sessionIdFromUrl),
-                phone: sessionFromStore?.phone || null
-            }
+    if (hasExplicitSessionId) {
+        const sessionFromStore = state.conversations.byId[explicitSessionId]
+        selected = {
+            sessionId: explicitSessionId,
+            phone: sessionFromStore?.phone || null,
+            name: sessionFromStore?.name || sessionFromStore?.display_name || null,
         }
+        setSelectedSession(selected)
+        debugChat("explicit_session_selected", {
+            session_id: explicitSessionId,
+            phone: selected.phone,
+            url: window.location.href,
+        })
     }
 
-    if (!selected) {
+    if (!selected && !hasExplicitSessionId) {
+        selected = getSelectedSession()
+    }
+
+    if (!selected && !hasExplicitSessionId) {
         const saved = localStorage.getItem("lastSession")
         if (saved) {
             try {
@@ -489,7 +512,9 @@ export async function initConversationsPage() {
         if (!sessionFromStore) {
             console.warn("Sesión inválida desde localStorage, limpiando...")
             setSelectedSession(null)
-            localStorage.removeItem("lastSession")
+            if (!hasExplicitSessionId) {
+                localStorage.removeItem("lastSession")
+            }
             selected = null
         } else {
             await loadChat(
@@ -500,7 +525,7 @@ export async function initConversationsPage() {
         }
     }
 
-    if (!getSelectedSession()?.sessionId && !isMobileChatViewport()) {
+    if (!hasExplicitSessionId && !getSelectedSession()?.sessionId && !isMobileChatViewport()) {
         const firstId = state.conversations.order[0]
 
         if (!firstId) {
@@ -605,6 +630,35 @@ function normalizeMessage(msg) {
     }
 
     return normalized
+}
+
+function getMessageRenderSignature(msg) {
+    const reactions = Array.isArray(msg?.reactions)
+        ? msg.reactions.map((reaction) => ({
+            id: reaction?.id ?? null,
+            message_id: reaction?.message_id ?? null,
+            wa_message_id_original: reaction?.wa_message_id_original ?? null,
+            reaction_emoji: reaction?.reaction_emoji ?? null,
+            reacted_by_phone: reaction?.reacted_by_phone ?? null,
+            updated_at: reaction?.updated_at ?? null,
+        }))
+        : []
+
+    return JSON.stringify({
+        id: msg?.id ?? null,
+        message_id: msg?.message_id ?? null,
+        content: msg?.content ?? null,
+        direction: msg?.direction ?? null,
+        type: msg?.type ?? null,
+        media_url: msg?.media_url ?? null,
+        file_name: msg?.file_name ?? null,
+        created_at: msg?.created_at ?? null,
+        reactions,
+    })
+}
+
+function getRenderedMessageNode(list, nodeId) {
+    return Array.from(list.children).find((node) => node.dataset?.messageId === nodeId) || null
 }
 
 function escapeHtml(value) {
@@ -1349,6 +1403,7 @@ function appendMessageWithSeparators(list, msg, options = {}) {
     const node = createMessageNode(normalized)
     node.dataset.messageId = normalized.id ?? `${normalized.content ?? "media"}-${normalized.created_at}`
     node.dataset.messageDate = currentDate
+    node.dataset.renderSignature = getMessageRenderSignature(normalized)
 
     list.appendChild(node)
 }
@@ -1376,7 +1431,23 @@ function renderMessagesIncremental(state) {
         if (!msg.id) continue
         const id = `msg-${msg.id}`
 
-        if (renderedSet.has(id)) continue
+        if (renderedSet.has(id)) {
+            const existingNode = getRenderedMessageNode(list, id)
+            const nextSignature = getMessageRenderSignature(msg)
+            if (existingNode && existingNode.dataset.renderSignature !== nextSignature) {
+                const replacement = createMessageNode(msg)
+                replacement.dataset.messageId = id
+                replacement.dataset.messageDate = existingNode.dataset.messageDate || new Date(msg.created_at).toDateString()
+                replacement.dataset.renderSignature = nextSignature
+                existingNode.replaceWith(replacement)
+                debugChat("message_node_updated", {
+                    session_id: currentSessionId,
+                    message_id: msg.id,
+                    reactions: Array.isArray(msg.reactions) ? msg.reactions.length : 0,
+                })
+            }
+            continue
+        }
 
         const shouldShowNewSeparator =
             !wasAtBottom &&
@@ -1415,6 +1486,7 @@ function renderMessagesIncremental(state) {
         const node = createMessageNode(msg)
         node.dataset.messageId = id
         node.dataset.messageDate = currentDate
+        node.dataset.renderSignature = getMessageRenderSignature(msg)
 
         fragment.appendChild(node)
         renderedSet.add(id)
@@ -1510,6 +1582,7 @@ async function loadMoreMessages() {
             const node = createMessageNode(msg)
             node.dataset.messageId = id
             node.dataset.messageDate = currentDate
+            node.dataset.renderSignature = getMessageRenderSignature(msg)
 
             fragment.appendChild(node)
             renderedSet.add(id)
@@ -1648,6 +1721,8 @@ export async function loadChat(sessionId, phone, name = null) {
 
     const state = getState()
     const sessionInfo = state.conversations.byId[numericSessionId]
+    const explicitUrlSessionId = Number(new URLSearchParams(window.location.search).get("session_id"))
+    const isExplicitUrlLoad = Number.isFinite(explicitUrlSessionId) && explicitUrlSessionId === numericSessionId
 
     if (!sessionInfo) {
         console.warn("Intentando cargar sesion inexistente:", sessionId)
@@ -1744,7 +1819,7 @@ export async function loadChat(sessionId, phone, name = null) {
             const firstId = fallbackState.conversations.order[0]
             const firstSession = fallbackState.conversations.byId[firstId]
 
-            if (firstSession && Number(firstSession.id) !== numericSessionId) {
+            if (!isExplicitUrlLoad && firstSession && Number(firstSession.id) !== numericSessionId) {
                 isLoadingChat = false
                 return loadChat(
                     firstSession.id,
@@ -1800,6 +1875,13 @@ export async function loadChat(sessionId, phone, name = null) {
         paginationState.offset = messagesList.length
         paginationState.hasMore = Boolean(messages?.has_more) || messagesList.length === PAGE_SIZE
         lastLoadedSessionId = numericSessionId
+        debugChat("conversation_loaded", {
+            session_id: numericSessionId,
+            phone: safePhone,
+            name: displayName,
+            messages: messagesList.length,
+            url: window.location.href,
+        })
 
     } finally {
         if (requestId === chatLoadRequestId) {

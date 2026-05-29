@@ -18,6 +18,19 @@ const pendingInconsistenciaUpdates = new Set();
 const pendingVerificationDetailRequests = new Map();
 const pendingVerificationRowRequests = new Map();
 
+function isPanelDebugEnabled() {
+    try {
+        return localStorage.getItem("panelDebug") === "1";
+    } catch {
+        return false;
+    }
+}
+
+function debugVerificationChatOpen(label, payload = {}) {
+    if (!isPanelDebugEnabled()) return;
+    console.debug(`[verifications] ${label}`, payload);
+}
+
 async function refreshVerificationListItem(sessionId) {
     const sessionKey = String(sessionId || "");
     if (!sessionKey) return null;
@@ -1199,15 +1212,33 @@ function updateDrawer(item) {
             if (goToChatBtn) {
                 goToChatBtn.onclick = async () => {
                     try {
+                        const sessionId = Number(item.session_id);
+                        if (!Number.isFinite(sessionId) || sessionId <= 0) {
+                            throw new Error("La verificacion no tiene session_id valido");
+                        }
+
                         closeVerificationDrawer();
 
                         setSelectedSession({
-                            sessionId: item.session_id,
+                            sessionId,
                             phone: item.phone,
                             name: item.name,
                         });
 
-                        await navigateTo("conversations");
+                        const url = new URL(window.location);
+                        url.searchParams.set("view", "conversations");
+                        url.searchParams.set("session_id", String(sessionId));
+
+                        debugVerificationChatOpen("open_chat_click", {
+                            folio: item.folio,
+                            phone: item.phone,
+                            no_cuenta: item.no_cuenta,
+                            session_id: sessionId,
+                            url: url.toString(),
+                        });
+
+                        window.history.pushState({}, "", url);
+                        await navigateTo("conversations", false);
                     } catch (error) {
                         reportVerificationError("go_to_chat_failed", error);
                     }

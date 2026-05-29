@@ -12,6 +12,19 @@ let hasConnectedOnce = false;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 15000;
 
+function isPanelDebugEnabled() {
+    try {
+        return localStorage.getItem("panelDebug") === "1";
+    } catch {
+        return false;
+    }
+}
+
+function debugWebSocket(label, payload = {}) {
+    if (!isPanelDebugEnabled()) return;
+    console.debug(`[websocket] ${label}`, payload);
+}
+
 function stripUndefinedEntries(value) {
     return Object.fromEntries(
         Object.entries(value).filter(([, item]) => item !== undefined)
@@ -208,7 +221,15 @@ export function initWebSocket() {
             }
         }
 
-        if (data.type === "reaction_update" && data.payload) {
+        if (["reaction_update", "message_reaction"].includes(data.type) && data.payload) {
+            debugWebSocket("reaction_event", {
+                type: data.type,
+                session_id: data.payload.session_id ?? data.session_id,
+                message_id: data.payload.message_id ?? data.message_id,
+                wa_message_id_original: data.payload.wa_message_id_original,
+                reaction: data.payload.reaction,
+                removed: data.payload.removed,
+            });
             dispatch({
                 type: "messages/reaction_update",
                 payload: data.payload,

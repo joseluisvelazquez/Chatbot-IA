@@ -338,12 +338,33 @@ function upsertMessage(sessionId, message) {
 }
 
 function applyMessageReaction(payload = {}) {
-    const key = toSessionKey(payload.session_id)
-    const list = key ? state.messages.bySessionId[key] : null
-    if (!list || !payload.message_id) return false
+    const explicitKey = toSessionKey(payload.session_id)
+    if (!payload.message_id) return false
 
-    const index = list.findIndex(item => Number(item.id) === Number(payload.message_id))
-    if (index < 0) return false
+    const candidateKeys = [
+        explicitKey,
+        ...Object.keys(state.messages.bySessionId).filter(key => key !== explicitKey),
+    ].filter(Boolean)
+
+    let key = null
+    let list = null
+    let index = -1
+
+    for (const candidateKey of candidateKeys) {
+        const candidateList = state.messages.bySessionId[candidateKey]
+        const candidateIndex = Array.isArray(candidateList)
+            ? candidateList.findIndex(item => Number(item.id) === Number(payload.message_id))
+            : -1
+
+        if (candidateIndex >= 0) {
+            key = candidateKey
+            list = candidateList
+            index = candidateIndex
+            break
+        }
+    }
+
+    if (!list || index < 0) return false
 
     const current = list[index]
     const reactions = Array.isArray(current.reactions) ? [...current.reactions] : []

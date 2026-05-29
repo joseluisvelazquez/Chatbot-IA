@@ -125,6 +125,7 @@ def build_reaction_update_event(
     message_id: int | None = None,
     reaction: dict[str, Any] | None = None,
     removed: bool = False,
+    action: str | None = None,
     orphan: bool = False,
     event_message: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -134,6 +135,7 @@ def build_reaction_update_event(
         "wa_message_id_original": wa_message_id_original,
         "reaction": reaction,
         "removed": removed,
+        "action": action or ("delete" if removed else None),
         "orphan": orphan,
         "event_message": event_message,
     })

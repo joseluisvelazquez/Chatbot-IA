@@ -408,6 +408,7 @@ async def persist_and_emit_reaction_event(
             db.flush()
             payload_reaction = serialize_reaction(reaction)
             removed = False
+            action = getattr(reaction, "_reaction_action", "update")
         else:
             removed_row = delete_reaction(
                 db,
@@ -419,6 +420,7 @@ async def persist_and_emit_reaction_event(
                 "reacted_by_phone": phone,
             }
             removed = True
+            action = "delete"
 
         db.commit()
         await emit_ws_message(
@@ -428,6 +430,7 @@ async def persist_and_emit_reaction_event(
                 wa_message_id_original=target_wa_id,
                 reaction=payload_reaction,
                 removed=removed,
+                action=action,
             )
         )
         logger.info(
@@ -437,6 +440,7 @@ async def persist_and_emit_reaction_event(
                 "session_id": target_msg.session_id,
                 "target_message_db_id": target_msg.id,
                 "removed": removed,
+                "reaction_action": action,
             },
         )
         return
@@ -496,6 +500,7 @@ async def persist_and_emit_reaction_event(
                 "reaction_emoji": emoji,
                 "reacted_by_phone": phone,
             },
+            action="add",
             orphan=True,
             event_message=build_message_payload(saved_msg),
         )
