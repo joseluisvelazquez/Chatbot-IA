@@ -22,6 +22,7 @@ async def _run_payment_reminders() -> None:
             extra={
                 "enabled": settings.PAYMENT_REMINDERS_ENABLED,
                 "dry_run": settings.PAYMENT_REMINDERS_DRY_RUN,
+                "test_mode": settings.PAYMENT_REMINDERS_TEST_MODE,
                 "company_id": settings.PAYMENT_REMINDER_COMPANY_ID,
                 "limit": settings.PAYMENT_REMINDER_SYNC_LIMIT,
             },
@@ -42,6 +43,7 @@ async def _run_payment_reminders() -> None:
             "payment_reminders_job_finished",
             extra={
                 "dry_run": settings.PAYMENT_REMINDERS_DRY_RUN,
+                "test_mode": settings.PAYMENT_REMINDERS_TEST_MODE,
                 "synced": sync_result.get("synced"),
                 "chat_sessions_scanned": sync_result.get("chat_sessions_scanned"),
                 "chat_sessions_with_context": sync_result.get("chat_sessions_with_context"),

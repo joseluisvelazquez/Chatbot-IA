@@ -296,6 +296,7 @@ class PaymentReminder(Base):
         Index("idx_payment_reminders_folio", "folio"),
         Index("idx_payment_reminders_cuenta", "cuenta"),
         Index("idx_payment_reminders_session_id", "session_id"),
+        Index("idx_payment_reminders_session_account_due_type", "session_id", "cuenta", "due_date", "reminder_type"),
         Index("idx_payment_reminders_receipt_status", "receipt_status"),
     )
 

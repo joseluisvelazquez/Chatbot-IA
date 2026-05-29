@@ -81,6 +81,7 @@ def startup():
             extra={
                 "interval_minutes": interval_minutes,
                 "dry_run": settings.PAYMENT_REMINDERS_DRY_RUN,
+                "test_mode": settings.PAYMENT_REMINDERS_TEST_MODE,
                 "company_id": settings.PAYMENT_REMINDER_COMPANY_ID,
                 "limit": settings.PAYMENT_REMINDER_SYNC_LIMIT,
             },

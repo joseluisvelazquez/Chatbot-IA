@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -26,6 +26,11 @@ from app.services.payment_reminder_service import (
     normalize_phone_for_whatsapp,
     upsert_scheduled_reminder,
 )
+
+
+@pytest.fixture(autouse=True)
+def payment_reminder_test_defaults(monkeypatch):
+    monkeypatch.setattr(settings, "PAYMENT_REMINDERS_TEST_MODE", False)
 
 
 def test_normalizes_local_mexico_phone():
@@ -810,6 +815,78 @@ def test_sync_single_real_account_without_phone_persists_skip_audit(monkeypatch)
     assert audit.phone == "unknown"
     assert audit.error_code == payment_service.REASON_MISSING_BRIDGE_FIELDS
     assert "phone" in audit.error_message_sanitized
+
+
+def test_payment_reminders_test_mode_blocks_non_allowed_phone(monkeypatch):
+    monkeypatch.setattr(settings, "PAYMENT_REMINDERS_TEST_MODE", True)
+    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", '["5214271227177"]')
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb([chat_session(id=42, phone="5217122145781", folio=None, extra_json={})])
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            cuenta="1260522",
+            client=FakeRealAccountBridge(),
+            today=date(2026, 5, 28),
+        )
+    )
+
+    assert result["reason_counts"] == {payment_service.REASON_TEST_PHONE_NOT_ALLOWED: 1}
+    assert result["results"][0]["test_mode"] is True
+    assert result["results"][0]["test_phone_allowed"] is False
+    assert result["results"][0]["reason"] == payment_service.REASON_TEST_PHONE_NOT_ALLOWED
+    assert db.added
+    audit = db.added[0]
+    assert audit.status == payment_service.STATUS_SKIPPED
+    assert audit.error_code == payment_service.REASON_TEST_PHONE_NOT_ALLOWED
+
+
+def test_weekly_frequency_blocks_until_seven_full_days():
+    last_sent_at = datetime(2026, 5, 28, 10, 30, 0)
+    sent_reminder = SimpleNamespace(
+        id=77,
+        status=payment_service.STATUS_SENT,
+        cuenta="1260522",
+        session_id=42,
+        sent_at=last_sent_at,
+    )
+
+    blocked, last_sent, next_allowed = payment_service._weekly_frequency_blocked(
+        FakeDb([sent_reminder]),
+        cuenta="1260522",
+        session_id=42,
+        now=last_sent_at + timedelta(days=6, hours=23),
+    )
+
+    assert blocked is True
+    assert last_sent is sent_reminder
+    assert next_allowed == datetime(2026, 6, 4, 10, 30, 0)
+
+
+def test_weekly_frequency_allows_after_seven_full_days():
+    last_sent_at = datetime(2026, 5, 28, 10, 30, 0)
+    sent_reminder = SimpleNamespace(
+        id=77,
+        status=payment_service.STATUS_SENT,
+        cuenta="1260522",
+        session_id=42,
+        sent_at=last_sent_at,
+    )
+
+    blocked, _last_sent, next_allowed = payment_service._weekly_frequency_blocked(
+        FakeDb([sent_reminder]),
+        cuenta="1260522",
+        session_id=42,
+        now=last_sent_at + timedelta(days=7, seconds=1),
+    )
+
+    assert blocked is False
+    assert next_allowed == datetime(2026, 6, 4, 10, 30, 0)
 
 
 def test_reminder_resolves_session_by_folio_when_phone_has_multiple_sessions():

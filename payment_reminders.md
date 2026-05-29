@@ -17,7 +17,11 @@ Resumen del contrato actual:
 - No modifica SIGA ni saldos financieros.
 - No envia mensajes libres automaticos; solo usa plantillas Meta.
 - Toda omision o fallo debe quedar con razon explicita en logs y, con `dry_run=false`, como auditoria en `payment_reminders`.
-- `TEST_PHONE_ONLY` no forma parte del flujo productivo y no debe bloquear creacion, programacion ni envio en produccion.
+- `PAYMENT_REMINDERS_TEST_MODE=true` limita programacion/envio a `TEST_PHONE_ONLY`.
+- `PAYMENT_REMINDERS_TEST_MODE=false` desactiva ese candado para operar con telefonos reales de SIGA Bridge.
+- La frecuencia real es semanal: despues de un `sent_at`, la misma cuenta/sesion queda bloqueada hasta `sent_at + 7 dias`.
+- `run-due` pasa los registros por estado `processing` para evitar doble envio entre scheduler, endpoints manuales o multiples workers.
+- Cada envio real aceptado por Meta crea un registro `messages.type='payment_reminder'`; si falla ese insert, el recordatorio queda `sent` con `error_code=message_insert_failed`.
 
 Endpoints utiles:
 

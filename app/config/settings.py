@@ -135,6 +135,8 @@ class Settings(BaseSettings):
 
     PAYMENT_REMINDERS_ENABLED: bool = False
     PAYMENT_REMINDERS_DRY_RUN: bool = True
+    PAYMENT_REMINDERS_TEST_MODE: bool = False
+    TEST_PHONE_ONLY: str = ""
     PAYMENT_REMINDER_COMPANY_ID: int = 1
     PAYMENT_REMINDER_SYNC_LIMIT: int = 100
     PAYMENT_REMINDER_SEND_HOUR: int = 10

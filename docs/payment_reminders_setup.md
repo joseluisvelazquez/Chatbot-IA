@@ -10,7 +10,7 @@ El modulo de recordatorios no decide si un comprobante es valido. Solo consulta 
 
 Para recordatorios solo existen dos estados operativos: `pagado` y `no_pagado`. La cuenta se considera `pagado` cuando cobranza/Bridge reflejan saldo cero, o estado pagado, liquidado o saldado. Si no existe confirmacion confiable, se considera `no_pagado` o se omite el envio por datos insuficientes.
 
-`TEST_PHONE_ONLY` no forma parte del flujo productivo de `payment_reminders`. No debe bloquear creacion, programacion ni envio en produccion, ni ocultar errores reales. Si se conserva para pruebas locales, debe estar detras de un modo explicito como `PAYMENT_REMINDERS_TEST_MODE=true`; con ese modo apagado, los telefonos reales provenientes de SIGA Bridge son validos.
+`TEST_PHONE_ONLY` no forma parte del flujo productivo permanente de `payment_reminders`. Solo aplica cuando `PAYMENT_REMINDERS_TEST_MODE=true`. Con `PAYMENT_REMINDERS_TEST_MODE=false`, los telefonos reales provenientes de SIGA Bridge son validos y no quedan bloqueados por listas de prueba.
 
 ## Flujo general
 
@@ -41,6 +41,10 @@ Ejemplos:
 - Cliente A: fecha base martes -> recordatorios martes cada 7 dias.
 - Cliente B: fecha base viernes -> recordatorios viernes cada 7 dias.
 
+Ademas del ciclo de vencimiento, existe una guarda fuerte de frecuencia: una misma cuenta/sesion no debe recibir otro recordatorio hasta que hayan pasado 7 dias completos desde `sent_at` del ultimo envio. `PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES` solo define cada cuanto se revisa; no define cada cuanto se envia.
+
+Despues de un envio aceptado por Meta, el registro queda como `sent` con `sent_at`, y se programa el siguiente recordatorio para la siguiente semana. Si el envio ocurrio tarde, `scheduled_for` del siguiente recordatorio se ajusta para no quedar antes de `sent_at + 7 dias`.
+
 ## Formato operativo de cuenta
 
 La cuenta enviada en recordatorios debe usar el mismo formato operativo que el flujo `INFO_COMPROBANTE_ACCESO`. Algunas cuentas pueden requerir prefijo, por ejemplo `A` o `B`, antes del numero. Si Bridge entrega una cuenta ya prefijada, se conserva ese valor. Si solo existe el numero crudo, se aplica el mismo fallback historico del flujo de comprobantes. Si una fuente marca explicitamente que el prefijo es obligatorio y no se puede resolver, el sistema debe omitir el envio para evitar referencias incorrectas.
@@ -49,6 +53,8 @@ La cuenta enviada en recordatorios debe usar el mismo formato operativo que el f
 
 - `PAYMENT_REMINDERS_ENABLED`: activa o desactiva el scheduler automatico. En produccion solo debe activarse despues de probar con dry-run.
 - `PAYMENT_REMINDERS_DRY_RUN`: si esta en `true`, simula sincronizacion y clasificacion sin enviar plantillas Meta reales ni escribir cambios operativos.
+- `PAYMENT_REMINDERS_TEST_MODE`: si esta en `true`, solo permite programar/enviar a telefonos incluidos en `TEST_PHONE_ONLY`.
+- `TEST_PHONE_ONLY`: lista JSON o CSV de telefonos permitidos en modo pruebas. Ejemplo: `["5214271227177", "5214271665615", "5214271644542"]`.
 - `PAYMENT_REMINDER_COMPANY_ID`: empresa usada para consultar datos frescos en Bridge. Por defecto `1`.
 - `PAYMENT_REMINDER_SYNC_LIMIT`: maximo de cuentas procesadas por corrida para evitar cargas grandes contra Bridge o base local.
 - `PAYMENT_REMINDER_SEND_HOUR`: hora local en la que se programan o envian recordatorios vencidos. No define el dia del cliente, solo la hora.
@@ -69,6 +75,7 @@ Ejecutar las migraciones manuales:
 ```sql
 app/db/migrations/20260525_payment_reminders.sql
 app/db/migrations/20260527_payment_reminders_session_id.sql
+app/db/migrations/20260529_payment_reminders_weekly_guard.sql
 ```
 
 Tabla nueva: `payment_reminders`.
@@ -82,6 +89,7 @@ Cuando `dry_run=false`, las omisiones controladas tambien se auditan en `payment
 ## Estados de recordatorio
 
 - `scheduled`: programado.
+- `processing`: tomado por una corrida de `run-due` para evitar doble envio concurrente.
 - `sent`: enviado.
 - `skipped`: omitido de forma controlada.
 - `cancelled`: cancelado operativo.
@@ -98,7 +106,7 @@ POST /api/panel/payment-reminders/dry-run?cuenta={{CUENTA}}&folio={{FOLIO}}
 
 Devuelve cuenta, `cuenta_raw`, `cuenta_formateada`, `prefijo_cuenta`, `fuente_formato_cuenta`, `cuenta_formateada_valida`, telefono enmascarado, saldo, `fecha_base`, `due_date`, `next_due_date`, `scheduled_at`, `estado_pago`, `fuente_estado_pago`, `should_send`, plantilla que se usaria y motivo si no se envia.
 
-Tambien devuelve datos de integracion con conversaciones: `session_id`, `chat_session_found`, `chat_session_match_reason`, `would_create_conversation_message`, `conversation_message_preview`, `next_payment_reminder_at`, `sent_count_prev` y `last_payment_reminder_at`.
+Tambien devuelve datos de integracion con conversaciones y frecuencia: `session_id`, `chat_session_found`, `chat_session_match_reason`, `test_mode`, `test_phone_allowed`, `weekly_frequency_allowed`, `last_payment_reminder_at`, `next_allowed_payment_reminder_at`, `existing_scheduled_reminder_id`, `duplicate_prevented`, `would_create_conversation_message`, `conversation_message_preview`, `next_payment_reminder_at` y `sent_count_prev`.
 
 Si no existe `chat_session`, el resultado debe quedar con `should_send=false` y reason `missing_chat_session`. Si hay varias sesiones posibles sin folio/cuenta concluyente, reason `ambiguous_chat_session`. Si la sesion existe pero folio/cuenta no coincide, reason `chat_session_account_mismatch`.
 
@@ -136,6 +144,8 @@ Debe existir `chat_session` local y datos confiables de Bridge. Si falta sesion 
 ## Conversaciones y cobranza
 
 Cuando Meta confirma un envio, el modulo crea un mensaje saliente visible en conversaciones con `type=payment_reminder`, `direction=out` y metadata con cuenta, folio, vencimiento, plantilla e id de Meta. Tambien actualiza `chat_sessions.last_message` y `chat_sessions.last_message_at`, y emite el evento WebSocket de nuevo mensaje para el panel.
+
+Si Meta acepta el envio pero falla la insercion local en `messages`, no se reintenta el envio automaticamente. El recordatorio queda como `sent`, conserva `meta_message_id` y registra `error_code=message_insert_failed` para auditoria.
 
 El modulo de cobranza agrega un resumen por cuenta:
 
@@ -185,6 +195,13 @@ ORDER BY created_at DESC;
 - `payment_reminder.send.attempt`
 - `payment_reminder.send.accepted`
 - `payment_reminder.send.failed`
+- `payment_reminder.test_mode.blocked`
+- `payment_reminder.duplicate.prevented`
+- `payment_reminder.weekly_frequency.blocked`
+- `payment_reminder.message.insert.start`
+- `payment_reminder.message.inserted`
+- `payment_reminder.message.failed`
+- `payment_reminder.next_scheduled`
 - `payment_reminder.cancelled_settled`
 - `payment_reminder_bridge_lookup`
 - `payment_reminder_bridge_error`
@@ -198,7 +215,7 @@ ORDER BY created_at DESC;
 
 Los logs enmascaran telefono, folio y cuenta. No se loguean tokens ni payloads completos.
 
-Las omisiones esperadas deben aparecer con razon explicita: `missing_chat_session`, `ambiguous_chat_session`, `chat_session_account_mismatch`, `missing_bridge_fields`, `bridge_error`, `not_due`, `paid_or_settled`, `already_sent`, `template_missing` o `meta_error`.
+Las omisiones esperadas deben aparecer con razon explicita: `missing_chat_session`, `ambiguous_chat_session`, `chat_session_account_mismatch`, `missing_bridge_fields`, `bridge_error`, `not_due`, `paid_or_settled`, `already_sent`, `template_missing`, `meta_error`, `test_phone_not_allowed`, `weekly_frequency_blocked` o `message_insert_failed`.
 
 ## Si Bridge falla
 
@@ -223,7 +240,7 @@ El intento queda como `failed` con `meta_error` y mensaje sanitizado. No se expo
 - Confirmar que en produccion el ciclo se derive de fecha base de Bridge; usar `PAYMENT_REMINDER_DEFAULT_WEEKDAY` solo como fallback temporal y documentado.
 - Ejecutar primero varios ciclos en `PAYMENT_REMINDERS_DRY_RUN=true`.
 - Confirmar que el proceso de produccion carga `app.main:app`, porque el scheduler se registra ahi.
-- Confirmar `PAYMENT_REMINDERS_ENABLED=true`, `PAYMENT_REMINDERS_DRY_RUN=false`, `PAYMENT_REMINDER_COMPANY_ID`, `PAYMENT_REMINDER_SYNC_LIMIT`, `PAYMENT_REMINDER_SEND_HOUR`, `PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES`, `META_PAYMENT_PENDING_TEMPLATE_NAME`, `META_PAYMENT_OVERDUE_TEMPLATE_NAME`, `META_NEXT_PAYMENT_TEMPLATE_NAME`, `META_TEMPLATE_LANGUAGE`, `SIGA_BRIDGE_BASE_URL`, `SIGA_BRIDGE_TOKEN` y `SIGA_BRIDGE_ENABLED`.
+- Confirmar `PAYMENT_REMINDERS_ENABLED=true`, `PAYMENT_REMINDERS_DRY_RUN=false`, `PAYMENT_REMINDERS_TEST_MODE`, `TEST_PHONE_ONLY`, `PAYMENT_REMINDER_COMPANY_ID`, `PAYMENT_REMINDER_SYNC_LIMIT`, `PAYMENT_REMINDER_SEND_HOUR`, `PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES`, `META_PAYMENT_PENDING_TEMPLATE_NAME`, `META_PAYMENT_OVERDUE_TEMPLATE_NAME`, `META_NEXT_PAYMENT_TEMPLATE_NAME`, `META_TEMPLATE_LANGUAGE`, `SIGA_BRIDGE_BASE_URL`, `SIGA_BRIDGE_TOKEN` y `SIGA_BRIDGE_ENABLED`.
 - Confirmar zona horaria del servidor, API y DB.
 - Confirmar que las plantillas Meta esten aprobadas y que la app tenga permisos activos.
 - Confirmar que endpoints manuales esten protegidos por sesion y rol.
@@ -272,6 +289,14 @@ WHERE cuenta = '1260522'
 ORDER BY created_at DESC;
 ```
 
+Vista general de recordatorios:
+
+```sql
+SELECT id, session_id, phone, folio, cuenta, status, due_date, next_due_date, scheduled_for, sent_at, error_code
+FROM payment_reminders
+ORDER BY created_at DESC;
+```
+
 Estado operativo:
 
 ```sql
@@ -295,4 +320,22 @@ SELECT status, error_code, error_message_sanitized, COUNT(*) total
 FROM payment_reminders
 GROUP BY status, error_code, error_message_sanitized
 ORDER BY total DESC;
+```
+
+Mensajes visibles en conversaciones:
+
+```sql
+SELECT id, session_id, direction, type, content, message_id, created_at
+FROM messages
+WHERE type = 'payment_reminder'
+ORDER BY created_at DESC;
+```
+
+Ultimas conversaciones actualizadas:
+
+```sql
+SELECT id, phone, folio, last_message, last_message_at
+FROM chat_sessions
+ORDER BY last_message_at DESC
+LIMIT 20;
 ```

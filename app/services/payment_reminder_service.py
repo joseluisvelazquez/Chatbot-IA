@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import unicodedata
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
@@ -36,6 +37,7 @@ PAYMENT_STATUS_UNKNOWN = "unknown"
 PAYMENT_STATUS_SOURCE_UNKNOWN = "unknown"
 
 STATUS_SCHEDULED = "scheduled"
+STATUS_PROCESSING = "processing"
 STATUS_SENT = "sent"
 STATUS_SKIPPED = "skipped"
 STATUS_CANCELLED = "cancelled"
@@ -59,6 +61,9 @@ REASON_PAID_OR_SETTLED = "paid_or_settled"
 REASON_TEMPLATE_MISSING = "template_missing"
 REASON_META_ERROR = "meta_error"
 REASON_AUDIT_FIELDS_MISSING = "audit_fields_missing"
+REASON_TEST_PHONE_NOT_ALLOWED = "test_phone_not_allowed"
+REASON_WEEKLY_FREQUENCY_BLOCKED = "weekly_frequency_blocked"
+REASON_MESSAGE_INSERT_FAILED = "message_insert_failed"
 
 OMISSION_REASONS = {
     CLASS_MISSING_CHAT_SESSION,
@@ -71,6 +76,9 @@ OMISSION_REASONS = {
     CLASS_ALREADY_SENT,
     REASON_TEMPLATE_MISSING,
     REASON_META_ERROR,
+    REASON_TEST_PHONE_NOT_ALLOWED,
+    REASON_WEEKLY_FREQUENCY_BLOCKED,
+    REASON_MESSAGE_INSERT_FAILED,
 }
 
 REMINDER_PAYMENT_PENDING = "payment_pending"
@@ -81,6 +89,14 @@ REMINDER_AUDIT = "payment_audit"
 ACTIVE_REMINDER_STATUSES = {
     STATUS_SCHEDULED,
 }
+
+PROTECTED_REMINDER_STATUSES = {
+    STATUS_SCHEDULED,
+    STATUS_PROCESSING,
+    STATUS_SENT,
+}
+
+PAYMENT_REMINDER_MIN_INTERVAL_DAYS = 7
 
 WEEKDAYS = {
     "monday": 0,
@@ -133,7 +149,9 @@ class ChatSessionResolution:
 class ReminderStats:
     sent_count: int = 0
     last_sent_at: datetime | None = None
+    last_sent_reminder_id: int | None = None
     next_scheduled_at: datetime | None = None
+    existing_scheduled_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -228,6 +246,44 @@ def normalize_phone_for_whatsapp(value: Any) -> str | None:
 def is_valid_whatsapp_phone(value: Any) -> bool:
     phone = normalize_phone_for_whatsapp(value)
     return bool(phone and phone.isdigit() and 12 <= len(phone) <= 15)
+
+
+def payment_reminders_test_mode_enabled() -> bool:
+    return bool(getattr(settings, "PAYMENT_REMINDERS_TEST_MODE", False))
+
+
+def _configured_test_phones() -> set[str]:
+    raw = getattr(settings, "TEST_PHONE_ONLY", "") or ""
+    values: list[Any]
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            values = []
+        else:
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                values = parsed
+            else:
+                values = [part.strip() for part in text.split(",")]
+    elif isinstance(raw, list):
+        values = raw
+    else:
+        values = []
+    return {
+        normalized
+        for normalized in (normalize_phone_for_whatsapp(value) for value in values)
+        if normalized
+    }
+
+
+def payment_reminder_test_phone_allowed(phone: Any) -> bool:
+    if not payment_reminders_test_mode_enabled():
+        return True
+    normalized = normalize_phone_for_whatsapp(phone)
+    return bool(normalized and normalized in _configured_test_phones())
 
 
 def _conversation_phone_key(value: Any) -> str | None:
@@ -1171,7 +1227,21 @@ async def _record_sent_conversation_message(
             return existing
 
     now = mexico_now_naive()
-    content = _build_conversation_message_preview(snapshot=snapshot, schedule=schedule)
+    content = _build_conversation_message_preview(
+        snapshot=snapshot,
+        schedule=schedule,
+        template_name=reminder.template_name,
+        sent_at=now,
+    )
+    logger.info(
+        "payment_reminder.message.insert.start",
+        extra={
+            "reminder_id": getattr(reminder, "id", None),
+            "session_id": getattr(session, "id", None),
+            "account": _mask(snapshot.cuenta),
+            "meta_message_id": meta_message_id,
+        },
+    )
     message = save_message(
         db=db,
         session_id=session.id,
@@ -1199,17 +1269,38 @@ async def _record_sent_conversation_message(
         session.last_message_id = meta_message_id
     session.unread_count = 0
     db.flush()
-    await manager.send_to_all(build_new_message_event(session, message))
-    await manager.send_to_all(
-        {
-            "type": "dashboard_update",
-            "payload": {
-                "messages_in_delta": 0,
-                "messages_out_delta": 1,
-                "session_id": session.id,
-            },
-        }
+    logger.info(
+        "payment_reminder.message.inserted",
+        extra={
+            "reminder_id": getattr(reminder, "id", None),
+            "message_db_id": getattr(message, "id", None),
+            "session_id": getattr(session, "id", None),
+            "meta_message_id": meta_message_id,
+        },
     )
+    try:
+        await manager.send_to_all(build_new_message_event(session, message))
+        await manager.send_to_all(
+            {
+                "type": "dashboard_update",
+                "payload": {
+                    "messages_in_delta": 0,
+                    "messages_out_delta": 1,
+                    "session_id": session.id,
+                },
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "payment_reminder.message.websocket_failed",
+            extra={
+                "reminder_id": getattr(reminder, "id", None),
+                "message_db_id": getattr(message, "id", None),
+                "session_id": getattr(session, "id", None),
+                "error_type": exc.__class__.__name__,
+            },
+            exc_info=True,
+        )
     return message
 
 
@@ -1219,14 +1310,19 @@ def _existing_reminder(
     cuenta: str,
     due_date: date,
     reminder_type: str,
+    session_id: int | None = None,
 ) -> PaymentReminder | None:
-    return (
+    query = (
         db.query(PaymentReminder)
         .filter(PaymentReminder.cuenta == cuenta)
         .filter(PaymentReminder.due_date == due_date)
         .filter(PaymentReminder.reminder_type == reminder_type)
-        .first()
     )
+    if session_id is not None:
+        session_match = query.filter(PaymentReminder.session_id == session_id).first()
+        if session_match:
+            return session_match
+    return query.first()
 
 
 def _update_reminder_from_snapshot(
@@ -1272,19 +1368,43 @@ def upsert_scheduled_reminder(
         cuenta=snapshot.cuenta,
         due_date=schedule.due_date,
         reminder_type=reminder_type,
+        session_id=session_id,
     )
     if existing and existing.status == STATUS_SENT:
+        logger.info(
+            "payment_reminder.duplicate.prevented",
+            extra={
+                "payment_reminder_id": getattr(existing, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "session_id": session_id,
+                "due_date": schedule.due_date.isoformat(),
+                "reminder_type": reminder_type,
+                "existing_status": existing.status,
+            },
+        )
         return existing, CLASS_ALREADY_SENT
-    if existing and existing.status in ACTIVE_REMINDER_STATUSES:
+    if existing and existing.status in {STATUS_SCHEDULED, STATUS_PROCESSING}:
+        logger.info(
+            "payment_reminder.duplicate.prevented",
+            extra={
+                "payment_reminder_id": getattr(existing, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "session_id": session_id,
+                "due_date": schedule.due_date.isoformat(),
+                "reminder_type": reminder_type,
+                "existing_status": existing.status,
+            },
+        )
         if not dry_run:
-            _update_reminder_from_snapshot(
-                existing,
-                snapshot=snapshot,
-                schedule=schedule,
-                template_name=template_name,
-                session_id=session_id,
-            )
-            existing.status = STATUS_SCHEDULED
+            if existing.status == STATUS_SCHEDULED:
+                _update_reminder_from_snapshot(
+                    existing,
+                    snapshot=snapshot,
+                    schedule=schedule,
+                    template_name=template_name,
+                    session_id=session_id,
+                )
+                existing.status = STATUS_SCHEDULED
         return existing, CLASS_ALREADY_SCHEDULED
     if dry_run:
         return existing, "would_schedule"
@@ -1426,6 +1546,7 @@ def record_payment_reminder_audit(
         cuenta=cuenta,
         due_date=due_date,
         reminder_type=audit_type,
+        session_id=session_id,
     )
     error_message = _audit_error_message(
         classification=classification,
@@ -1434,6 +1555,20 @@ def record_payment_reminder_audit(
         error_message=snapshot.error_message_sanitized,
     )
     if existing:
+        if existing.status in PROTECTED_REMINDER_STATUSES:
+            logger.info(
+                "payment_reminder.duplicate.prevented",
+                extra={
+                    "payment_reminder_id": getattr(existing, "id", None),
+                    "account": _mask(cuenta),
+                    "session_id": session_id,
+                    "due_date": due_date.isoformat(),
+                    "reminder_type": audit_type,
+                    "existing_status": existing.status,
+                    "audit_reason": canonical_reason,
+                },
+            )
+            return existing
         reminder = existing
         reminder.session_id = session_id if session_id is not None else reminder.session_id
         reminder.phone = snapshot.phone or reminder.phone or "unknown"
@@ -1523,6 +1658,114 @@ def _cancel_future_settled(db: Session, *, cuenta: str, current_id: int | None =
     )
 
 
+def _claim_due_payment_reminder(db: Session, *, reminder: PaymentReminder, now: datetime) -> bool:
+    updated = (
+        db.query(PaymentReminder)
+        .filter(PaymentReminder.id == reminder.id)
+        .filter(PaymentReminder.status == STATUS_SCHEDULED)
+        .filter(PaymentReminder.scheduled_for <= now)
+        .update(
+            {
+                PaymentReminder.status: STATUS_PROCESSING,
+                PaymentReminder.updated_at: now,
+                PaymentReminder.error_code: None,
+                PaymentReminder.error_message_sanitized: None,
+            },
+            synchronize_session=False,
+        )
+    )
+    if updated != 1:
+        logger.info(
+            "payment_reminder.duplicate.prevented",
+            extra={
+                "payment_reminder_id": getattr(reminder, "id", None),
+                "account": _mask(getattr(reminder, "cuenta", None)),
+                "existing_status": getattr(reminder, "status", None),
+                "reason": "claim_failed",
+            },
+        )
+        return False
+    db.commit()
+    reminder.status = STATUS_PROCESSING
+    if hasattr(db, "refresh"):
+        db.refresh(reminder)
+    return True
+
+
+def _last_sent_payment_reminder(
+    db: Session,
+    *,
+    cuenta: str | None = None,
+    session_id: int | None = None,
+    exclude_id: int | None = None,
+) -> PaymentReminder | None:
+    if not cuenta and not session_id:
+        return None
+    query = db.query(PaymentReminder).filter(PaymentReminder.status == STATUS_SENT)
+    filters = []
+    if cuenta:
+        filters.append(PaymentReminder.cuenta == cuenta)
+    if session_id:
+        filters.append(PaymentReminder.session_id == session_id)
+    query = query.filter(or_(*filters) if len(filters) > 1 else filters[0])
+    if exclude_id:
+        query = query.filter(PaymentReminder.id != exclude_id)
+    return query.order_by(PaymentReminder.sent_at.desc(), PaymentReminder.id.desc()).first()
+
+
+def _next_allowed_send_at(last_sent_at: datetime | None) -> datetime | None:
+    if not last_sent_at:
+        return None
+    return last_sent_at + timedelta(days=PAYMENT_REMINDER_MIN_INTERVAL_DAYS)
+
+
+def _weekly_frequency_blocked(
+    db: Session,
+    *,
+    cuenta: str | None,
+    session_id: int | None,
+    now: datetime | None = None,
+    exclude_id: int | None = None,
+) -> tuple[bool, PaymentReminder | None, datetime | None]:
+    last_sent = _last_sent_payment_reminder(
+        db,
+        cuenta=cuenta,
+        session_id=session_id,
+        exclude_id=exclude_id,
+    )
+    next_allowed = _next_allowed_send_at(getattr(last_sent, "sent_at", None))
+    now = now or mexico_now_naive()
+    return bool(next_allowed and now < next_allowed), last_sent, next_allowed
+
+
+def _scheduled_datetime_for_next_week(schedule: PaymentSchedule, *, last_sent_at: datetime | None = None) -> datetime:
+    scheduled = _scheduled_datetime(schedule.next_due_date)
+    next_allowed = _next_allowed_send_at(last_sent_at)
+    if next_allowed and scheduled < next_allowed:
+        return next_allowed
+    return scheduled
+
+
+def _reschedule_after_weekly_block(
+    reminder: PaymentReminder,
+    *,
+    schedule: PaymentSchedule,
+    next_allowed_at: datetime,
+) -> None:
+    next_due = schedule.next_due_date
+    if next_allowed_at.date() > next_due:
+        next_due = next_allowed_at.date()
+    reminder.due_date = next_due
+    reminder.next_due_date = next_due + timedelta(days=7)
+    reminder.scheduled_for = max(_scheduled_datetime(next_due), next_allowed_at)
+    reminder.status = STATUS_SCHEDULED
+    reminder.error_code = REASON_WEEKLY_FREQUENCY_BLOCKED
+    reminder.error_message_sanitized = (
+        f"next_allowed_payment_reminder_at:{next_allowed_at.isoformat()}"
+    )[:255]
+    reminder.updated_at = mexico_now_naive()
+
+
 def _reminder_stats(
     db: Session,
     *,
@@ -1540,16 +1783,22 @@ def _reminder_stats(
 
         sent_rows = query.filter(PaymentReminder.status == STATUS_SENT).all()
         scheduled_rows = query.filter(PaymentReminder.status == STATUS_SCHEDULED).all()
+        last_sent_row = max(
+            (row for row in sent_rows if row.sent_at),
+            key=lambda row: row.sent_at,
+            default=None,
+        )
+        next_scheduled_row = min(
+            (row for row in scheduled_rows if row.scheduled_for),
+            key=lambda row: row.scheduled_for,
+            default=None,
+        )
         return ReminderStats(
             sent_count=len(sent_rows),
-            last_sent_at=max(
-                (row.sent_at for row in sent_rows if row.sent_at),
-                default=None,
-            ),
-            next_scheduled_at=min(
-                (row.scheduled_for for row in scheduled_rows if row.scheduled_for),
-                default=None,
-            ),
+            last_sent_at=getattr(last_sent_row, "sent_at", None),
+            last_sent_reminder_id=getattr(last_sent_row, "id", None),
+            next_scheduled_at=getattr(next_scheduled_row, "scheduled_for", None),
+            existing_scheduled_id=getattr(next_scheduled_row, "id", None),
         )
     except Exception:
         logger.warning(
@@ -1564,11 +1813,31 @@ def _build_conversation_message_preview(
     *,
     snapshot: BridgeAccountSnapshot,
     schedule: PaymentSchedule | None,
+    template_name: str | None = None,
+    sent_at: datetime | None = None,
 ) -> str:
     cuenta = snapshot.account_reference_formatted or format_account_reference(snapshot.cuenta) or snapshot.cuenta or "N/D"
     minimum = _money_text(snapshot.minimum_payment)
+    balance = _money_text(snapshot.balance)
     due = _date_text(schedule.due_date if schedule else None)
-    return f"Recordatorio de pago enviado: cuenta {cuenta}, pago minimo {minimum}, vencimiento {due}."
+    sent_text = (sent_at or mexico_now_naive()).strftime("%Y-%m-%d %H:%M:%S")
+    lines = [
+        "Recordatorio de pago enviado.",
+        f"Cuenta: {cuenta}",
+    ]
+    if snapshot.folio:
+        lines.append(f"Folio: {snapshot.folio}")
+    lines.extend(
+        [
+            f"Fecha de vencimiento: {due}",
+            f"Fecha de envio: {sent_text}",
+            f"Telefono: {_mask(snapshot.phone)}",
+            f"Plantilla: {template_name or 'N/D'}",
+            f"Monto minimo: {minimum}",
+            f"Saldo: {balance}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _build_process_result(
@@ -1588,17 +1857,36 @@ def _build_process_result(
         (snapshot.account_reference_valid and snapshot.account_reference_formatted)
         or (cuenta_formateada and not snapshot.account_reference_reason)
     )
-    should_send = bool(
+    base_should_send = bool(
         template_name
         and snapshot.payment_status == PAYMENT_STATUS_UNPAID
         and cuenta_formateada_valida
         and classification not in {CLASS_NOT_DUE, CLASS_SETTLED, CLASS_BRIDGE_ERROR, CLASS_INSUFFICIENT_BRIDGE_DATA}
         and (session_resolution is None or session_resolution.found)
     )
-    preview = _build_conversation_message_preview(snapshot=snapshot, schedule=schedule) if schedule else None
     session_found = bool(session_resolution.found) if session_resolution else None
     session_id = session_resolution.session_id if session_resolution else None
     stats = reminder_stats or ReminderStats()
+    test_mode = payment_reminders_test_mode_enabled()
+    test_phone_allowed = payment_reminder_test_phone_allowed(snapshot.phone)
+    next_allowed = _next_allowed_send_at(stats.last_sent_at)
+    now = mexico_now_naive()
+    weekly_frequency_allowed = not next_allowed or now >= next_allowed
+    effective_reason = reason
+    if base_should_send and not test_phone_allowed:
+        effective_reason = REASON_TEST_PHONE_NOT_ALLOWED
+    elif base_should_send and not weekly_frequency_allowed:
+        effective_reason = REASON_WEEKLY_FREQUENCY_BLOCKED
+    should_send = bool(base_should_send and test_phone_allowed and weekly_frequency_allowed)
+    preview = (
+        _build_conversation_message_preview(
+            snapshot=snapshot,
+            schedule=schedule,
+            template_name=template_name,
+        )
+        if schedule
+        else None
+    )
     return {
         "cuenta": snapshot.cuenta,
         "folio": snapshot.folio,
@@ -1618,7 +1906,7 @@ def _build_process_result(
         "estado_pago": snapshot.payment_status,
         "fuente_estado_pago": snapshot.payment_status_source,
         "should_send": should_send,
-        "reason": reason,
+        "reason": effective_reason,
         "bridge_endpoint": "collections/account/payments",
         "bridge_found": snapshot.bridge_found,
         "fecha_venta": snapshot.sale_date.isoformat() if snapshot.sale_date else None,
@@ -1629,6 +1917,9 @@ def _build_process_result(
         "template_name": template_name,
         "reminder_type": reminder_type,
         "dry_run": dry_run,
+        "test_mode": test_mode,
+        "test_phone_allowed": test_phone_allowed,
+        "test_phone_configured_count": len(_configured_test_phones()) if test_mode else None,
         "would_send": should_send,
         "would_schedule_next": bool(schedule and classification not in {CLASS_SETTLED, CLASS_BRIDGE_ERROR, CLASS_INSUFFICIENT_BRIDGE_DATA}),
         "would_cancel_settled": classification == CLASS_SETTLED,
@@ -1640,8 +1931,13 @@ def _build_process_result(
         "would_create_conversation_message": bool(should_send and session_found),
         "conversation_message_preview": preview if should_send else None,
         "next_payment_reminder_at": stats.next_scheduled_at.isoformat() if stats.next_scheduled_at else None,
+        "existing_scheduled_reminder_id": stats.existing_scheduled_id,
+        "duplicate_prevented": classification in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT},
         "sent_count_prev": stats.sent_count,
         "last_payment_reminder_at": stats.last_sent_at.isoformat() if stats.last_sent_at else None,
+        "last_payment_reminder_id": stats.last_sent_reminder_id,
+        "weekly_frequency_allowed": weekly_frequency_allowed,
+        "next_allowed_payment_reminder_at": next_allowed.isoformat() if next_allowed else None,
     }
 
 
@@ -2027,6 +2323,28 @@ async def process_due_payment_reminder(
         result["reason"] = REASON_PAID_OR_SETTLED
         return result
 
+    if not payment_reminder_test_phone_allowed(snapshot.phone):
+        _mark_result(
+            reminder,
+            status=STATUS_SKIPPED,
+            error_code=REASON_TEST_PHONE_NOT_ALLOWED,
+            error_message=REASON_TEST_PHONE_NOT_ALLOWED,
+        )
+        logger.info(
+            "payment_reminder.test_mode.blocked",
+            extra={
+                "reminder_id": getattr(reminder, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "phone_masked": _mask(snapshot.phone),
+                "test_phone_configured_count": len(_configured_test_phones()),
+            },
+        )
+        result["reason"] = REASON_TEST_PHONE_NOT_ALLOWED
+        result["should_send"] = False
+        result["would_send"] = False
+        result["would_create_conversation_message"] = False
+        return result
+
     if classification == CLASS_NOT_DUE:
         reminder.status = STATUS_SCHEDULED
         reminder.scheduled_for = _scheduled_datetime(schedule.due_date)
@@ -2041,6 +2359,38 @@ async def process_due_payment_reminder(
             error_message="meta_template_not_configured",
         )
         result["reason"] = REASON_TEMPLATE_MISSING
+        return result
+
+    blocked, last_sent, next_allowed = _weekly_frequency_blocked(
+        db,
+        cuenta=snapshot.cuenta,
+        session_id=session_resolution.session_id,
+        exclude_id=getattr(reminder, "id", None),
+    )
+    if blocked and next_allowed:
+        _reschedule_after_weekly_block(
+            reminder,
+            schedule=schedule,
+            next_allowed_at=next_allowed,
+        )
+        logger.info(
+            "payment_reminder.weekly_frequency.blocked",
+            extra={
+                "reminder_id": getattr(reminder, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "session_id": session_resolution.session_id,
+                "last_sent_at": getattr(last_sent, "sent_at", None).isoformat() if getattr(last_sent, "sent_at", None) else None,
+                "next_allowed_at": next_allowed.isoformat(),
+            },
+        )
+        result["reason"] = REASON_WEEKLY_FREQUENCY_BLOCKED
+        result["should_send"] = False
+        result["would_send"] = False
+        result["would_create_conversation_message"] = False
+        result["next_allowed_payment_reminder_at"] = next_allowed.isoformat()
+        result["scheduled_at"] = reminder.scheduled_for.isoformat() if reminder.scheduled_for else None
+        result["due_date"] = reminder.due_date.isoformat() if reminder.due_date else result.get("due_date")
+        result["next_due_date"] = reminder.next_due_date.isoformat() if reminder.next_due_date else result.get("next_due_date")
         return result
 
     already_sent = (
@@ -2152,25 +2502,44 @@ async def process_due_payment_reminder(
     )
     result["conversation_message_created"] = False
     try:
-        message = await _record_sent_conversation_message(
-            db,
-            session=session_resolution.session,
-            reminder=reminder,
-            snapshot=snapshot,
-            schedule=schedule,
-            reminder_type=reminder_type,
-            meta_message_id=reminder.meta_message_id,
-        )
+        message_context = db.begin_nested() if hasattr(db, "begin_nested") else nullcontext()
+        with message_context:
+            message = await _record_sent_conversation_message(
+                db,
+                session=session_resolution.session,
+                reminder=reminder,
+                snapshot=snapshot,
+                schedule=schedule,
+                reminder_type=reminder_type,
+                meta_message_id=reminder.meta_message_id,
+            )
         result["conversation_message_created"] = bool(message)
-    except Exception:
+    except Exception as exc:
+        _mark_result(
+            reminder,
+            status=STATUS_SENT,
+            error_code=REASON_MESSAGE_INSERT_FAILED,
+            error_message=exc.__class__.__name__,
+        )
         logger.exception(
             "payment_reminder_conversation_message_failed",
             extra={
                 "reminder_id": getattr(reminder, "id", None),
                 "session_id": session_resolution.session_id,
                 "cuenta_masked": _mask(snapshot.cuenta),
+                "error_type": exc.__class__.__name__,
             },
         )
+        logger.exception(
+            "payment_reminder.message.failed",
+            extra={
+                "reminder_id": getattr(reminder, "id", None),
+                "session_id": session_resolution.session_id,
+                "account": _mask(snapshot.cuenta),
+                "error_type": exc.__class__.__name__,
+            },
+        )
+        result["conversation_message_error"] = REASON_MESSAGE_INSERT_FAILED
 
     chat_session = session_resolution.session
     if chat_session and chat_session.status != "COBRANZA":
@@ -2179,19 +2548,37 @@ async def process_due_payment_reminder(
         # db.commit() is usually handled by the caller transaction
 
     next_template, next_type = _template_for_classification(CLASS_NOT_DUE)
-    upsert_scheduled_reminder(
+    next_schedule = PaymentSchedule(
+        due_date=schedule.next_due_date,
+        next_due_date=schedule.next_due_date + timedelta(days=7),
+        weekday=schedule.weekday,
+        source=schedule.source,
+    )
+    next_reminder, next_status = upsert_scheduled_reminder(
         db,
         snapshot=snapshot,
-        schedule=PaymentSchedule(
-            due_date=schedule.next_due_date,
-            next_due_date=schedule.next_due_date + timedelta(days=7),
-            weekday=schedule.weekday,
-            source=schedule.source,
-        ),
+        schedule=next_schedule,
         reminder_type=next_type or REMINDER_PAYMENT_PENDING,
         template_name=next_template,
         session_id=session_resolution.session_id,
     )
+    if next_reminder is not None and next_status in {STATUS_SCHEDULED, CLASS_ALREADY_SCHEDULED}:
+        next_reminder.scheduled_for = _scheduled_datetime_for_next_week(
+            next_schedule,
+            last_sent_at=reminder.sent_at,
+        )
+        logger.info(
+            "payment_reminder.next_scheduled",
+            extra={
+                "current_reminder_id": getattr(reminder, "id", None),
+                "next_reminder_id": getattr(next_reminder, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "session_id": session_resolution.session_id,
+                "due_date": next_reminder.due_date.isoformat() if next_reminder.due_date else None,
+                "scheduled_for": next_reminder.scheduled_for.isoformat() if next_reminder.scheduled_for else None,
+                "status": next_status,
+            },
+        )
     result["reason"] = "sent"
     result["meta_message_id"] = reminder.meta_message_id
     return result
@@ -2228,7 +2615,12 @@ async def run_due_payment_reminders(
     )
     results = []
     for reminder in reminders:
+        claimed = False
         try:
+            if not dry_run_effective:
+                claimed = _claim_due_payment_reminder(db, reminder=reminder, now=now)
+                if not claimed:
+                    continue
             result = await process_due_payment_reminder(
                 db,
                 reminder,
@@ -2246,6 +2638,26 @@ async def run_due_payment_reminders(
                 db.commit()
         except Exception as exc:
             db.rollback()
+            if claimed:
+                try:
+                    failed = db.query(PaymentReminder).filter(PaymentReminder.id == reminder.id).first()
+                    if failed is not None:
+                        _mark_result(
+                            failed,
+                            status=STATUS_FAILED,
+                            error_code="processing_exception",
+                            error_message=exc.__class__.__name__,
+                        )
+                        db.commit()
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "payment_reminder_processing_failure_mark_failed",
+                        extra={
+                            "reminder_id": getattr(reminder, "id", None),
+                            "cuenta_masked": _mask(getattr(reminder, "cuenta", None)),
+                        },
+                    )
             logger.exception(
                 "payment_reminder_processing_exception",
                 extra={
@@ -2254,7 +2666,14 @@ async def run_due_payment_reminders(
                     "error_type": exc.__class__.__name__,
                 },
             )
-            raise
+            results.append(
+                {
+                    "payment_reminder_id": getattr(reminder, "id", None),
+                    "cuenta": getattr(reminder, "cuenta", None),
+                    "reason": "processing_exception",
+                    "error_type": exc.__class__.__name__,
+                }
+            )
     counts = _reason_counts(results)
     logger.info(
         "payment_reminders_run_due_finished",
@@ -2479,7 +2898,17 @@ async def sync_payment_reminder_candidates(
                         today=today,
                     )
                     template_name, reminder_type = _template_for_classification(classification)
-                    if classification in {CLASS_DUE_TODAY_UNPAID, CLASS_OVERDUE_UNPAID} and not template_name:
+                    if not payment_reminder_test_phone_allowed(snapshot.phone):
+                        logger.info(
+                            "payment_reminder.test_mode.blocked",
+                            extra={
+                                "account": _mask(snapshot.cuenta),
+                                "phone_masked": _mask(snapshot.phone),
+                                "session_id": session_resolution.session_id,
+                                "source": "sync_account",
+                                "test_phone_configured_count": len(_configured_test_phones()),
+                            },
+                        )
                         add_result(
                             build_single_result(
                                 snapshot=snapshot,
@@ -2487,15 +2916,104 @@ async def sync_payment_reminder_candidates(
                                 stats=stats,
                                 schedule=schedule,
                                 classification=classification,
-                                template_name=None,
+                                template_name=template_name,
                                 reminder_type=reminder_type,
-                                reason=REASON_TEMPLATE_MISSING,
+                                reason=REASON_TEST_PHONE_NOT_ALLOWED,
                             ),
                             snapshot=snapshot,
                             schedule=schedule,
                             source="sync_account",
                             audit=True,
                         )
+                    elif classification in {CLASS_DUE_TODAY_UNPAID, CLASS_OVERDUE_UNPAID}:
+                        blocked, last_sent, next_allowed = _weekly_frequency_blocked(
+                            db,
+                            cuenta=snapshot.cuenta,
+                            session_id=session_resolution.session_id,
+                        )
+                        if blocked and next_allowed:
+                            logger.info(
+                                "payment_reminder.weekly_frequency.blocked",
+                                extra={
+                                    "account": _mask(snapshot.cuenta),
+                                    "session_id": session_resolution.session_id,
+                                    "source": "sync_account",
+                                    "last_sent_at": getattr(last_sent, "sent_at", None).isoformat() if getattr(last_sent, "sent_at", None) else None,
+                                    "next_allowed_at": next_allowed.isoformat(),
+                                },
+                            )
+                            add_result(
+                                build_single_result(
+                                    snapshot=snapshot,
+                                    session_resolution=session_resolution,
+                                    stats=stats,
+                                    schedule=schedule,
+                                    classification=classification,
+                                    template_name=template_name,
+                                    reminder_type=reminder_type,
+                                    reason=REASON_WEEKLY_FREQUENCY_BLOCKED,
+                                ),
+                                snapshot=snapshot,
+                                schedule=schedule,
+                                source="sync_account",
+                                audit=True,
+                            )
+                        elif not template_name:
+                            add_result(
+                                build_single_result(
+                                    snapshot=snapshot,
+                                    session_resolution=session_resolution,
+                                    stats=stats,
+                                    schedule=schedule,
+                                    classification=classification,
+                                    template_name=None,
+                                    reminder_type=reminder_type,
+                                    reason=REASON_TEMPLATE_MISSING,
+                                ),
+                                snapshot=snapshot,
+                                schedule=schedule,
+                                source="sync_account",
+                                audit=True,
+                            )
+                        else:
+                            if not reminder_type:
+                                reminder_type = REMINDER_PAYMENT_PENDING
+                            logger.info(
+                                "payment_reminder.create.insert.start",
+                                extra={
+                                    "account": _mask(snapshot.cuenta),
+                                    "session_id": session_resolution.session_id,
+                                    "status": STATUS_SCHEDULED,
+                                    "scheduled_for": _scheduled_datetime(schedule.due_date).isoformat(),
+                                    "reminder_type": reminder_type,
+                                },
+                            )
+                            reminder, status = upsert_scheduled_reminder(
+                                db,
+                                snapshot=snapshot,
+                                schedule=schedule,
+                                reminder_type=reminder_type,
+                                template_name=template_name,
+                                session_id=session_resolution.session_id,
+                                dry_run=dry_run,
+                            )
+                            if reminder is not None and stats.last_sent_at:
+                                next_allowed = _next_allowed_send_at(stats.last_sent_at)
+                                if next_allowed and reminder.scheduled_for and reminder.scheduled_for < next_allowed:
+                                    reminder.scheduled_for = next_allowed
+                            result = build_single_result(
+                                snapshot=snapshot,
+                                session_resolution=session_resolution,
+                                stats=stats,
+                                schedule=schedule,
+                                classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT} else classification,
+                                template_name=template_name,
+                                reminder_type=reminder_type,
+                                reason=status,
+                            )
+                            if reminder is not None:
+                                result["payment_reminder_id"] = getattr(reminder, "id", None)
+                            add_result(result, snapshot=snapshot, schedule=schedule, source="sync_account")
                     else:
                         if not reminder_type:
                             reminder_type = REMINDER_PAYMENT_PENDING
@@ -2518,6 +3036,10 @@ async def sync_payment_reminder_candidates(
                             session_id=session_resolution.session_id,
                             dry_run=dry_run,
                         )
+                        if reminder is not None and stats.last_sent_at:
+                            next_allowed = _next_allowed_send_at(stats.last_sent_at)
+                            if next_allowed and reminder.scheduled_for and reminder.scheduled_for < next_allowed:
+                                reminder.scheduled_for = next_allowed
                         result = build_single_result(
                             snapshot=snapshot,
                             session_resolution=session_resolution,
@@ -2741,24 +3263,86 @@ async def sync_payment_reminder_candidates(
             today=today,
         )
         template_name, reminder_type = _template_for_classification(classification)
-        if classification in {CLASS_DUE_TODAY_UNPAID, CLASS_OVERDUE_UNPAID} and not template_name:
+        if not payment_reminder_test_phone_allowed(snapshot.phone):
+            logger.info(
+                "payment_reminder.test_mode.blocked",
+                extra={
+                    "account": _mask(snapshot.cuenta),
+                    "phone_masked": _mask(snapshot.phone),
+                    "session_id": session_resolution.session_id,
+                    "source": "sync",
+                    "test_phone_configured_count": len(_configured_test_phones()),
+                },
+            )
             add_result(
                 _build_process_result(
                     snapshot=snapshot,
                     schedule=schedule,
                     classification=classification,
-                    template_name=None,
+                    template_name=template_name,
                     reminder_type=reminder_type,
                     dry_run=dry_run,
                     session_resolution=session_resolution,
                     reminder_stats=stats,
-                    reason=REASON_TEMPLATE_MISSING,
+                    reason=REASON_TEST_PHONE_NOT_ALLOWED,
                 ),
                 snapshot=snapshot,
                 schedule=schedule,
                 audit=True,
             )
             continue
+        if classification in {CLASS_DUE_TODAY_UNPAID, CLASS_OVERDUE_UNPAID}:
+            blocked, last_sent, next_allowed = _weekly_frequency_blocked(
+                db,
+                cuenta=snapshot.cuenta,
+                session_id=session_resolution.session_id,
+            )
+            if blocked and next_allowed:
+                logger.info(
+                    "payment_reminder.weekly_frequency.blocked",
+                    extra={
+                        "account": _mask(snapshot.cuenta),
+                        "session_id": session_resolution.session_id,
+                        "source": "sync",
+                        "last_sent_at": getattr(last_sent, "sent_at", None).isoformat() if getattr(last_sent, "sent_at", None) else None,
+                        "next_allowed_at": next_allowed.isoformat(),
+                    },
+                )
+                add_result(
+                    _build_process_result(
+                        snapshot=snapshot,
+                        schedule=schedule,
+                        classification=classification,
+                        template_name=template_name,
+                        reminder_type=reminder_type,
+                        dry_run=dry_run,
+                        session_resolution=session_resolution,
+                        reminder_stats=stats,
+                        reason=REASON_WEEKLY_FREQUENCY_BLOCKED,
+                    ),
+                    snapshot=snapshot,
+                    schedule=schedule,
+                    audit=True,
+                )
+                continue
+            if not template_name:
+                add_result(
+                    _build_process_result(
+                        snapshot=snapshot,
+                        schedule=schedule,
+                        classification=classification,
+                        template_name=None,
+                        reminder_type=reminder_type,
+                        dry_run=dry_run,
+                        session_resolution=session_resolution,
+                        reminder_stats=stats,
+                        reason=REASON_TEMPLATE_MISSING,
+                    ),
+                    snapshot=snapshot,
+                    schedule=schedule,
+                    audit=True,
+                )
+                continue
         if not reminder_type:
             reminder_type = REMINDER_PAYMENT_PENDING
         logger.info(
@@ -2780,6 +3364,10 @@ async def sync_payment_reminder_candidates(
             session_id=session_resolution.session_id,
             dry_run=dry_run,
         )
+        if reminder is not None and stats.last_sent_at:
+            next_allowed = _next_allowed_send_at(stats.last_sent_at)
+            if next_allowed and reminder.scheduled_for and reminder.scheduled_for < next_allowed:
+                reminder.scheduled_for = next_allowed
         result = _build_process_result(
             snapshot=snapshot,
             schedule=schedule,
