@@ -41,9 +41,11 @@ Ejemplos:
 - Cliente A: fecha base martes -> recordatorios martes cada 7 dias.
 - Cliente B: fecha base viernes -> recordatorios viernes cada 7 dias.
 
-Ademas del ciclo de vencimiento, existe una guarda fuerte de frecuencia: una misma cuenta/sesion no debe recibir otro recordatorio hasta que hayan pasado 7 dias completos desde `sent_at` del ultimo envio. `PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES` solo define cada cuanto se revisa; no define cada cuanto se envia.
+Ademas del ciclo de vencimiento, existe una guarda fuerte de frecuencia: una misma cuenta/sesion no debe recibir otro recordatorio hasta que hayan pasado 7 dias completos desde `sent_at` del ultimo envio. Como defensa adicional, tambien se revisa `messages` por mensajes salientes `type='payment_reminder'`; asi, si se reconstruye `payment_reminders` desde cero pero el mensaje ya quedo visible en conversaciones, el sistema sigue bloqueando reenvios por 7 dias. `PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES` solo define cada cuanto se revisa; no define cada cuanto se envia.
 
-Despues de un envio aceptado por Meta, el registro queda como `sent` con `sent_at`, y se programa el siguiente recordatorio para la siguiente semana. Si el envio ocurrio tarde, `scheduled_for` del siguiente recordatorio se ajusta para no quedar antes de `sent_at + 7 dias`.
+Despues de un envio aceptado por Meta, el registro queda como `sent` con `sent_at`, y el siguiente recordatorio se calcula desde esa fecha real de envio: `due_date = DATE(sent_at + 7 dias)` y `scheduled_for = sent_at + 7 dias`. No se vuelve a usar el vencimiento viejo de la venta para el siguiente envio automatico.
+
+Los registros terminales de la misma combinacion `cuenta + due_date + reminder_type`, como `failed`, `skipped`, `cancelled` o `cancelled_settled`, no se reactivan automaticamente en cada `sync`. Para reintentar uno de esos casos debe existir una accion operativa explicita, como corregir configuracion y limpiar/reprogramar el registro.
 
 ## Formato operativo de cuenta
 

@@ -560,7 +560,9 @@ class FakeDb:
         self.added = []
         self.committed = False
 
-    def query(self, *_args, **_kwargs):
+    def query(self, model=None, *_args, **_kwargs):
+        if any(hasattr(row, "__model__") for row in self.rows):
+            return FakeQuery([row for row in self.rows if getattr(row, "__model__", model) is model])
         return FakeQuery(self.rows)
 
     def add(self, obj):
@@ -887,6 +889,101 @@ def test_weekly_frequency_allows_after_seven_full_days():
 
     assert blocked is False
     assert next_allowed == datetime(2026, 6, 4, 10, 30, 0)
+
+
+def test_weekly_frequency_uses_visible_payment_reminder_message_history():
+    message_created_at = datetime(2026, 5, 28, 10, 30, 0)
+    message = SimpleNamespace(
+        __model__=payment_service.Message,
+        id=500,
+        session_id=42,
+        direction="out",
+        type="payment_reminder",
+        created_at=message_created_at,
+    )
+
+    blocked, last_sent, next_allowed = payment_service._weekly_frequency_blocked(
+        FakeDb([message]),
+        cuenta="1260522",
+        session_id=42,
+        now=message_created_at + timedelta(minutes=1),
+    )
+
+    assert blocked is True
+    assert last_sent is message
+    assert next_allowed == datetime(2026, 6, 4, 10, 30, 0)
+
+
+def test_next_reminder_after_send_uses_sent_at_plus_seven_days():
+    previous_schedule = PaymentSchedule(
+        due_date=date(2026, 5, 27),
+        next_due_date=date(2026, 6, 3),
+        weekday=2,
+        source="bridge_fecha_venta_plus_7",
+    )
+    sent_at = datetime(2026, 5, 28, 20, 40, 31)
+
+    next_schedule, scheduled_for = payment_service._next_reminder_schedule_after_send(
+        sent_at=sent_at,
+        previous_schedule=previous_schedule,
+    )
+
+    assert next_schedule.due_date == date(2026, 6, 4)
+    assert next_schedule.next_due_date == date(2026, 6, 11)
+    assert next_schedule.source == "last_reminder_sent_at_plus_7"
+    assert scheduled_for == datetime(2026, 6, 4, 20, 40, 31)
+
+
+def test_upsert_does_not_reactivate_failed_reminder_every_sync(monkeypatch):
+    failed = SimpleNamespace(
+        id=123,
+        status=payment_service.STATUS_FAILED,
+        phone="5214420001679",
+        folio=None,
+        cuenta="CTA-1",
+        due_date=date(2026, 6, 9),
+        next_due_date=None,
+        scheduled_for=datetime(2026, 6, 9, 10, 0, 0),
+        template_name="payment_pending",
+        receipt_status=None,
+        receipt_id=None,
+        saldo_snapshot=None,
+        monto_minimo_snapshot=None,
+        bridge_found=False,
+        bridge_snapshot_hash=None,
+        updated_at=None,
+    )
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: failed)
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="CTA-1",
+        phone="5214420001679",
+        balance=Decimal("100.00"),
+        minimum_payment=Decimal("50.00"),
+        payment_status=PAYMENT_STATUS_UNPAID,
+    )
+    schedule = PaymentSchedule(
+        due_date=date(2026, 6, 9),
+        next_due_date=date(2026, 6, 16),
+        weekday=1,
+        source="bridge_fecha_venta_plus_7",
+    )
+
+    reminder, status = upsert_scheduled_reminder(
+        SimpleNamespace(add=lambda reminder: pytest.fail("should not create duplicate")),
+        snapshot=snapshot,
+        schedule=schedule,
+        reminder_type=REMINDER_PAYMENT_PENDING,
+        template_name="payment_pending",
+        session_id=42,
+        dry_run=False,
+    )
+
+    assert reminder is failed
+    assert status == payment_service.CLASS_ALREADY_TERMINAL
+    assert failed.status == payment_service.STATUS_FAILED
+    assert failed.scheduled_for == datetime(2026, 6, 9, 10, 0, 0)
 
 
 def test_reminder_resolves_session_by_folio_when_phone_has_multiple_sessions():

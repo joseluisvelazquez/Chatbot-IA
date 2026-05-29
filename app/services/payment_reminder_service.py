@@ -52,6 +52,7 @@ CLASS_INSUFFICIENT_BRIDGE_DATA = "insufficient_bridge_data"
 CLASS_BRIDGE_ERROR = "bridge_error"
 CLASS_ALREADY_SCHEDULED = "already_scheduled"
 CLASS_ALREADY_SENT = "already_sent"
+CLASS_ALREADY_TERMINAL = "already_terminal"
 CLASS_MISSING_CHAT_SESSION = "missing_chat_session"
 CLASS_AMBIGUOUS_CHAT_SESSION = "ambiguous_chat_session"
 CLASS_CHAT_SESSION_ACCOUNT_MISMATCH = "chat_session_account_mismatch"
@@ -74,6 +75,7 @@ OMISSION_REASONS = {
     CLASS_NOT_DUE,
     REASON_PAID_OR_SETTLED,
     CLASS_ALREADY_SENT,
+    CLASS_ALREADY_TERMINAL,
     REASON_TEMPLATE_MISSING,
     REASON_META_ERROR,
     REASON_TEST_PHONE_NOT_ALLOWED,
@@ -1383,6 +1385,20 @@ def upsert_scheduled_reminder(
             },
         )
         return existing, CLASS_ALREADY_SENT
+    if existing and existing.status in {STATUS_FAILED, STATUS_SKIPPED, STATUS_CANCELLED, STATUS_CANCELLED_SETTLED}:
+        logger.info(
+            "payment_reminder.duplicate.prevented",
+            extra={
+                "payment_reminder_id": getattr(existing, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "session_id": session_id,
+                "due_date": schedule.due_date.isoformat(),
+                "reminder_type": reminder_type,
+                "existing_status": existing.status,
+                "reason": CLASS_ALREADY_TERMINAL,
+            },
+        )
+        return existing, CLASS_ALREADY_TERMINAL
     if existing and existing.status in {STATUS_SCHEDULED, STATUS_PROCESSING}:
         logger.info(
             "payment_reminder.duplicate.prevented",
@@ -1713,6 +1729,27 @@ def _last_sent_payment_reminder(
     return query.order_by(PaymentReminder.sent_at.desc(), PaymentReminder.id.desc()).first()
 
 
+def _last_sent_payment_message(
+    db: Session,
+    *,
+    session_id: int | None = None,
+) -> Message | None:
+    if not session_id:
+        return None
+    return (
+        db.query(Message)
+        .filter(Message.session_id == session_id)
+        .filter(Message.direction == "out")
+        .filter(Message.type == "payment_reminder")
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .first()
+    )
+
+
+def _sent_reference_at(record: Any) -> datetime | None:
+    return getattr(record, "sent_at", None) or getattr(record, "created_at", None)
+
+
 def _next_allowed_send_at(last_sent_at: datetime | None) -> datetime | None:
     if not last_sent_at:
         return None
@@ -1726,14 +1763,21 @@ def _weekly_frequency_blocked(
     session_id: int | None,
     now: datetime | None = None,
     exclude_id: int | None = None,
-) -> tuple[bool, PaymentReminder | None, datetime | None]:
-    last_sent = _last_sent_payment_reminder(
+) -> tuple[bool, Any | None, datetime | None]:
+    last_reminder = _last_sent_payment_reminder(
         db,
         cuenta=cuenta,
         session_id=session_id,
         exclude_id=exclude_id,
     )
-    next_allowed = _next_allowed_send_at(getattr(last_sent, "sent_at", None))
+    last_message = _last_sent_payment_message(db, session_id=session_id)
+    candidates = [
+        candidate
+        for candidate in (last_reminder, last_message)
+        if _sent_reference_at(candidate)
+    ]
+    last_sent = max(candidates, key=lambda candidate: _sent_reference_at(candidate), default=None)
+    next_allowed = _next_allowed_send_at(_sent_reference_at(last_sent))
     now = now or mexico_now_naive()
     return bool(next_allowed and now < next_allowed), last_sent, next_allowed
 
@@ -1744,6 +1788,26 @@ def _scheduled_datetime_for_next_week(schedule: PaymentSchedule, *, last_sent_at
     if next_allowed and scheduled < next_allowed:
         return next_allowed
     return scheduled
+
+
+def _next_reminder_schedule_after_send(
+    *,
+    sent_at: datetime,
+    previous_schedule: PaymentSchedule,
+) -> tuple[PaymentSchedule, datetime]:
+    next_scheduled_for = sent_at + timedelta(days=PAYMENT_REMINDER_MIN_INTERVAL_DAYS)
+    next_due = next_scheduled_for.date()
+    return (
+        PaymentSchedule(
+            due_date=next_due,
+            next_due_date=next_due + timedelta(days=PAYMENT_REMINDER_MIN_INTERVAL_DAYS),
+            weekday=next_due.weekday(),
+            source="last_reminder_sent_at_plus_7",
+            base_date=sent_at.date(),
+            base_date_source="payment_reminder_sent_at",
+        ),
+        next_scheduled_for,
+    )
 
 
 def _reschedule_after_weekly_block(
@@ -1793,10 +1857,19 @@ def _reminder_stats(
             key=lambda row: row.scheduled_for,
             default=None,
         )
+        last_message = _last_sent_payment_message(db, session_id=session_id)
+        last_message_at = _sent_reference_at(last_message)
+        last_reminder_at = _sent_reference_at(last_sent_row)
+        if last_message and last_message_at and (not last_reminder_at or last_message_at > last_reminder_at):
+            last_sent_at = _sent_reference_at(last_message)
+            last_sent_id = None
+        else:
+            last_sent_at = last_reminder_at
+            last_sent_id = getattr(last_sent_row, "id", None)
         return ReminderStats(
             sent_count=len(sent_rows),
-            last_sent_at=getattr(last_sent_row, "sent_at", None),
-            last_sent_reminder_id=getattr(last_sent_row, "id", None),
+            last_sent_at=last_sent_at,
+            last_sent_reminder_id=last_sent_id,
             next_scheduled_at=getattr(next_scheduled_row, "scheduled_for", None),
             existing_scheduled_id=getattr(next_scheduled_row, "id", None),
         )
@@ -1932,7 +2005,7 @@ def _build_process_result(
         "conversation_message_preview": preview if should_send else None,
         "next_payment_reminder_at": stats.next_scheduled_at.isoformat() if stats.next_scheduled_at else None,
         "existing_scheduled_reminder_id": stats.existing_scheduled_id,
-        "duplicate_prevented": classification in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT},
+        "duplicate_prevented": classification in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL},
         "sent_count_prev": stats.sent_count,
         "last_payment_reminder_at": stats.last_sent_at.isoformat() if stats.last_sent_at else None,
         "last_payment_reminder_id": stats.last_sent_reminder_id,
@@ -2379,7 +2452,7 @@ async def process_due_payment_reminder(
                 "reminder_id": getattr(reminder, "id", None),
                 "account": _mask(snapshot.cuenta),
                 "session_id": session_resolution.session_id,
-                "last_sent_at": getattr(last_sent, "sent_at", None).isoformat() if getattr(last_sent, "sent_at", None) else None,
+                "last_sent_at": _sent_reference_at(last_sent).isoformat() if _sent_reference_at(last_sent) else None,
                 "next_allowed_at": next_allowed.isoformat(),
             },
         )
@@ -2548,11 +2621,9 @@ async def process_due_payment_reminder(
         # db.commit() is usually handled by the caller transaction
 
     next_template, next_type = _template_for_classification(CLASS_NOT_DUE)
-    next_schedule = PaymentSchedule(
-        due_date=schedule.next_due_date,
-        next_due_date=schedule.next_due_date + timedelta(days=7),
-        weekday=schedule.weekday,
-        source=schedule.source,
+    next_schedule, next_scheduled_for = _next_reminder_schedule_after_send(
+        sent_at=reminder.sent_at or mexico_now_naive(),
+        previous_schedule=schedule,
     )
     next_reminder, next_status = upsert_scheduled_reminder(
         db,
@@ -2563,10 +2634,9 @@ async def process_due_payment_reminder(
         session_id=session_resolution.session_id,
     )
     if next_reminder is not None and next_status in {STATUS_SCHEDULED, CLASS_ALREADY_SCHEDULED}:
-        next_reminder.scheduled_for = _scheduled_datetime_for_next_week(
-            next_schedule,
-            last_sent_at=reminder.sent_at,
-        )
+        next_reminder.due_date = next_schedule.due_date
+        next_reminder.next_due_date = next_schedule.next_due_date
+        next_reminder.scheduled_for = next_scheduled_for
         logger.info(
             "payment_reminder.next_scheduled",
             extra={
@@ -2938,7 +3008,7 @@ async def sync_payment_reminder_candidates(
                                     "account": _mask(snapshot.cuenta),
                                     "session_id": session_resolution.session_id,
                                     "source": "sync_account",
-                                    "last_sent_at": getattr(last_sent, "sent_at", None).isoformat() if getattr(last_sent, "sent_at", None) else None,
+                                    "last_sent_at": _sent_reference_at(last_sent).isoformat() if _sent_reference_at(last_sent) else None,
                                     "next_allowed_at": next_allowed.isoformat(),
                                 },
                             )
@@ -3006,7 +3076,7 @@ async def sync_payment_reminder_candidates(
                                 session_resolution=session_resolution,
                                 stats=stats,
                                 schedule=schedule,
-                                classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT} else classification,
+                                classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else classification,
                                 template_name=template_name,
                                 reminder_type=reminder_type,
                                 reason=status,
@@ -3045,7 +3115,7 @@ async def sync_payment_reminder_candidates(
                             session_resolution=session_resolution,
                             stats=stats,
                             schedule=schedule,
-                            classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT} else classification,
+                            classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else classification,
                             template_name=template_name,
                             reminder_type=reminder_type,
                             reason=status,
@@ -3304,7 +3374,7 @@ async def sync_payment_reminder_candidates(
                         "account": _mask(snapshot.cuenta),
                         "session_id": session_resolution.session_id,
                         "source": "sync",
-                        "last_sent_at": getattr(last_sent, "sent_at", None).isoformat() if getattr(last_sent, "sent_at", None) else None,
+                        "last_sent_at": _sent_reference_at(last_sent).isoformat() if _sent_reference_at(last_sent) else None,
                         "next_allowed_at": next_allowed.isoformat(),
                     },
                 )
@@ -3371,7 +3441,7 @@ async def sync_payment_reminder_candidates(
         result = _build_process_result(
             snapshot=snapshot,
             schedule=schedule,
-            classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT} else classification,
+            classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else classification,
             template_name=template_name,
             reminder_type=reminder_type,
             dry_run=dry_run,
