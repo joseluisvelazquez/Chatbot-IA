@@ -65,6 +65,7 @@ REASON_AUDIT_FIELDS_MISSING = "audit_fields_missing"
 REASON_TEST_PHONE_NOT_ALLOWED = "test_phone_not_allowed"
 REASON_WEEKLY_FREQUENCY_BLOCKED = "weekly_frequency_blocked"
 REASON_MESSAGE_INSERT_FAILED = "message_insert_failed"
+REASON_INVALID_FOLIO = "invalid_folio"
 
 OMISSION_REASONS = {
     CLASS_MISSING_CHAT_SESSION,
@@ -81,6 +82,7 @@ OMISSION_REASONS = {
     REASON_TEST_PHONE_NOT_ALLOWED,
     REASON_WEEKLY_FREQUENCY_BLOCKED,
     REASON_MESSAGE_INSERT_FAILED,
+    REASON_INVALID_FOLIO,
 }
 
 REMINDER_PAYMENT_PENDING = "payment_pending"
@@ -145,6 +147,14 @@ class ChatSessionResolution:
     @property
     def session_id(self) -> int | None:
         return getattr(self.session, "id", None) if self.session else None
+
+
+@dataclass(slots=True)
+class SessionPaymentCandidate:
+    folio: str | None
+    cuenta: str | None
+    source: str
+    authoritative: bool = False
 
 
 @dataclass(slots=True)
@@ -317,13 +327,40 @@ def _phone_lookup_values(value: Any) -> list[str]:
     return values
 
 
+ACCOUNT_MATCH_KEYS = {
+    "no_cuenta",
+    "cuenta",
+    "numero_cuenta",
+    "account",
+    "account_number",
+    "account_reference",
+    "cuenta_formateada",
+    "numero_cuenta_referencia",
+}
+
+
 def _clean_match_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
 
 
-def _normalized_folio(value: Any) -> str | None:
+def _is_placeholder_folio(value: Any) -> bool:
     text = _clean_match_text(value)
+    if not text:
+        return False
+    compact = "".join(ch for ch in text if ch.isalnum())
+    return bool(compact) and set(compact) == {"0"}
+
+
+def _valid_folio_text(value: Any) -> str | None:
+    text = _clean_match_text(value)
+    if not text or _is_placeholder_folio(text):
+        return None
+    return text
+
+
+def _normalized_folio(value: Any) -> str | None:
+    text = _valid_folio_text(value)
     return text.upper() if text else None
 
 
@@ -368,7 +405,285 @@ def _collect_values_by_keys(data: Any, keys: set[str]) -> list[str]:
     return [value for value in values if value]
 
 
+def _direct_values_by_keys(data: Any, keys: set[str]) -> list[str]:
+    if not isinstance(data, Mapping):
+        return []
+    values: list[str] = []
+    for key, value in data.items():
+        key_text = str(key).lower()
+        if key_text not in keys or value in (None, "", [], {}):
+            continue
+        if isinstance(value, Mapping):
+            nested = (
+                value.get("value")
+                or value.get("id")
+                or value.get("cuenta")
+                or value.get("no_cuenta")
+                or value.get("account")
+                or value.get("account_number")
+            )
+            if nested not in (None, "", [], {}):
+                values.append(str(nested).strip())
+        elif not isinstance(value, list):
+            values.append(str(value).strip())
+    return [value for value in values if value]
+
+
+def _unique_candidates(candidates: list[SessionPaymentCandidate]) -> list[SessionPaymentCandidate]:
+    seen: set[tuple[str | None, str | None]] = set()
+    unique: list[SessionPaymentCandidate] = []
+    for candidate in candidates:
+        folio = _normalized_folio(candidate.folio)
+        cuenta = _normalized_account(candidate.cuenta)
+        key = (folio, cuenta)
+        if key in seen or (folio is None and cuenta is None):
+            continue
+        seen.add(key)
+        unique.append(
+            SessionPaymentCandidate(
+                folio=_valid_folio_text(candidate.folio),
+                cuenta=_clean_text(candidate.cuenta),
+                source=candidate.source,
+                authoritative=candidate.authoritative,
+            )
+        )
+    return unique
+
+
+def _add_session_candidate(
+    candidates: list[SessionPaymentCandidate],
+    *,
+    folio: Any = None,
+    cuenta: Any = None,
+    source: str,
+    authoritative: bool = False,
+) -> None:
+    clean_folio = _valid_folio_text(folio)
+    clean_account = _clean_text(cuenta)
+    if not clean_folio and not clean_account:
+        return
+    candidates.append(
+        SessionPaymentCandidate(
+            folio=clean_folio,
+            cuenta=clean_account,
+            source=source,
+            authoritative=authoritative,
+        )
+    )
+
+
+def _add_relation_candidates_from_payload(
+    candidates: list[SessionPaymentCandidate],
+    payload: Any,
+    *,
+    source: str,
+    fallback_folio: Any = None,
+    authoritative: bool = False,
+) -> None:
+    if not isinstance(payload, Mapping):
+        return
+
+    folios = _direct_values_by_keys(payload, {"folio"})
+    fallback = _valid_folio_text(fallback_folio)
+    if fallback:
+        folios = [fallback, *folios]
+    folios = [folio for folio in (_valid_folio_text(value) for value in folios) if folio]
+    accounts = _direct_values_by_keys(payload, ACCOUNT_MATCH_KEYS)
+    if folios and accounts:
+        for folio in folios:
+            for account in accounts:
+                _add_session_candidate(
+                    candidates,
+                    folio=folio,
+                    cuenta=account,
+                    source=source,
+                    authoritative=authoritative,
+                )
+
+    for key in ("snapshot", "data", "normalized", "lookup", "sale", "account"):
+        child = payload.get(key)
+        if not isinstance(child, Mapping):
+            continue
+        child_folios = _direct_values_by_keys(child, {"folio"}) or folios
+        child_accounts = _direct_values_by_keys(child, ACCOUNT_MATCH_KEYS)
+        for folio in child_folios:
+            for account in child_accounts:
+                _add_session_candidate(
+                    candidates,
+                    folio=folio,
+                    cuenta=account,
+                    source=f"{source}.{key}",
+                    authoritative=authoritative,
+                )
+
+
+def _walk_session_relation_payloads(
+    candidates: list[SessionPaymentCandidate],
+    payload: Any,
+    *,
+    source: str,
+) -> None:
+    if isinstance(payload, Mapping):
+        _add_relation_candidates_from_payload(candidates, payload, source=source)
+        for key, value in payload.items():
+            if isinstance(value, (Mapping, list)):
+                _walk_session_relation_payloads(candidates, value, source=f"{source}.{key}")
+    elif isinstance(payload, list):
+        for index, item in enumerate(payload):
+            _walk_session_relation_payloads(candidates, item, source=f"{source}[{index}]")
+
+
+def _session_payment_candidates(session: ChatSessions) -> list[SessionPaymentCandidate]:
+    extra = getattr(session, "extra_json", None)
+    candidates: list[SessionPaymentCandidate] = []
+
+    if isinstance(extra, Mapping):
+        siga_bridge = extra.get("siga_bridge")
+        if isinstance(siga_bridge, Mapping):
+            for key in ("verification_cache", "verification_lookup"):
+                row = siga_bridge.get(key)
+                if isinstance(row, Mapping):
+                    _add_relation_candidates_from_payload(
+                        candidates,
+                        row,
+                        source=f"siga_bridge.{key}",
+                        fallback_folio=row.get("folio"),
+                        authoritative=True,
+                    )
+            for key in ("normalized", "snapshot", "lookup", "account", "customer_lookup"):
+                value = siga_bridge.get(key)
+                if isinstance(value, (Mapping, list)):
+                    _walk_session_relation_payloads(candidates, value, source=f"siga_bridge.{key}")
+
+        for key in ("verifications", "verification_history", "folios", "accounts"):
+            value = extra.get(key)
+            if isinstance(value, (Mapping, list)):
+                _walk_session_relation_payloads(candidates, value, source=key)
+
+        _add_relation_candidates_from_payload(candidates, extra, source="extra_json")
+
+    paired = [
+        candidate
+        for candidate in _unique_candidates(candidates)
+        if candidate.folio and candidate.cuenta
+    ]
+    if paired:
+        return paired
+
+    raw_session_folio = _clean_match_text(getattr(session, "folio", None))
+    session_folio = _valid_folio_text(raw_session_folio)
+    account_values = _collect_values_by_keys(extra, ACCOUNT_MATCH_KEYS)
+    normalized_accounts: dict[str, str] = {}
+    for account in account_values:
+        normalized = _normalized_account(account)
+        if normalized and normalized not in normalized_accounts:
+            normalized_accounts[normalized] = account
+
+    if raw_session_folio and _is_placeholder_folio(raw_session_folio):
+        return [
+            SessionPaymentCandidate(
+                folio=raw_session_folio,
+                cuenta=next(iter(normalized_accounts.values()), None),
+                source="invalid_session_folio",
+            )
+        ]
+
+    fallback_candidates: list[SessionPaymentCandidate] = []
+    if session_folio and len(normalized_accounts) == 1:
+        _add_session_candidate(
+            fallback_candidates,
+            folio=session_folio,
+            cuenta=next(iter(normalized_accounts.values())),
+            source="session_folio_single_account",
+        )
+    elif session_folio:
+        _add_session_candidate(
+            fallback_candidates,
+            folio=session_folio,
+            source="session_folio",
+        )
+    elif len(normalized_accounts) == 1:
+        _add_session_candidate(
+            fallback_candidates,
+            cuenta=next(iter(normalized_accounts.values())),
+            source="single_account",
+        )
+    return _unique_candidates(fallback_candidates)
+
+
+def _session_has_multiple_relations(session: ChatSessions) -> bool:
+    candidates = _session_payment_candidates(session)
+    folios = {_normalized_folio(candidate.folio) for candidate in candidates if candidate.folio}
+    accounts = {_normalized_account(candidate.cuenta) for candidate in candidates if candidate.cuenta}
+    return len(folios) > 1 or len(accounts) > 1 or len(candidates) > 1
+
+
+def _session_account_has_ambiguous_folios(session: ChatSessions, cuenta: str | None) -> bool:
+    expected = _normalized_account(cuenta)
+    if not expected:
+        return False
+    folios = {
+        _normalized_folio(candidate.folio)
+        for candidate in _session_payment_candidates(session)
+        if candidate.folio and _account_values_match(candidate.cuenta, expected)
+    }
+    return len({folio for folio in folios if folio}) > 1
+
+
+def _session_relation_match(
+    session: ChatSessions,
+    *,
+    folio: str | None,
+    cuenta: str | None,
+) -> bool | None:
+    if folio is not None and _clean_match_text(folio) and not _valid_folio_text(folio):
+        return False
+
+    expected_folio = _normalized_folio(folio)
+    expected_account = _normalized_account(cuenta)
+    if not expected_folio and not expected_account:
+        return None
+
+    candidates = _session_payment_candidates(session)
+    if candidates:
+        folio_candidates = [
+            candidate
+            for candidate in candidates
+            if expected_folio and _normalized_folio(candidate.folio) == expected_folio
+        ]
+        if folio_candidates:
+            if not expected_account:
+                return True
+            account_bearing = [candidate for candidate in folio_candidates if candidate.cuenta]
+            if any(_account_values_match(candidate.cuenta, expected_account) for candidate in account_bearing):
+                return True
+            if account_bearing:
+                return False
+            return True
+
+        account_candidates = [
+            candidate
+            for candidate in candidates
+            if expected_account and _account_values_match(candidate.cuenta, expected_account)
+        ]
+        if account_candidates:
+            if not expected_folio:
+                return True
+            return False
+        return False
+
+    folio_match = _session_folio_match(session, expected_folio)
+    account_match = _session_account_match(session, expected_account)
+    if folio_match is False or account_match is False:
+        return False
+    if folio_match is True or account_match is True:
+        return True
+    return None
+
+
 def _session_folio_match(session: ChatSessions, folio: str | None) -> bool | None:
+    if folio is not None and _clean_match_text(folio) and not _valid_folio_text(folio):
+        return False
     expected = _normalized_folio(folio)
     if not expected:
         return None
@@ -390,47 +705,24 @@ def _session_account_match(session: ChatSessions, cuenta: str | None) -> bool | 
     expected = _normalized_account(cuenta)
     if not expected:
         return None
-    values = _collect_values_by_keys(
-        getattr(session, "extra_json", None),
-        {
-            "no_cuenta",
-            "cuenta",
-            "numero_cuenta",
-            "account",
-            "account_number",
-            "account_reference",
-            "cuenta_formateada",
-            "numero_cuenta_referencia",
-        },
-    )
+    values = _collect_values_by_keys(getattr(session, "extra_json", None), ACCOUNT_MATCH_KEYS)
     if not values:
         return None
     return any(_account_values_match(value, expected) for value in values)
 
 
 def _session_account_candidate(session: ChatSessions) -> str | None:
-    values = _collect_values_by_keys(
-        getattr(session, "extra_json", None),
-        {
-            "no_cuenta",
-            "cuenta",
-            "numero_cuenta",
-            "account",
-            "account_number",
-            "account_reference",
-            "cuenta_formateada",
-            "numero_cuenta_referencia",
-        },
-    )
-    return values[0] if values else None
+    for candidate in _session_payment_candidates(session):
+        if candidate.cuenta:
+            return candidate.cuenta
+    return None
 
 
 def _session_folio_candidate(session: ChatSessions) -> str | None:
-    direct = _clean_text(getattr(session, "folio", None))
-    if direct:
-        return direct
-    values = _collect_values_by_keys(getattr(session, "extra_json", None), {"folio"})
-    return values[0] if values else None
+    for candidate in _session_payment_candidates(session):
+        if candidate.folio:
+            return candidate.folio
+    return None
 
 
 def _json_path_has_value(path: str):
@@ -442,12 +734,23 @@ def _json_path_has_value(path: str):
 def _chat_session_payment_candidates(db: Session, *, limit: int) -> list[ChatSessions]:
     has_folio = ChatSessions.folio.isnot(None) & (ChatSessions.folio != "")
     has_account_in_extra = or_(
+        _json_path_has_value("$.folio"),
+        _json_path_has_value("$.verifications[0].folio"),
+        _json_path_has_value("$.verification_history[0].folio"),
         _json_path_has_value("$.no_cuenta"),
         _json_path_has_value("$.cuenta"),
         _json_path_has_value("$.numero_cuenta"),
         _json_path_has_value("$.account"),
         _json_path_has_value("$.account_reference"),
         _json_path_has_value("$.cuenta_formateada"),
+        _json_path_has_value("$.verifications[0].no_cuenta"),
+        _json_path_has_value("$.verifications[0].cuenta"),
+        _json_path_has_value("$.verification_history[0].no_cuenta"),
+        _json_path_has_value("$.verification_history[0].cuenta"),
+        _json_path_has_value("$.siga_bridge.verifications[0].folio"),
+        _json_path_has_value("$.siga_bridge.verifications[0].no_cuenta"),
+        _json_path_has_value("$.siga_bridge.verification_history[0].folio"),
+        _json_path_has_value("$.siga_bridge.verification_history[0].no_cuenta"),
         _json_path_has_value("$.siga_bridge.lookup.no_cuenta"),
         _json_path_has_value("$.siga_bridge.lookup.cuenta"),
         _json_path_has_value("$.siga_bridge.lookup.account"),
@@ -505,12 +808,25 @@ def resolve_chat_session_for_reminder(
         session_phone_key = _conversation_phone_key(session.phone)
         if phone_key and session_phone_key and phone_key != session_phone_key:
             return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
-        folio_match = _session_folio_match(session, expected_folio)
-        if folio_match is False:
+        relation_match = _session_relation_match(
+            session,
+            folio=expected_folio,
+            cuenta=expected_account,
+        )
+        if relation_match is False:
             return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
-        account_match = _session_account_match(session, expected_account)
-        if account_match is False:
-            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
+        if (
+            relation_match is None
+            and (expected_folio or expected_account)
+            and _session_has_multiple_relations(session)
+        ):
+            return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=1)
+        if (
+            not expected_folio
+            and expected_account
+            and _session_account_has_ambiguous_folios(session, expected_account)
+        ):
+            return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=1)
         return ChatSessionResolution(session, True, "existing_session_id", "session_id", 1)
 
     lookup_values = _phone_lookup_values(expected_phone)
@@ -537,34 +853,46 @@ def resolve_chat_session_for_reminder(
     if not sessions:
         return ChatSessionResolution(None, False, CLASS_MISSING_CHAT_SESSION)
 
-    folio_matches = [session for session in sessions if _session_folio_match(session, expected_folio) is True]
-    if len(folio_matches) == 1:
-        account_match = _session_account_match(folio_matches[0], expected_account)
-        if account_match is False:
-            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=len(sessions))
-        return ChatSessionResolution(folio_matches[0], True, "folio_match", "folio", len(sessions))
-    if len(folio_matches) > 1:
-        account_matches = [
-            session for session in folio_matches if _session_account_match(session, expected_account) is True
-        ]
-        if len(account_matches) == 1:
-            return ChatSessionResolution(account_matches[0], True, "folio_account_match", "folio_account", len(sessions))
+    relation_matches = [
+        session
+        for session in sessions
+        if _session_relation_match(session, folio=expected_folio, cuenta=expected_account) is True
+    ]
+    if len(relation_matches) == 1:
+        if (
+            not expected_folio
+            and expected_account
+            and _session_account_has_ambiguous_folios(relation_matches[0], expected_account)
+        ):
+            return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
+        matched_by = "folio_account"
+        reason = "folio_account_match"
+        has_account_evidence = _session_account_match(relation_matches[0], expected_account) is True
+        if expected_folio and (not expected_account or not has_account_evidence):
+            matched_by = "folio"
+            reason = "folio_match"
+        elif expected_account and not expected_folio:
+            matched_by = "account"
+            reason = "account_match"
+        return ChatSessionResolution(relation_matches[0], True, reason, matched_by, len(sessions))
+    if len(relation_matches) > 1:
         return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
 
     account_matches = [session for session in sessions if _session_account_match(session, expected_account) is True]
     if len(account_matches) == 1:
+        if _session_account_has_ambiguous_folios(account_matches[0], expected_account):
+            return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
         return ChatSessionResolution(account_matches[0], True, "account_match", "account", len(sessions))
     if len(account_matches) > 1:
         return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
 
     if len(sessions) == 1:
         session = sessions[0]
-        folio_match = _session_folio_match(session, expected_folio)
-        if folio_match is False:
+        relation_match = _session_relation_match(session, folio=expected_folio, cuenta=expected_account)
+        if relation_match is False:
             return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
-        account_match = _session_account_match(session, expected_account)
-        if account_match is False:
-            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
+        if relation_match is None and _session_has_multiple_relations(session):
+            return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=1)
         return ChatSessionResolution(session, True, "single_phone_match", "phone", 1)
 
     return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(sessions))
@@ -980,6 +1308,8 @@ def _preserve_payment_schedule_fields(
 
 def required_snapshot_missing_fields(snapshot: BridgeAccountSnapshot) -> list[str]:
     missing: list[str] = []
+    if not _valid_folio_text(snapshot.folio):
+        missing.append("folio")
     if not snapshot.cuenta:
         missing.append("cuenta")
     if not snapshot.account_reference_valid or not snapshot.account_reference_formatted:
@@ -1002,6 +1332,30 @@ def required_snapshot_missing_fields(snapshot: BridgeAccountSnapshot) -> list[st
     return missing
 
 
+def _missing_fields_reason(snapshot: BridgeAccountSnapshot) -> str:
+    if "folio" in (snapshot.missing_fields or []) or _is_placeholder_folio(snapshot.folio):
+        return REASON_INVALID_FOLIO
+    return REASON_MISSING_BRIDGE_FIELDS
+
+
+def _apply_resolved_phone(
+    snapshot: BridgeAccountSnapshot,
+    *,
+    session_resolution: ChatSessionResolution | None = None,
+    fallback_phone: Any = None,
+) -> None:
+    if is_valid_whatsapp_phone(snapshot.phone):
+        return
+
+    session_phone = getattr(session_resolution.session, "phone", None) if session_resolution else None
+    for candidate in (session_phone, fallback_phone):
+        normalized = normalize_phone_for_whatsapp(candidate)
+        if is_valid_whatsapp_phone(normalized):
+            snapshot.phone = normalized
+            snapshot.missing_fields = required_snapshot_missing_fields(snapshot)
+            return
+
+
 async def fetch_bridge_account_snapshot(
     *,
     cuenta: str | None,
@@ -1010,6 +1364,15 @@ async def fetch_bridge_account_snapshot(
     client: Any | None = None,
 ) -> BridgeAccountSnapshot:
     client = client or get_siga_bridge_client()
+    if folio is not None and _clean_match_text(folio) and not _valid_folio_text(folio):
+        return BridgeAccountSnapshot(
+            bridge_found=False,
+            company_id=company_id,
+            cuenta=cuenta,
+            folio=_clean_text(folio),
+            missing_fields=["folio"],
+            error_message_sanitized=REASON_INVALID_FOLIO,
+        )
     collection_record: Mapping[str, Any] | None = None
     account_payload: Any = None
     payments_payload: Any = None
@@ -1346,6 +1709,12 @@ def _existing_reminder(
     return query.first()
 
 
+def _folio_values_conflict(left: Any, right: Any) -> bool:
+    left_folio = _normalized_folio(left)
+    right_folio = _normalized_folio(right)
+    return bool(left_folio and right_folio and left_folio != right_folio)
+
+
 def _update_reminder_from_snapshot(
     reminder: PaymentReminder,
     *,
@@ -1391,6 +1760,18 @@ def upsert_scheduled_reminder(
         reminder_type=reminder_type,
         session_id=session_id,
     )
+    if existing and _folio_values_conflict(getattr(existing, "folio", None), snapshot.folio):
+        logger.warning(
+            "payment_reminder.folio_account_mismatch",
+            extra={
+                "payment_reminder_id": getattr(existing, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "existing_folio_masked": _mask(getattr(existing, "folio", None)),
+                "snapshot_folio_masked": _mask(snapshot.folio),
+                "session_id": session_id,
+            },
+        )
+        return existing, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH
     if existing and existing.status == STATUS_SENT:
         logger.info(
             "payment_reminder.duplicate.prevented",
@@ -1964,7 +2345,9 @@ def _build_process_result(
     base_should_send = bool(
         template_name
         and snapshot.payment_status == PAYMENT_STATUS_UNPAID
+        and bool(_valid_folio_text(snapshot.folio))
         and cuenta_formateada_valida
+        and reason not in OMISSION_REASONS
         and classification not in {CLASS_NOT_DUE, CLASS_SETTLED, CLASS_BRIDGE_ERROR, CLASS_INSUFFICIENT_BRIDGE_DATA}
         and (session_resolution is None or session_resolution.found)
     )
@@ -2124,6 +2507,7 @@ async def dry_run_payment_reminder(
         folio=snapshot.folio or folio,
         cuenta=snapshot.account_reference_formatted or snapshot.cuenta or cuenta,
     )
+    _apply_resolved_phone(snapshot, session_resolution=session_resolution)
     stats = _reminder_stats(
         db,
         cuenta=snapshot.cuenta or cuenta,
@@ -2163,7 +2547,7 @@ async def dry_run_payment_reminder(
             dry_run=True,
             session_resolution=session_resolution,
             reminder_stats=stats,
-            reason=REASON_MISSING_BRIDGE_FIELDS,
+            reason=_missing_fields_reason(snapshot),
         )
     if not session_resolution.found:
         return _build_process_result(
@@ -2240,6 +2624,11 @@ async def process_due_payment_reminder(
         cuenta=snapshot.account_reference_formatted or snapshot.cuenta or reminder.cuenta,
         session_id=getattr(reminder, "session_id", None),
     )
+    _apply_resolved_phone(
+        snapshot,
+        session_resolution=session_resolution,
+        fallback_phone=getattr(reminder, "phone", None),
+    )
     stats = _reminder_stats(
         db,
         cuenta=snapshot.cuenta or reminder.cuenta,
@@ -2298,11 +2687,12 @@ async def process_due_payment_reminder(
         return result
 
     if snapshot.missing_fields:
+        missing_reason = _missing_fields_reason(snapshot)
         if not dry_run:
             _mark_result(
                 reminder,
                 status=STATUS_SKIPPED,
-                error_code=CLASS_INSUFFICIENT_BRIDGE_DATA,
+                error_code=missing_reason,
                 error_message="missing_fields:" + ",".join(snapshot.missing_fields),
             )
             reminder.bridge_found = snapshot.bridge_found
@@ -2324,7 +2714,7 @@ async def process_due_payment_reminder(
             dry_run=dry_run,
             session_resolution=session_resolution,
             reminder_stats=stats,
-            reason=REASON_MISSING_BRIDGE_FIELDS,
+            reason=missing_reason,
         )
 
     if not session_resolution.found:
@@ -2860,6 +3250,287 @@ async def sync_payment_reminder_candidates(
             reason=reason,
         )
 
+    async def sync_session_candidate(
+        session: ChatSessions,
+        *,
+        session_cuenta: str | None,
+        session_folio: str | None,
+    ) -> None:
+        snapshot = await fetch_bridge_account_snapshot(
+            cuenta=session_cuenta,
+            folio=session_folio,
+            company_id=company_id,
+            client=client,
+        )
+        session_resolution = resolve_chat_session_for_reminder(
+            db,
+            snapshot=snapshot,
+            phone=snapshot.phone or getattr(session, "phone", None),
+            folio=snapshot.folio or session_folio,
+            cuenta=snapshot.account_reference_formatted or snapshot.cuenta or session_cuenta,
+            session_id=getattr(session, "id", None),
+        )
+        _apply_resolved_phone(
+            snapshot,
+            session_resolution=session_resolution,
+            fallback_phone=getattr(session, "phone", None),
+        )
+        stats = _reminder_stats(
+            db,
+            cuenta=snapshot.cuenta or session_cuenta,
+            session_id=session_resolution.session_id,
+        )
+
+        if snapshot.error_code:
+            add_result(
+                build_single_result(
+                    snapshot=snapshot,
+                    session_resolution=session_resolution,
+                    stats=stats,
+                    schedule=None,
+                    classification=CLASS_BRIDGE_ERROR,
+                    template_name=None,
+                    reminder_type=None,
+                    reason=snapshot.error_message_sanitized or snapshot.error_code,
+                ),
+                snapshot=snapshot,
+                audit=True,
+            )
+            return
+        if snapshot.settled:
+            if not dry_run and snapshot.cuenta:
+                cancelled_count = _cancel_future_settled(db, cuenta=snapshot.cuenta)
+                logger.info(
+                    "payment_reminder.cancelled_settled",
+                    extra={
+                        "account": _mask(snapshot.cuenta),
+                        "cancelled_count": cancelled_count,
+                        "reason": REASON_PAID_OR_SETTLED,
+                        "source": "sync",
+                    },
+                )
+            add_result(
+                build_single_result(
+                    snapshot=snapshot,
+                    session_resolution=session_resolution,
+                    stats=stats,
+                    schedule=None,
+                    classification=CLASS_SETTLED,
+                    template_name=None,
+                    reminder_type=None,
+                    reason=REASON_PAID_OR_SETTLED,
+                ),
+                snapshot=snapshot,
+                audit=True,
+            )
+            return
+        if snapshot.missing_fields:
+            missing_reason = _missing_fields_reason(snapshot)
+            add_result(
+                build_single_result(
+                    snapshot=snapshot,
+                    session_resolution=session_resolution,
+                    stats=stats,
+                    schedule=None,
+                    classification=CLASS_INSUFFICIENT_BRIDGE_DATA,
+                    template_name=None,
+                    reminder_type=None,
+                    reason=missing_reason,
+                ),
+                snapshot=snapshot,
+                audit=True,
+            )
+            return
+
+        if not session_resolution.found:
+            add_result(
+                build_single_result(
+                    snapshot=snapshot,
+                    session_resolution=session_resolution,
+                    stats=stats,
+                    schedule=None,
+                    classification=session_resolution.reason,
+                    template_name=None,
+                    reminder_type=None,
+                    reason=session_resolution.reason,
+                ),
+                snapshot=snapshot,
+                audit=True,
+            )
+            return
+
+        try:
+            schedule = calculate_snapshot_due_schedule(snapshot, today=today)
+        except PaymentScheduleError:
+            add_result(
+                build_single_result(
+                    snapshot=snapshot,
+                    session_resolution=session_resolution,
+                    stats=stats,
+                    schedule=None,
+                    classification=CLASS_INSUFFICIENT_BRIDGE_DATA,
+                    template_name=None,
+                    reminder_type=None,
+                    reason=REASON_MISSING_BRIDGE_FIELDS,
+                ),
+                snapshot=snapshot,
+                audit=True,
+            )
+            return
+
+        classification = classify_reminder_case(
+            bridge_found=snapshot.bridge_found,
+            missing_fields=snapshot.missing_fields,
+            payment_status=snapshot.payment_status,
+            due_date=schedule.due_date,
+            today=today,
+        )
+        template_name, reminder_type = _template_for_classification(classification)
+        if not payment_reminder_test_phone_allowed(snapshot.phone):
+            logger.info(
+                "payment_reminder.test_mode.blocked",
+                extra={
+                    "account": _mask(snapshot.cuenta),
+                    "phone_masked": _mask(snapshot.phone),
+                    "session_id": session_resolution.session_id,
+                    "source": "sync",
+                    "test_phone_configured_count": len(_configured_test_phones()),
+                },
+            )
+            add_result(
+                build_single_result(
+                    snapshot=snapshot,
+                    session_resolution=session_resolution,
+                    stats=stats,
+                    schedule=schedule,
+                    classification=classification,
+                    template_name=template_name,
+                    reminder_type=reminder_type,
+                    reason=REASON_TEST_PHONE_NOT_ALLOWED,
+                ),
+                snapshot=snapshot,
+                schedule=schedule,
+                audit=True,
+            )
+            return
+        if classification in {CLASS_DUE_TODAY_UNPAID, CLASS_OVERDUE_UNPAID}:
+            blocked, last_sent, next_allowed = _weekly_frequency_blocked(
+                db,
+                cuenta=snapshot.cuenta,
+                session_id=session_resolution.session_id,
+            )
+            if blocked and next_allowed:
+                logger.info(
+                    "payment_reminder.weekly_frequency.blocked",
+                    extra={
+                        "account": _mask(snapshot.cuenta),
+                        "session_id": session_resolution.session_id,
+                        "source": "sync",
+                        "last_sent_at": _sent_reference_at(last_sent).isoformat() if _sent_reference_at(last_sent) else None,
+                        "next_allowed_at": next_allowed.isoformat(),
+                    },
+                )
+                next_schedule = _payment_schedule_from_next_allowed(next_allowed)
+                next_reminder, status = upsert_scheduled_reminder(
+                    db,
+                    snapshot=snapshot,
+                    schedule=next_schedule,
+                    reminder_type=reminder_type or REMINDER_PAYMENT_PENDING,
+                    template_name=template_name,
+                    session_id=session_resolution.session_id,
+                    dry_run=dry_run,
+                )
+                if next_reminder is not None:
+                    next_reminder.scheduled_for = next_allowed
+                    next_reminder.error_code = REASON_WEEKLY_FREQUENCY_BLOCKED
+                    next_reminder.error_message_sanitized = (
+                        f"next_allowed_payment_reminder_at:{next_allowed.isoformat()}"
+                    )[:255]
+                result = build_single_result(
+                    snapshot=snapshot,
+                    session_resolution=session_resolution,
+                    stats=stats,
+                    schedule=next_schedule,
+                    classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else CLASS_NOT_DUE,
+                    template_name=template_name,
+                    reminder_type=reminder_type,
+                    reason=REASON_WEEKLY_FREQUENCY_BLOCKED,
+                )
+                result["scheduled_at"] = next_allowed.isoformat()
+                result["next_allowed_payment_reminder_at"] = next_allowed.isoformat()
+                if next_reminder is not None:
+                    result["payment_reminder_id"] = getattr(next_reminder, "id", None)
+                add_result(result, snapshot=snapshot, schedule=next_schedule)
+                logger.info(
+                    "payment_reminder.next_scheduled",
+                    extra={
+                        "current_reminder_id": None,
+                        "next_reminder_id": getattr(next_reminder, "id", None),
+                        "account": _mask(snapshot.cuenta),
+                        "session_id": session_resolution.session_id,
+                        "due_date": next_schedule.due_date.isoformat(),
+                        "scheduled_for": next_allowed.isoformat(),
+                        "status": status,
+                        "reason": REASON_WEEKLY_FREQUENCY_BLOCKED,
+                    },
+                )
+                return
+            if not template_name:
+                add_result(
+                    build_single_result(
+                        snapshot=snapshot,
+                        session_resolution=session_resolution,
+                        stats=stats,
+                        schedule=schedule,
+                        classification=classification,
+                        template_name=None,
+                        reminder_type=reminder_type,
+                        reason=REASON_TEMPLATE_MISSING,
+                    ),
+                    snapshot=snapshot,
+                    schedule=schedule,
+                    audit=True,
+                )
+                return
+        if not reminder_type:
+            reminder_type = REMINDER_PAYMENT_PENDING
+        logger.info(
+            "payment_reminder.create.insert.start",
+            extra={
+                "account": _mask(snapshot.cuenta),
+                "session_id": session_resolution.session_id,
+                "status": STATUS_SCHEDULED,
+                "scheduled_for": _scheduled_datetime(schedule.due_date).isoformat(),
+                "reminder_type": reminder_type,
+            },
+        )
+        reminder, status = upsert_scheduled_reminder(
+            db,
+            snapshot=snapshot,
+            schedule=schedule,
+            reminder_type=reminder_type,
+            template_name=template_name,
+            session_id=session_resolution.session_id,
+            dry_run=dry_run,
+        )
+        if reminder is not None and stats.last_sent_at:
+            next_allowed = _next_allowed_send_at(stats.last_sent_at)
+            if next_allowed and reminder.scheduled_for and reminder.scheduled_for < next_allowed:
+                reminder.scheduled_for = next_allowed
+        result = build_single_result(
+            snapshot=snapshot,
+            session_resolution=session_resolution,
+            stats=stats,
+            schedule=schedule,
+            classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else classification,
+            template_name=template_name,
+            reminder_type=reminder_type,
+            reason=status,
+        )
+        if reminder is not None:
+            result["payment_reminder_id"] = getattr(reminder, "id", None)
+        add_result(result, snapshot=snapshot, schedule=schedule)
+
     if cuenta or folio:
         logger.info(
             "payment_reminder_candidate_sync_started",
@@ -2887,6 +3558,7 @@ async def sync_payment_reminder_candidates(
             folio=snapshot.folio or folio,
             cuenta=snapshot.account_reference_formatted or snapshot.cuenta or cuenta,
         )
+        _apply_resolved_phone(snapshot, session_resolution=session_resolution)
         stats = _reminder_stats(
             db,
             cuenta=snapshot.cuenta or cuenta,
@@ -2936,6 +3608,7 @@ async def sync_payment_reminder_candidates(
                 result["cancelled_count"] = cancelled_count
                 add_result(result, snapshot=snapshot, source="sync_account", audit=True)
             elif snapshot.missing_fields:
+                missing_reason = _missing_fields_reason(snapshot)
                 add_result(
                     build_single_result(
                         snapshot=snapshot,
@@ -2945,7 +3618,7 @@ async def sync_payment_reminder_candidates(
                         classification=CLASS_INSUFFICIENT_BRIDGE_DATA,
                         template_name=None,
                         reminder_type=None,
-                        reason=REASON_MISSING_BRIDGE_FIELDS,
+                        reason=missing_reason,
                     ),
                     snapshot=snapshot,
                     source="sync_account",
@@ -3244,9 +3917,8 @@ async def sync_payment_reminder_candidates(
         if len(results) >= limit:
             break
 
-        session_cuenta = _session_account_candidate(session)
-        session_folio = _session_folio_candidate(session)
-        if not session_cuenta and not session_folio:
+        session_candidates = _session_payment_candidates(session)
+        if not session_candidates:
             logger.info(
                 "payment_reminder_omitted",
                 extra={
@@ -3259,283 +3931,14 @@ async def sync_payment_reminder_candidates(
             )
             continue
         sessions_with_context += 1
-
-        snapshot = await fetch_bridge_account_snapshot(
-            cuenta=session_cuenta,
-            folio=session_folio,
-            company_id=company_id,
-            client=client,
-        )
-        session_resolution = resolve_chat_session_for_reminder(
-            db,
-            snapshot=snapshot,
-            phone=snapshot.phone or getattr(session, "phone", None),
-            folio=snapshot.folio or session_folio,
-            cuenta=snapshot.account_reference_formatted or snapshot.cuenta or session_cuenta,
-            session_id=getattr(session, "id", None),
-        )
-        stats = _reminder_stats(
-            db,
-            cuenta=snapshot.cuenta or session_cuenta,
-            session_id=session_resolution.session_id,
-        )
-        if snapshot.error_code:
-            add_result(
-                _build_process_result(
-                    snapshot=snapshot,
-                    schedule=None,
-                    classification=CLASS_BRIDGE_ERROR,
-                    template_name=None,
-                    reminder_type=None,
-                    dry_run=dry_run,
-                    session_resolution=session_resolution,
-                    reminder_stats=stats,
-                    reason=snapshot.error_message_sanitized or snapshot.error_code,
-                ),
-                snapshot=snapshot,
-                audit=True,
+        for candidate in session_candidates:
+            if len(results) >= limit:
+                break
+            await sync_session_candidate(
+                session,
+                session_cuenta=candidate.cuenta,
+                session_folio=candidate.folio,
             )
-            continue
-        if snapshot.settled:
-            if not dry_run and snapshot.cuenta:
-                cancelled_count = _cancel_future_settled(db, cuenta=snapshot.cuenta)
-                logger.info(
-                    "payment_reminder.cancelled_settled",
-                    extra={
-                        "account": _mask(snapshot.cuenta),
-                        "cancelled_count": cancelled_count,
-                        "reason": REASON_PAID_OR_SETTLED,
-                        "source": "sync",
-                    },
-                )
-            add_result(
-                _build_process_result(
-                    snapshot=snapshot,
-                    schedule=None,
-                    classification=CLASS_SETTLED,
-                    template_name=None,
-                    reminder_type=None,
-                    dry_run=dry_run,
-                    session_resolution=session_resolution,
-                    reminder_stats=stats,
-                    reason=REASON_PAID_OR_SETTLED,
-                ),
-                snapshot=snapshot,
-                audit=True,
-            )
-            continue
-        if snapshot.missing_fields:
-            add_result(
-                _build_process_result(
-                    snapshot=snapshot,
-                    schedule=None,
-                    classification=CLASS_INSUFFICIENT_BRIDGE_DATA,
-                    template_name=None,
-                    reminder_type=None,
-                    dry_run=dry_run,
-                    session_resolution=session_resolution,
-                    reminder_stats=stats,
-                    reason=REASON_MISSING_BRIDGE_FIELDS,
-                ),
-                snapshot=snapshot,
-                audit=True,
-            )
-            continue
-
-        if not session_resolution.found:
-            add_result(
-                _build_process_result(
-                    snapshot=snapshot,
-                    schedule=None,
-                    classification=session_resolution.reason,
-                    template_name=None,
-                    reminder_type=None,
-                    dry_run=dry_run,
-                    session_resolution=session_resolution,
-                    reminder_stats=stats,
-                    reason=session_resolution.reason,
-                ),
-                snapshot=snapshot,
-                audit=True,
-            )
-            continue
-
-        try:
-            schedule = calculate_snapshot_due_schedule(snapshot, today=today)
-        except PaymentScheduleError as exc:
-            add_result(
-                _build_process_result(
-                    snapshot=snapshot,
-                    schedule=None,
-                    classification=CLASS_INSUFFICIENT_BRIDGE_DATA,
-                    template_name=None,
-                    reminder_type=None,
-                    dry_run=dry_run,
-                    session_resolution=session_resolution,
-                    reminder_stats=stats,
-                    reason=REASON_MISSING_BRIDGE_FIELDS,
-                ),
-                snapshot=snapshot,
-                audit=True,
-            )
-            continue
-
-        classification = classify_reminder_case(
-            bridge_found=snapshot.bridge_found,
-            missing_fields=snapshot.missing_fields,
-            payment_status=snapshot.payment_status,
-            due_date=schedule.due_date,
-            today=today,
-        )
-        template_name, reminder_type = _template_for_classification(classification)
-        if not payment_reminder_test_phone_allowed(snapshot.phone):
-            logger.info(
-                "payment_reminder.test_mode.blocked",
-                extra={
-                    "account": _mask(snapshot.cuenta),
-                    "phone_masked": _mask(snapshot.phone),
-                    "session_id": session_resolution.session_id,
-                    "source": "sync",
-                    "test_phone_configured_count": len(_configured_test_phones()),
-                },
-            )
-            add_result(
-                _build_process_result(
-                    snapshot=snapshot,
-                    schedule=schedule,
-                    classification=classification,
-                    template_name=template_name,
-                    reminder_type=reminder_type,
-                    dry_run=dry_run,
-                    session_resolution=session_resolution,
-                    reminder_stats=stats,
-                    reason=REASON_TEST_PHONE_NOT_ALLOWED,
-                ),
-                snapshot=snapshot,
-                schedule=schedule,
-                audit=True,
-            )
-            continue
-        if classification in {CLASS_DUE_TODAY_UNPAID, CLASS_OVERDUE_UNPAID}:
-            blocked, last_sent, next_allowed = _weekly_frequency_blocked(
-                db,
-                cuenta=snapshot.cuenta,
-                session_id=session_resolution.session_id,
-            )
-            if blocked and next_allowed:
-                logger.info(
-                    "payment_reminder.weekly_frequency.blocked",
-                    extra={
-                        "account": _mask(snapshot.cuenta),
-                        "session_id": session_resolution.session_id,
-                        "source": "sync",
-                        "last_sent_at": _sent_reference_at(last_sent).isoformat() if _sent_reference_at(last_sent) else None,
-                        "next_allowed_at": next_allowed.isoformat(),
-                    },
-                )
-                next_schedule = _payment_schedule_from_next_allowed(next_allowed)
-                next_reminder, status = upsert_scheduled_reminder(
-                    db,
-                    snapshot=snapshot,
-                    schedule=next_schedule,
-                    reminder_type=reminder_type or REMINDER_PAYMENT_PENDING,
-                    template_name=template_name,
-                    session_id=session_resolution.session_id,
-                    dry_run=dry_run,
-                )
-                if next_reminder is not None:
-                    next_reminder.scheduled_for = next_allowed
-                    next_reminder.error_code = REASON_WEEKLY_FREQUENCY_BLOCKED
-                    next_reminder.error_message_sanitized = (
-                        f"next_allowed_payment_reminder_at:{next_allowed.isoformat()}"
-                    )[:255]
-                result = _build_process_result(
-                    snapshot=snapshot,
-                    schedule=next_schedule,
-                    classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else CLASS_NOT_DUE,
-                    template_name=template_name,
-                    reminder_type=reminder_type,
-                    dry_run=dry_run,
-                    session_resolution=session_resolution,
-                    reminder_stats=stats,
-                    reason=REASON_WEEKLY_FREQUENCY_BLOCKED,
-                )
-                result["scheduled_at"] = next_allowed.isoformat()
-                result["next_allowed_payment_reminder_at"] = next_allowed.isoformat()
-                if next_reminder is not None:
-                    result["payment_reminder_id"] = getattr(next_reminder, "id", None)
-                add_result(result, snapshot=snapshot, schedule=next_schedule)
-                logger.info(
-                    "payment_reminder.next_scheduled",
-                    extra={
-                        "current_reminder_id": None,
-                        "next_reminder_id": getattr(next_reminder, "id", None),
-                        "account": _mask(snapshot.cuenta),
-                        "session_id": session_resolution.session_id,
-                        "due_date": next_schedule.due_date.isoformat(),
-                        "scheduled_for": next_allowed.isoformat(),
-                        "status": status,
-                        "reason": REASON_WEEKLY_FREQUENCY_BLOCKED,
-                    },
-                )
-                continue
-            if not template_name:
-                add_result(
-                    _build_process_result(
-                        snapshot=snapshot,
-                        schedule=schedule,
-                        classification=classification,
-                        template_name=None,
-                        reminder_type=reminder_type,
-                        dry_run=dry_run,
-                        session_resolution=session_resolution,
-                        reminder_stats=stats,
-                        reason=REASON_TEMPLATE_MISSING,
-                    ),
-                    snapshot=snapshot,
-                    schedule=schedule,
-                    audit=True,
-                )
-                continue
-        if not reminder_type:
-            reminder_type = REMINDER_PAYMENT_PENDING
-        logger.info(
-            "payment_reminder.create.insert.start",
-            extra={
-                "account": _mask(snapshot.cuenta),
-                "session_id": session_resolution.session_id,
-                "status": STATUS_SCHEDULED,
-                "scheduled_for": _scheduled_datetime(schedule.due_date).isoformat(),
-                "reminder_type": reminder_type,
-            },
-        )
-        reminder, status = upsert_scheduled_reminder(
-            db,
-            snapshot=snapshot,
-            schedule=schedule,
-            reminder_type=reminder_type,
-            template_name=template_name,
-            session_id=session_resolution.session_id,
-            dry_run=dry_run,
-        )
-        if reminder is not None and stats.last_sent_at:
-            next_allowed = _next_allowed_send_at(stats.last_sent_at)
-            if next_allowed and reminder.scheduled_for and reminder.scheduled_for < next_allowed:
-                reminder.scheduled_for = next_allowed
-        result = _build_process_result(
-            snapshot=snapshot,
-            schedule=schedule,
-            classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else classification,
-            template_name=template_name,
-            reminder_type=reminder_type,
-            dry_run=dry_run,
-            session_resolution=session_resolution,
-            reminder_stats=stats,
-            reason=status,
-        )
-        if reminder is not None:
-            result["payment_reminder_id"] = getattr(reminder, "id", None)
-        add_result(result)
 
     if not dry_run:
         try:

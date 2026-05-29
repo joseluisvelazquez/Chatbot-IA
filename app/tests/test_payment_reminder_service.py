@@ -398,6 +398,7 @@ def test_dry_run_payload_has_simple_payment_state_and_no_receipt_status():
         bridge_found=True,
         company_id=1,
         cuenta="CTA-1",
+        folio="990001",
         phone="5214420001679",
         balance=Decimal("100.00"),
         minimum_payment=Decimal("50.00"),
@@ -629,6 +630,66 @@ class FakePaymentReminderBridge:
         return {"items": []}
 
 
+class FakeMappedPaymentReminderBridge:
+    def __init__(self, records, *, omit_phone=False):
+        self.records = list(records)
+        self.omit_phone = omit_phone
+        self.collection_calls = []
+
+    async def get_collections(self, company_id, **kwargs):
+        self.collection_calls.append(kwargs)
+        cuenta = kwargs.get("cuenta")
+        folio = kwargs.get("folio")
+        record = next(
+            (
+                item
+                for item in self.records
+                if (not cuenta or item.get("no_cuenta") == cuenta)
+                and (not folio or item.get("folio") == folio)
+            ),
+            None,
+        )
+        if record is None:
+            record = {
+                "no_cuenta": cuenta or "A900001",
+                "folio": folio or "990001",
+                "phone": "5214271227177",
+                "customer_name": "Cliente Prueba",
+            }
+        item = {
+            "sale_date": "2026-05-19",
+            "balance": "100.00",
+            "minimum_payment": "50.00",
+            "account_status": "ACTIVA",
+            "process": "ACTIVO",
+            **record,
+        }
+        if self.omit_phone:
+            item.pop("phone", None)
+        return {"items": [item]}
+
+    async def get_account(self, cuenta, company_id, **kwargs):
+        record = next((item for item in self.records if item.get("no_cuenta") == cuenta), {})
+        phone = None if self.omit_phone else record.get("phone")
+        return {
+            "account": {
+                "account": cuenta,
+                "sale_date": "2026-05-19",
+                "status": "ACTIVA",
+                "process": "Cobranza",
+                "plan": {"minimum_payment": "50.00"},
+                "amounts": {"stored_balance": "100.00"},
+            },
+            "customer": {
+                "name": record.get("customer_name") or "Cliente Prueba",
+                "phones": [phone] if phone else [],
+            },
+        }
+
+    async def get_payments(self, cuenta, company_id, **kwargs):
+        return {"items": []}
+
+
 REAL_ACCOUNT_1260522 = {
     "account": {
         "id_cuenta": 5991,
@@ -692,7 +753,22 @@ class FakeRealAccountBridge:
 
     async def get_collections(self, company_id, **kwargs):
         self.collection_calls.append(kwargs)
-        return {"ok": True, "data": {"items": []}, "error": None, "meta": {}}
+        account = kwargs.get("cuenta") or self.payload.get("account", {}).get("account") or "1260522"
+        phones = self.payload.get("customer", {}).get("phones") or []
+        return {
+            "ok": True,
+            "data": {
+                "items": [
+                    {
+                        "no_cuenta": account,
+                        "folio": kwargs.get("folio") or "1260522-F",
+                        "phone": phones[0] if phones else None,
+                    }
+                ]
+            },
+            "error": None,
+            "meta": {},
+        }
 
     async def get_account(self, cuenta, company_id, **kwargs):
         self.account_calls.append({"cuenta": cuenta, "company_id": company_id, **kwargs})
@@ -961,6 +1037,7 @@ def test_upsert_does_not_reactivate_failed_reminder_every_sync(monkeypatch):
         bridge_found=True,
         company_id=1,
         cuenta="CTA-1",
+        folio="990001",
         phone="5214420001679",
         balance=Decimal("100.00"),
         minimum_payment=Decimal("50.00"),
@@ -1110,6 +1187,297 @@ def test_reminder_matches_raw_session_account_to_prefixed_bridge_account():
 
     assert resolution.found is True
     assert resolution.session_id == 1
+
+
+def test_reminder_requires_folio_account_pair_when_session_has_multiple_verifications():
+    session = chat_session(
+        id=90050,
+        phone="5214271227177",
+        folio="16774",
+        extra_json={
+            "verifications": [
+                {"folio": "990001", "no_cuenta": "A900001"},
+                {"folio": "16774", "no_cuenta": "A900002"},
+            ]
+        },
+    )
+
+    mixed = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214271227177",
+        folio="16774",
+        account_reference_formatted="A900001",
+    )
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session]),
+        snapshot=mixed,
+        session_id=90050,
+    )
+
+    assert resolution.found is False
+    assert resolution.reason == payment_service.CLASS_CHAT_SESSION_ACCOUNT_MISMATCH
+
+    correct = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900002",
+        phone="5214271227177",
+        folio="16774",
+        account_reference_formatted="A900002",
+    )
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session]),
+        snapshot=correct,
+        session_id=90050,
+    )
+
+    assert resolution.found is True
+    assert resolution.session_id == 90050
+
+
+def test_same_account_with_two_folios_requires_folio_to_avoid_ambiguity():
+    session = chat_session(
+        id=90050,
+        phone="5214271227177",
+        folio="16774",
+        extra_json={
+            "verifications": [
+                {"folio": "990001", "no_cuenta": "A900001"},
+                {"folio": "16774", "no_cuenta": "A900001"},
+            ]
+        },
+    )
+
+    account_only = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214271227177",
+        account_reference_formatted="A900001",
+    )
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session]),
+        snapshot=account_only,
+    )
+
+    assert resolution.found is False
+    assert resolution.reason == payment_service.CLASS_AMBIGUOUS_CHAT_SESSION
+
+    with_folio = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        phone="5214271227177",
+        folio="990001",
+        account_reference_formatted="A900001",
+    )
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session]),
+        snapshot=with_folio,
+    )
+
+    assert resolution.found is True
+    assert resolution.session_id == 90050
+
+
+def test_phone_with_multiple_sessions_resolves_a900003_only_with_matching_folio():
+    session_990003 = chat_session(
+        id=90052,
+        phone="5214271644542",
+        folio="990003",
+        extra_json={"verifications": [{"folio": "990003", "no_cuenta": "A900003"}]},
+    )
+    session_16511 = chat_session(
+        id=90054,
+        phone="5214271644542",
+        folio="16511",
+        extra_json={"verifications": [{"folio": "16511", "no_cuenta": "A900003"}]},
+    )
+
+    account_only = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900003",
+        phone="5214271644542",
+        account_reference_formatted="A900003",
+    )
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session_990003, session_16511]),
+        snapshot=account_only,
+    )
+
+    assert resolution.found is False
+    assert resolution.reason == payment_service.CLASS_AMBIGUOUS_CHAT_SESSION
+
+    with_folio = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900003",
+        phone="5214271644542",
+        folio="990003",
+        account_reference_formatted="A900003",
+    )
+    resolution = payment_service.resolve_chat_session_for_reminder(
+        FakeDb([session_990003, session_16511]),
+        snapshot=with_folio,
+    )
+
+    assert resolution.found is True
+    assert resolution.session_id == 90052
+
+
+def test_sync_expands_multiple_verification_pairs_without_mixing_folios(monkeypatch):
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb(
+        [
+            chat_session(
+                id=90050,
+                phone="5214271227177",
+                folio="16774",
+                extra_json={
+                    "verifications": [
+                        {"folio": "990001", "no_cuenta": "A900001"},
+                        {"folio": "16774", "no_cuenta": "A900002"},
+                    ]
+                },
+            )
+        ]
+    )
+    bridge = FakeMappedPaymentReminderBridge(
+        [
+            {"folio": "990001", "no_cuenta": "A900001", "phone": "5214271227177"},
+            {"folio": "16774", "no_cuenta": "A900002", "phone": "5214271227177"},
+        ]
+    )
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            client=bridge,
+            today=date(2026, 5, 26),
+        )
+    )
+
+    assert result["synced"] == 2
+    assert {(call["folio"], call["cuenta"]) for call in bridge.collection_calls} == {
+        ("990001", "A900001"),
+        ("16774", "A900002"),
+    }
+    assert {(reminder.folio, reminder.cuenta) for reminder in db.added} == {
+        ("990001", "A900001"),
+        ("16774", "A900002"),
+    }
+
+
+def test_zero_folio_is_skipped_with_clear_error(monkeypatch):
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb(
+        [
+            chat_session(
+                id=90043,
+                phone="5214271665615",
+                folio="00000",
+                extra_json={"no_cuenta": "B900002"},
+            )
+        ]
+    )
+    bridge = FakeMappedPaymentReminderBridge([])
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            client=bridge,
+            today=date(2026, 5, 26),
+        )
+    )
+
+    assert bridge.collection_calls == []
+    assert result["reason_counts"] == {payment_service.REASON_INVALID_FOLIO: 1}
+    assert db.added
+    audit = db.added[0]
+    assert audit.status == payment_service.STATUS_SKIPPED
+    assert audit.error_code == payment_service.REASON_INVALID_FOLIO
+    assert "folio" in audit.error_message_sanitized
+
+
+def test_test_phone_only_allows_configured_payment_reminder_phone(monkeypatch):
+    monkeypatch.setattr(settings, "PAYMENT_REMINDERS_TEST_MODE", True)
+    monkeypatch.setattr(settings, "TEST_PHONE_ONLY", '["5214271227177"]')
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb(
+        [
+            chat_session(
+                id=90050,
+                phone="5214271227177",
+                folio="990001",
+                extra_json={"verifications": [{"folio": "990001", "no_cuenta": "A900001"}]},
+            )
+        ]
+    )
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            client=FakeMappedPaymentReminderBridge(
+                [{"folio": "990001", "no_cuenta": "A900001", "phone": "5214271227177"}]
+            ),
+            today=date(2026, 5, 26),
+        )
+    )
+
+    assert result["results"][0]["test_mode"] is True
+    assert result["results"][0]["test_phone_allowed"] is True
+    assert result["results"][0]["reason"] == payment_service.STATUS_SCHEDULED
+    assert db.added[0].phone == "5214271227177"
+
+
+def test_local_session_phone_is_used_when_bridge_omits_phone(monkeypatch):
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb(
+        [
+            chat_session(
+                id=90052,
+                phone="5214271644542",
+                folio="990003",
+                extra_json={"verifications": [{"folio": "990003", "no_cuenta": "A900003"}]},
+            )
+        ]
+    )
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            client=FakeMappedPaymentReminderBridge(
+                [{"folio": "990003", "no_cuenta": "A900003"}],
+                omit_phone=True,
+            ),
+            today=date(2026, 5, 26),
+        )
+    )
+
+    assert result["reason_counts"] == {}
+    assert db.added
+    reminder = db.added[0]
+    assert reminder.phone == "5214271644542"
+    assert reminder.folio == "990003"
+    assert reminder.cuenta == "A900003"
 
 
 def test_dry_run_result_blocks_send_without_chat_session():
