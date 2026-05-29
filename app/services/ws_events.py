@@ -161,6 +161,8 @@ def build_conversation_updated_event(
         "last_message_at": iso_datetime(getattr(chat, "last_message_at", None)),
         "updated_at": iso_datetime(getattr(chat, "updated_at", None))
         or iso_datetime(getattr(chat, "last_message_at", None)),
+        "phone": getattr(chat, "phone", None),
+        "name": chat_name_from_bridge_cache(chat),
     }
     if patch:
         base_patch.update(patch)

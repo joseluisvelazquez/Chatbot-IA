@@ -153,6 +153,10 @@ INTENT_KEYWORDS = {
         "reanudar",
         "seguir",
         "listo",
+        "avanza",
+        "avanzar",
+        "proseguir",
+        "continua"
     ]
 }
 

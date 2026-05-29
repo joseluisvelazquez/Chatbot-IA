@@ -277,7 +277,9 @@ export function initWebSocket() {
                     session_id: payload.session_id,
                     status: payload.status,
                     folio: payload.folio,
-                    no_cuenta: payload.no_cuenta
+                    no_cuenta: payload.no_cuenta,
+                    phone: payload.phone,
+                    name: payload.name
                 })
             });
         }
@@ -294,6 +296,8 @@ export function initWebSocket() {
                     session_id: payload.session_id,
                     folio: payload.folio,
                     last_message_at: payload.last_activity || payload.updated_at,
+                    phone: payload.phone,
+                    name: payload.name,
                 },
             });
         }

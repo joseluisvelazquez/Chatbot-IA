@@ -354,10 +354,6 @@ async def trigger_verificacion(
         # 1. Regla oficial para todos los clientes (24 horas)
         if diff.total_seconds() >= 24 * 3600:
             is_expired = True
-            
-        # 2. Excepción SOLO para pruebas (5 minutos)
-        if chat.phone == "5214271644542" and diff.total_seconds() >= 5 * 60:
-            is_expired = True
 
     if is_expired:
         from app.adapters.whatsapp_client import send_template_message, _extract_meta_message_id
@@ -367,7 +363,11 @@ async def trigger_verificacion(
         reply_text = "👋🏻 Hola, te informamos que los datos de tu compra ya están registrados en nuestro sistema.\n\n✅ Toca el botón de abajo para iniciar tu proceso de verificación."
         outgoing_type = "template"
         outgoing_media_url = None
-        extra_json = None
+        extra_json = {
+            "interactive": {
+                "buttons": [{"title": "Iniciar verificación"}]
+            }
+        }
         botones_inicio = []
         image_id = None
         bot_msg = save_message(
@@ -377,7 +377,8 @@ async def trigger_verificacion(
             direction="out",
             content=reply_text,
             type=outgoing_type,
-            message_id=provider_message_id
+            message_id=provider_message_id,
+            extra_json=extra_json
         )
     else:
         reply_text, botones_inicio, image_id = render_state(ChatState.INICIO, chat, db)

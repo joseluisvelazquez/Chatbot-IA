@@ -256,7 +256,7 @@ export async function initConversationsPage() {
             const diffMs = now - lastMsgDate
             const diffHours = diffMs / (1000 * 60 * 60)
             const diffMinutes = diffMs / (1000 * 60)
-            const isExpired = diffHours >= 24 || (session.phone === "5214271644542" && diffMinutes >= 5)
+            const isExpired = diffHours >= 24
 
             if (isExpired) {
                 const overlay = document.createElement("div")
@@ -990,7 +990,20 @@ function renderHistoricalButtons(msg) {
     const interactive = metadata.interactive && typeof metadata.interactive === "object"
         ? metadata.interactive
         : null
-    const buttons = Array.isArray(interactive?.buttons) ? interactive.buttons : []
+    let buttons = Array.isArray(interactive?.buttons) ? interactive.buttons : []
+    
+    if (!buttons.length && typeof msg.content === "string") {
+        if (msg.content.includes("Hola, notamos que tu proceso quedó en pausa")) {
+            buttons = [{title: "Continuar"}]
+        } else if (msg.content.includes("un asesor ha revisado tu caso y está listo para ayudarte")) {
+            buttons = [{title: "Hablar con asesor"}]
+        } else if (msg.content.includes("los datos de tu compra ya están registrados en nuestro sistema")) {
+            buttons = [{title: "Iniciar verificación"}]
+        } else if (msg.content.includes("nos ponemos en contacto contigo para darle seguimiento al estado de tu cuenta")) {
+            buttons = [{title: "Tengo una duda"}]
+        }
+    }
+    
     if (!buttons.length) return ""
 
     const chips = buttons.map((button) => {
@@ -1653,7 +1666,7 @@ function updateChatInputState(session) {
     const diffHours = diffMs / (1000 * 60 * 60)
     const diffMinutes = diffMs / (1000 * 60)
 
-    const isExpired = diffHours >= 24 || (session.phone === "5214271644542" && diffMinutes >= 5)
+    const isExpired = diffHours >= 24
 
     const reactivateContainer = document.getElementById("reactivateControlContainer")
     const expiredWarningText = document.getElementById("expiredWarningText")
@@ -1663,18 +1676,10 @@ function updateChatInputState(session) {
         inputControls.classList.add("hidden")
         input.disabled = true
 
-        // Mostrar botón de reactivación SOLO para tu número de pruebas
-        if (session.phone === "5214271644542") {
-            if (reactivateContainer) reactivateContainer.classList.remove("hidden")
-            if (expiredWarningText) {
-                expiredWarningText.textContent = "Para contactarlo, por favor realice una llamada telefónica o envíe un mensaje de reactivación usando el botón en la parte superior derecha."
-            }
-        } else {
-            // Ocultar botón y mantener texto original para asesores reales
-            if (reactivateContainer) reactivateContainer.classList.add("hidden")
-            if (expiredWarningText) {
-                expiredWarningText.textContent = "El cliente no ha enviado mensajes en las últimas 24 horas. Para contactarlo, por favor realice una llamada telefónica."
-            }
+        // Mostrar botón de reactivación para todos los asesores
+        if (reactivateContainer) reactivateContainer.classList.remove("hidden")
+        if (expiredWarningText) {
+            expiredWarningText.textContent = "Para contactarlo, por favor realice una llamada telefónica o envíe un mensaje de reactivación usando el botón en la parte superior derecha."
         }
 
         if (window.lucide) lucide.createIcons()
@@ -1702,7 +1707,7 @@ function updateChatHeaderControlState(session) {
     }
 }
 
-// Monitoreo automático de la ventana cada 10 segundos
+// Monitoreo automático de la ventana cada 5 segundos
 let windowValidationTimer = null
 function startWindowValidationTimer() {
     if (windowValidationTimer) return
@@ -1715,7 +1720,7 @@ function startWindowValidationTimer() {
                 updateChatHeaderControlState(session)
             }
         }
-    }, 30000) // Revisar cada 30 segundos
+    }, 5000) // Revisar cada 5 segundos
 }
 
 // =========================
@@ -1764,8 +1769,6 @@ export async function loadChat(sessionId, phone, name = null) {
         console.warn("Intentando cargar sesion inexistente:", sessionId)
         return
     }
-
-    updateChatInputState(sessionInfo)
 
     const requestId = ++chatLoadRequestId
     imageList = []
@@ -1831,14 +1834,16 @@ export async function loadChat(sessionId, phone, name = null) {
                         </div>
 
                         <div id="reactivateControlContainer" class="hidden">
-                            <button onclick="openReactivationModal()" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Mandar mensaje de reactivación">
-                                <i data-lucide="message-square-plus" class="w-4 h-4"></i> <span class="hidden sm:inline">Mandar mensaje de reactivación</span>
+                            <button onclick="openReactivationModal()" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Reactivar Chat">
+                                <i data-lucide="message-square-plus" class="w-4 h-4"></i> <span class="hidden sm:inline">Reactivar</span>
                             </button>
                         </div>
                     </div>
                 </div>
             `
             if (window.lucide) lucide.createIcons()
+            updateChatInputState(sessionInfo)
+            updateChatHeaderControlState(sessionInfo)
         }
 
         try {

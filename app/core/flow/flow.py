@@ -9,7 +9,6 @@ DEFAULT_TRANSITIONS = {
     "inconsistency": ChatState.INCONSISTENCIA,
     "pause": ChatState.RECORDATORIO,
     "escalate": ChatState.LLAMADA,
-    "ai": ChatState.FUERA_DE_FLUJO,
 }
 
 NEXT_STATE_MAP = {
@@ -404,9 +403,15 @@ FLOW = {
     },
 
     ChatState.FUERA_DE_FLUJO: {
-        "text": msg.FUERA_DE_FLUJO,
-        "buttons": [],
-        "options": {},
+        "text": msg.MENU_AYUDA,
+        "buttons": [
+            {"id": "MENU_VERIFICACION", "label": "📄 Ir a verificación"},
+            {"id": "MENU_DUDA", "label": "❓ Hacer una pregunta"},
+        ],
+        "options": {
+            "MENU_VERIFICACION": ChatState.SELECCIONAR_FOLIO,
+            "MENU_DUDA": ChatState.MENU_DUDA,
+        },
     },
 
     ChatState.DUDA: {

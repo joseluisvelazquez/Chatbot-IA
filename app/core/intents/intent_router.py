@@ -25,13 +25,16 @@ def route_intent(state, intent):
     # Si estamos en atención humana (o en fase de cobranza/finalizada), el bot no interfiere.
     # Excepción: "resume" o "start" para reiniciar flujos.
     if state_type == "human" or state in ("finalizado", "despedida", "cobranza"):
-        if intent == "affirmative":
+        if intent in ("affirmative", "resume"):
             return "resume"
         if intent == "start_verification":
             return "start"
         return "ignore"
 
     if intent == "resume":
+        state_val = state.value if hasattr(state, "value") else state
+        if state_type in ("system", "ai") or state_val in ("menu_ayuda", "menu_duda"):
+            return "resume"
         # Repite el estado actual (re-envía la pregunta/mensaje donde se quedó atorado)
         return "repeat"
 

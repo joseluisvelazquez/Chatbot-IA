@@ -1805,7 +1805,7 @@ def process_message(
             next_state = ChatState.INICIO
 
     if not next_state:
-        next_state = ChatState.FUERA_DE_FLUJO
+        next_state = ChatState.MENU_AYUDA
 
     if action == "repeat" and next_state == current_state:
         reply, buttons, image_id = render_state(

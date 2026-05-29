@@ -58,7 +58,8 @@ def get_or_create_session(db: Session, phone: str, folio: str | None = None, tex
         ChatState.DEVOLUCION_FINALIZADA.value,
         ChatState.FUERA_DE_FLUJO.value,
         ChatState.LLAMADA.value,
-        ChatState.ACLARACION.value
+        ChatState.ACLARACION.value,
+        ChatState.COBRANZA.value
     ]
 
     # 1) Intentar obtener la sesión más reciente

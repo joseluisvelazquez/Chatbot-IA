@@ -123,11 +123,6 @@ INCONSISTENCIA_PRODUCTO = "Entiendo. ¿Me podrías confirmar cómo se llama o qu
 INCONSISTENCIA_ESTADO_PRODUCTO = "Lamento escuchar eso. ¿Me podrías describir brevemente cuál es el detalle o falla que presenta tu producto?"
 INCONSISTENCIA_PAGO_INICIAL = "Entiendo. ¿Cuál fue el importe exacto que diste de pago inicial?"
 
-FUERA_DE_FLUJO = (
-    "💬 Gracias por tu mensaje.\n\n"
-    "Fuera de flujo, un asesor te contactará para atender tu caso."
-)
-
 ACLARACION = (
     "Entendido. Voy a transferir tu caso con un asesor para que te brinde atención personalizada lo más pronto posible.\n\n"
     "🕒 Te recuerdo que nuestros horarios de atención son de Lunes a Viernes de 9:00 AM a 6:00 PM."

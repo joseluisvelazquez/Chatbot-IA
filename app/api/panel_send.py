@@ -17,6 +17,7 @@ from app.db.models import Message
 from app.utils.timezone import mexico_now_naive
 from app.services.ws_events import build_new_message_event
 from app.services.message_metadata import build_outgoing_media_metadata
+from app.core.states.states import ChatState
 
 logger = logging.getLogger(__name__)
 
@@ -187,13 +188,26 @@ async def reactivate_conversation(
         "inactivity": ("reactivacion_inactividad", "👋🏻 Hola, notamos que tu proceso quedó en pausa.\n\n⏳ Toca el botón de abajo o responde este mensaje para retomar tu verificación y asegurar tus beneficios."),
         "advisor": ("reactivacion_asesor", "👋🏻 Hola, un asesor ha revisado tu caso y está listo para ayudarte.\n\n🧑‍💻 Por favor, toca el botón de abajo para que podamos brindarte atención personalizada."),
         "data_ready": ("reactivacion_datos_listos", "👋🏻 Hola, te informamos que los datos de tu compra ya están registrados en nuestro sistema.\n\n✅ Toca el botón de abajo para iniciar tu proceso de verificación."),
-        "call_failed": ("reactivacion_llamada", "👋🏻 Hola, intentamos comunicarnos contigo por llamada telefónica pero no tuvimos éxito.\n\n📞 Por favor, toca el botón de abajo para indicarnos en qué horario podemos marcarte."),
+        "collections": ("reactivacion_cobranza", "👋🏻 Hola, nos ponemos en contacto contigo para darle seguimiento al estado de tu cuenta.\n\n 🤝🏻 Si tienes alguna duda con tus pagos o necesitas asistencia, toca el botón de abajo para que un asesor te atienda personalmente."),
+    }
+
+    TEMPLATE_BUTTONS = {
+        "inactivity": ["Continuar"],
+        "advisor": ["Hablar con asesor"],
+        "data_ready": ["Iniciar verificación"],
+        "collections": ["Tengo una duda"],
     }
 
     if payload.template_key not in TEMPLATE_MAP:
         raise HTTPException(status_code=400, detail="Plantilla no válida")
         
     template_name, text_content = TEMPLATE_MAP[payload.template_key]
+    button_titles = TEMPLATE_BUTTONS.get(payload.template_key, ["Continuar"])
+    extra_json = {
+        "interactive": {
+            "buttons": [{"title": title} for title in button_titles]
+        }
+    }
 
     response = await send_template_message(
         phone=chat.phone,
@@ -209,6 +223,7 @@ async def reactivate_conversation(
         direction="agent",
         content=text_content, 
         message_id=provider_message_id,
+        extra_json=extra_json,
     )
     msg.type = "template" 
     
@@ -216,6 +231,11 @@ async def reactivate_conversation(
     chat.last_message = "Plantilla enviada"
     chat.last_message_at = now
     chat.unread_count = 0
+    
+    if payload.template_key == "collections":
+        if chat.state != ChatState.COBRANZA.value:
+            chat.previous_state = chat.state
+            chat.state = ChatState.COBRANZA.value
     
     db.commit()
     db.refresh(msg)
