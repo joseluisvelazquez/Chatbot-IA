@@ -21,6 +21,7 @@ Resumen del contrato actual:
 - `PAYMENT_REMINDERS_TEST_MODE=false` desactiva ese candado para operar con telefonos reales de SIGA Bridge.
 - La frecuencia real es semanal: despues de un `sent_at` o un mensaje visible `messages.type='payment_reminder'`, la misma cuenta/sesion queda bloqueada hasta 7 dias despues.
 - El siguiente recordatorio posterior a un envio real usa `sent_at + 7 dias`: `due_date` queda en esa fecha y `scheduled_for` en ese timestamp.
+- Si la cuenta aun esta bloqueada por frecuencia semanal, se deja un `scheduled` futuro para la fecha permitida; no se deja un `skipped` vencido.
 - Los registros terminales (`failed`, `skipped`, `cancelled`, `cancelled_settled`) no se reactivan solos en cada `sync`.
 - `run-due` pasa los registros por estado `processing` para evitar doble envio entre scheduler, endpoints manuales o multiples workers.
 - Cada envio real aceptado por Meta crea un registro `messages.type='payment_reminder'`; si falla ese insert, el recordatorio queda `sent` con `error_code=message_insert_failed`.

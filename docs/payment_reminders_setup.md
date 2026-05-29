@@ -47,6 +47,8 @@ Despues de un envio aceptado por Meta, el registro queda como `sent` con `sent_a
 
 Los registros terminales de la misma combinacion `cuenta + due_date + reminder_type`, como `failed`, `skipped`, `cancelled` o `cancelled_settled`, no se reactivan automaticamente en cada `sync`. Para reintentar uno de esos casos debe existir una accion operativa explicita, como corregir configuracion y limpiar/reprogramar el registro.
 
+Si una cuenta esta dentro de la ventana de espera semanal, `sync` no debe crear una auditoria `skipped` vencida. En su lugar crea o actualiza un registro `scheduled` para `sent_at + 7 dias`, con `error_code=weekly_frequency_blocked` solo como explicacion operativa.
+
 ## Formato operativo de cuenta
 
 La cuenta enviada en recordatorios debe usar el mismo formato operativo que el flujo `INFO_COMPROBANTE_ACCESO`. Algunas cuentas pueden requerir prefijo, por ejemplo `A` o `B`, antes del numero. Si Bridge entrega una cuenta ya prefijada, se conserva ese valor. Si solo existe el numero crudo, se aplica el mismo fallback historico del flujo de comprobantes. Si una fuente marca explicitamente que el prefijo es obligatorio y no se puede resolver, el sistema debe omitir el envio para evitar referencias incorrectas.

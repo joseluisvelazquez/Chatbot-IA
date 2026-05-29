@@ -986,6 +986,40 @@ def test_upsert_does_not_reactivate_failed_reminder_every_sync(monkeypatch):
     assert failed.scheduled_for == datetime(2026, 6, 9, 10, 0, 0)
 
 
+def test_sync_weekly_frequency_block_schedules_future_reminder(monkeypatch):
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    next_allowed = datetime(2026, 6, 4, 20, 40, 31)
+    monkeypatch.setattr(
+        payment_service,
+        "_weekly_frequency_blocked",
+        lambda *args, **kwargs: (True, SimpleNamespace(sent_at=datetime(2026, 5, 28, 20, 40, 31)), next_allowed),
+    )
+    monkeypatch.setattr(payment_service, "_reminder_stats", lambda *args, **kwargs: payment_service.ReminderStats())
+    db = FakeDb([chat_session(id=42, phone="5217122145781", folio=None, extra_json={})])
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            cuenta="1260522",
+            client=FakeRealAccountBridge(),
+            today=date(2026, 6, 3),
+        )
+    )
+
+    assert result["results"][0]["reason"] == payment_service.REASON_WEEKLY_FREQUENCY_BLOCKED
+    assert db.added
+    reminder = db.added[0]
+    assert reminder.status == payment_service.STATUS_SCHEDULED
+    assert reminder.due_date == date(2026, 6, 4)
+    assert reminder.next_due_date == date(2026, 6, 11)
+    assert reminder.scheduled_for == next_allowed
+    assert reminder.error_code == payment_service.REASON_WEEKLY_FREQUENCY_BLOCKED
+
+
 def test_reminder_resolves_session_by_folio_when_phone_has_multiple_sessions():
     session_a = chat_session(id=1, folio="OLD")
     session_b = chat_session(id=2, folio="990001")

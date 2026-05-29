@@ -1810,6 +1810,18 @@ def _next_reminder_schedule_after_send(
     )
 
 
+def _payment_schedule_from_next_allowed(next_allowed_at: datetime) -> PaymentSchedule:
+    due_date = next_allowed_at.date()
+    return PaymentSchedule(
+        due_date=due_date,
+        next_due_date=due_date + timedelta(days=PAYMENT_REMINDER_MIN_INTERVAL_DAYS),
+        weekday=due_date.weekday(),
+        source="last_reminder_sent_at_plus_7",
+        base_date=due_date,
+        base_date_source="payment_reminder_sent_at",
+    )
+
+
 def _reschedule_after_weekly_block(
     reminder: PaymentReminder,
     *,
@@ -3012,21 +3024,49 @@ async def sync_payment_reminder_candidates(
                                     "next_allowed_at": next_allowed.isoformat(),
                                 },
                             )
-                            add_result(
-                                build_single_result(
-                                    snapshot=snapshot,
-                                    session_resolution=session_resolution,
-                                    stats=stats,
-                                    schedule=schedule,
-                                    classification=classification,
-                                    template_name=template_name,
-                                    reminder_type=reminder_type,
-                                    reason=REASON_WEEKLY_FREQUENCY_BLOCKED,
-                                ),
+                            next_schedule = _payment_schedule_from_next_allowed(next_allowed)
+                            next_reminder, status = upsert_scheduled_reminder(
+                                db,
                                 snapshot=snapshot,
-                                schedule=schedule,
-                                source="sync_account",
-                                audit=True,
+                                schedule=next_schedule,
+                                reminder_type=reminder_type or REMINDER_PAYMENT_PENDING,
+                                template_name=template_name,
+                                session_id=session_resolution.session_id,
+                                dry_run=dry_run,
+                            )
+                            if next_reminder is not None:
+                                next_reminder.scheduled_for = next_allowed
+                                next_reminder.error_code = REASON_WEEKLY_FREQUENCY_BLOCKED
+                                next_reminder.error_message_sanitized = (
+                                    f"next_allowed_payment_reminder_at:{next_allowed.isoformat()}"
+                                )[:255]
+                            result = build_single_result(
+                                snapshot=snapshot,
+                                session_resolution=session_resolution,
+                                stats=stats,
+                                schedule=next_schedule,
+                                classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else CLASS_NOT_DUE,
+                                template_name=template_name,
+                                reminder_type=reminder_type,
+                                reason=REASON_WEEKLY_FREQUENCY_BLOCKED,
+                            )
+                            result["scheduled_at"] = next_allowed.isoformat()
+                            result["next_allowed_payment_reminder_at"] = next_allowed.isoformat()
+                            if next_reminder is not None:
+                                result["payment_reminder_id"] = getattr(next_reminder, "id", None)
+                            add_result(result, snapshot=snapshot, schedule=next_schedule, source="sync_account")
+                            logger.info(
+                                "payment_reminder.next_scheduled",
+                                extra={
+                                    "current_reminder_id": None,
+                                    "next_reminder_id": getattr(next_reminder, "id", None),
+                                    "account": _mask(snapshot.cuenta),
+                                    "session_id": session_resolution.session_id,
+                                    "due_date": next_schedule.due_date.isoformat(),
+                                    "scheduled_for": next_allowed.isoformat(),
+                                    "status": status,
+                                    "reason": REASON_WEEKLY_FREQUENCY_BLOCKED,
+                                },
                             )
                         elif not template_name:
                             add_result(
@@ -3378,21 +3418,50 @@ async def sync_payment_reminder_candidates(
                         "next_allowed_at": next_allowed.isoformat(),
                     },
                 )
-                add_result(
-                    _build_process_result(
-                        snapshot=snapshot,
-                        schedule=schedule,
-                        classification=classification,
-                        template_name=template_name,
-                        reminder_type=reminder_type,
-                        dry_run=dry_run,
-                        session_resolution=session_resolution,
-                        reminder_stats=stats,
-                        reason=REASON_WEEKLY_FREQUENCY_BLOCKED,
-                    ),
+                next_schedule = _payment_schedule_from_next_allowed(next_allowed)
+                next_reminder, status = upsert_scheduled_reminder(
+                    db,
                     snapshot=snapshot,
-                    schedule=schedule,
-                    audit=True,
+                    schedule=next_schedule,
+                    reminder_type=reminder_type or REMINDER_PAYMENT_PENDING,
+                    template_name=template_name,
+                    session_id=session_resolution.session_id,
+                    dry_run=dry_run,
+                )
+                if next_reminder is not None:
+                    next_reminder.scheduled_for = next_allowed
+                    next_reminder.error_code = REASON_WEEKLY_FREQUENCY_BLOCKED
+                    next_reminder.error_message_sanitized = (
+                        f"next_allowed_payment_reminder_at:{next_allowed.isoformat()}"
+                    )[:255]
+                result = _build_process_result(
+                    snapshot=snapshot,
+                    schedule=next_schedule,
+                    classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT, CLASS_ALREADY_TERMINAL} else CLASS_NOT_DUE,
+                    template_name=template_name,
+                    reminder_type=reminder_type,
+                    dry_run=dry_run,
+                    session_resolution=session_resolution,
+                    reminder_stats=stats,
+                    reason=REASON_WEEKLY_FREQUENCY_BLOCKED,
+                )
+                result["scheduled_at"] = next_allowed.isoformat()
+                result["next_allowed_payment_reminder_at"] = next_allowed.isoformat()
+                if next_reminder is not None:
+                    result["payment_reminder_id"] = getattr(next_reminder, "id", None)
+                add_result(result, snapshot=snapshot, schedule=next_schedule)
+                logger.info(
+                    "payment_reminder.next_scheduled",
+                    extra={
+                        "current_reminder_id": None,
+                        "next_reminder_id": getattr(next_reminder, "id", None),
+                        "account": _mask(snapshot.cuenta),
+                        "session_id": session_resolution.session_id,
+                        "due_date": next_schedule.due_date.isoformat(),
+                        "scheduled_for": next_allowed.isoformat(),
+                        "status": status,
+                        "reason": REASON_WEEKLY_FREQUENCY_BLOCKED,
+                    },
                 )
                 continue
             if not template_name:
