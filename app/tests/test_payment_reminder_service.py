@@ -619,6 +619,79 @@ class FakePaymentReminderBridge:
         return {"items": []}
 
 
+REAL_ACCOUNT_1260522 = {
+    "account": {
+        "id_cuenta": 5991,
+        "company_id": 1,
+        "branch_id": 0,
+        "account": "1260522",
+        "customer_code": "PEALMAVA-2",
+        "product": "CPU INTEL COREI3+ / AMD A4+, SSD 120GB, HDD 500GB, RAM 6GB",
+        "sale_date": "2026-05-27 14:28:01",
+        "warranty": "52",
+        "initial_payment": 230,
+        "down_payment": 229,
+        "plan": {
+            "term": 0,
+            "minimum_payment": 215,
+            "account_type": 2,
+        },
+        "amounts": {
+            "cash_price": 8499,
+            "stored_balance": 16769,
+            "liquidation": 8269,
+            "overdue": -1,
+            "late_fee": -0.06,
+        },
+        "status": "Sano",
+        "status_number": 1,
+        "process": "Cobranza",
+        "last_payment_date": "2026-05-22",
+        "advisor": "DULCE M. MORENO",
+        "collector": "MARIA F. OLVERA",
+        "notes": "",
+    },
+    "customer": {
+        "id_cliente": 9321,
+        "customer_code": "PEALMAVA-2",
+        "company_id": 1,
+        "branch_id": None,
+        "type": "PERSONA FISICA",
+        "name": "MARTHA VALERIA PEREZ ALVARADO",
+        "first_name": "MARTHA VALERIA",
+        "last_name": "PEREZ ALVARADO",
+        "email": "",
+        "phones": ["7122145781"],
+    },
+    "payment_summary": {
+        "initial_payment": 230,
+        "payments_sum": 0,
+        "paid_total": 230,
+        "stored_balance": 16769,
+        "liquidation": 8269,
+        "overdue": -1,
+    },
+}
+
+
+class FakeRealAccountBridge:
+    def __init__(self, payload=None):
+        self.payload = payload or REAL_ACCOUNT_1260522
+        self.collection_calls = []
+        self.account_calls = []
+
+    async def get_collections(self, company_id, **kwargs):
+        self.collection_calls.append(kwargs)
+        return {"ok": True, "data": {"items": []}, "error": None, "meta": {}}
+
+    async def get_account(self, cuenta, company_id, **kwargs):
+        self.account_calls.append({"cuenta": cuenta, "company_id": company_id, **kwargs})
+        return {"ok": True, "data": self.payload, "error": None, "meta": {}}
+
+    async def get_payments(self, cuenta, company_id, **kwargs):
+        return {"ok": True, "data": {"items": []}, "error": None, "meta": {}}
+
+
 def test_reminder_requires_existing_chat_session():
     snapshot = BridgeAccountSnapshot(
         bridge_found=True,
@@ -671,6 +744,72 @@ def test_sync_uses_chat_sessions_as_candidate_source(monkeypatch):
     assert reminder.due_date == date(2026, 5, 26)
     assert bridge.collection_calls[0]["folio"] == "990001"
     assert bridge.collection_calls[0]["cuenta"] == "A900001"
+
+
+def test_sync_single_real_account_payload_schedules_reminder(monkeypatch):
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb([chat_session(id=42, phone="5217122145781", folio=None, extra_json={})])
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            cuenta="1260522",
+            client=FakeRealAccountBridge(),
+            today=date(2026, 5, 28),
+        )
+    )
+
+    assert result["source"] == "single_account"
+    assert result["synced"] == 1
+    assert db.committed is True
+    assert db.added
+    reminder = db.added[0]
+    assert reminder.session_id == 42
+    assert reminder.cuenta == "1260522"
+    assert reminder.phone == "5217122145781"
+    assert reminder.status == STATUS_SCHEDULED
+    assert reminder.due_date == date(2026, 6, 3)
+    assert reminder.saldo_snapshot == Decimal("16769")
+    assert reminder.monto_minimo_snapshot == Decimal("215")
+
+
+def test_sync_single_real_account_without_phone_persists_skip_audit(monkeypatch):
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    payload = {
+        **REAL_ACCOUNT_1260522,
+        "customer": {
+            **REAL_ACCOUNT_1260522["customer"],
+            "phones": [],
+        },
+    }
+    db = FakeDb([])
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            cuenta="1260522",
+            client=FakeRealAccountBridge(payload),
+            today=date(2026, 5, 28),
+        )
+    )
+
+    assert result["source"] == "single_account"
+    assert result["reason_counts"] == {payment_service.REASON_MISSING_BRIDGE_FIELDS: 1}
+    assert result["results"][0]["reason"] == payment_service.REASON_MISSING_BRIDGE_FIELDS
+    assert result["results"][0]["audited"] is True
+    assert db.added
+    audit = db.added[0]
+    assert audit.status == payment_service.STATUS_SKIPPED
+    assert audit.phone == "unknown"
+    assert audit.error_code == payment_service.REASON_MISSING_BRIDGE_FIELDS
+    assert "phone" in audit.error_message_sanitized
 
 
 def test_reminder_resolves_session_by_folio_when_phone_has_multiple_sessions():

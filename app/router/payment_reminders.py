@@ -78,6 +78,8 @@ async def run_due_payment_reminders_endpoint(
 async def sync_payment_reminders_endpoint(
     dry_run: bool = True,
     limit: int | None = None,
+    cuenta: str | None = None,
+    folio: str | None = None,
     company_id: int | None = None,
     db: Session = Depends(get_db),
     user=Depends(get_current_panel_user),
@@ -91,4 +93,6 @@ async def sync_payment_reminders_endpoint(
         company_id=resolve_payment_reminder_company_id(user, company_id),
         limit=limit,
         dry_run=dry_run,
+        cuenta=cuenta,
+        folio=folio,
     )

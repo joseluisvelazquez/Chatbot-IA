@@ -10,6 +10,8 @@ El modulo de recordatorios no decide si un comprobante es valido. Solo consulta 
 
 Para recordatorios solo existen dos estados operativos: `pagado` y `no_pagado`. La cuenta se considera `pagado` cuando cobranza/Bridge reflejan saldo cero, o estado pagado, liquidado o saldado. Si no existe confirmacion confiable, se considera `no_pagado` o se omite el envio por datos insuficientes.
 
+`TEST_PHONE_ONLY` no forma parte del flujo productivo de `payment_reminders`. No debe bloquear creacion, programacion ni envio en produccion, ni ocultar errores reales. Si se conserva para pruebas locales, debe estar detras de un modo explicito como `PAYMENT_REMINDERS_TEST_MODE=true`; con ese modo apagado, los telefonos reales provenientes de SIGA Bridge son validos.
+
 ## Flujo general
 
 1. Obtiene candidatos desde `chat_sessions` locales con folio o cuenta asociada.
@@ -23,6 +25,8 @@ Para recordatorios solo existen dos estados operativos: `pagado` y `no_pagado`. 
 9. Guarda el envio exitoso como mensaje visible en conversaciones.
 10. Programa siguiente recordatorio o cancela futuros por pago confirmado.
 11. Guarda auditoria en `payment_reminders`.
+
+El endpoint `sync` tambien puede evaluar una cuenta puntual con `cuenta` o `folio`. Esa ruta no descarga toda cobranza: consulta Bridge para esa cuenta, resuelve la `chat_session` local confiable y crea el recordatorio o una fila de auditoria con `skip_reason`.
 
 ## Ciclo semanal por cliente
 
@@ -73,6 +77,8 @@ Campos principales: `session_id`, telefono, folio, cuenta, fecha de vencimiento,
 
 `session_id` es nullable para compatibilidad con registros historicos, pero los envios nuevos deben resolver una `chat_session` antes de programar o enviar.
 
+Cuando `dry_run=false`, las omisiones controladas tambien se auditan en `payment_reminders`. En esos casos `status` queda como `skipped`, `failed` o `cancelled_settled`, `error_code` guarda el `skip_reason`, y `error_message_sanitized` resume campos faltantes o error tecnico sin exponer datos sensibles. Si no existe un tipo real de plantilla para esa decision, `reminder_type` puede quedar como `payment_audit`.
+
 ## Estados de recordatorio
 
 - `scheduled`: programado.
@@ -100,6 +106,14 @@ Para sincronizar sin escribir:
 
 ```http
 POST /api/panel/payment-reminders/sync?dry_run=true&limit=25
+```
+
+Para diagnosticar una cuenta real sin barrer todas las sesiones:
+
+```http
+POST /api/panel/payment-reminders/sync?dry_run=true&cuenta={{CUENTA}}&company_id=1
+POST /api/panel/payment-reminders/sync?dry_run=false&cuenta={{CUENTA}}&company_id=1
+POST /api/panel/payment-reminders/sync?dry_run=true&folio={{FOLIO}}&company_id=1
 ```
 
 El `sync` recorre `chat_sessions` locales y solo programa recordatorios para sesiones que tengan folio/cuenta resoluble y datos confiables en Bridge. `run-due` no descubre clientes nuevos: solo procesa recordatorios ya existentes en `payment_reminders`.
@@ -152,6 +166,26 @@ ORDER BY created_at DESC;
 
 ## Logs a revisar
 
+- `payment_reminders_scheduler_enabled`
+- `payment_reminders_scheduler_disabled`
+- `payment_reminders_job_started`
+- `payment_reminder_candidate_sync_started`
+- `payment_reminder_candidate_sync_finished`
+- `payment_reminders_job_finished`
+- `payment_reminders_job_failed`
+- `payment_reminder.create.start`
+- `payment_reminder.bridge.loaded`
+- `payment_reminder.normalized`
+- `payment_reminder.validation.ok`
+- `payment_reminder.validation.failed`
+- `payment_reminder.create.insert.start`
+- `payment_reminder.create.inserted`
+- `payment_reminder.create.commit.ok`
+- `payment_reminder.create.failed`
+- `payment_reminder.send.attempt`
+- `payment_reminder.send.accepted`
+- `payment_reminder.send.failed`
+- `payment_reminder.cancelled_settled`
 - `payment_reminder_bridge_lookup`
 - `payment_reminder_bridge_error`
 - `payment_reminder_missing_bridge_fields`
@@ -163,6 +197,8 @@ ORDER BY created_at DESC;
 - `whatsapp_send_failed`
 
 Los logs enmascaran telefono, folio y cuenta. No se loguean tokens ni payloads completos.
+
+Las omisiones esperadas deben aparecer con razon explicita: `missing_chat_session`, `ambiguous_chat_session`, `chat_session_account_mismatch`, `missing_bridge_fields`, `bridge_error`, `not_due`, `paid_or_settled`, `already_sent`, `template_missing` o `meta_error`.
 
 ## Si Bridge falla
 
@@ -186,3 +222,77 @@ El intento queda como `failed` con `meta_error` y mensaje sanitizado. No se expo
 - Confirmar que Bridge entregue saldo y fecha de venta confiables.
 - Confirmar que en produccion el ciclo se derive de fecha base de Bridge; usar `PAYMENT_REMINDER_DEFAULT_WEEKDAY` solo como fallback temporal y documentado.
 - Ejecutar primero varios ciclos en `PAYMENT_REMINDERS_DRY_RUN=true`.
+- Confirmar que el proceso de produccion carga `app.main:app`, porque el scheduler se registra ahi.
+- Confirmar `PAYMENT_REMINDERS_ENABLED=true`, `PAYMENT_REMINDERS_DRY_RUN=false`, `PAYMENT_REMINDER_COMPANY_ID`, `PAYMENT_REMINDER_SYNC_LIMIT`, `PAYMENT_REMINDER_SEND_HOUR`, `PAYMENT_REMINDER_SCHEDULER_INTERVAL_MINUTES`, `META_PAYMENT_PENDING_TEMPLATE_NAME`, `META_PAYMENT_OVERDUE_TEMPLATE_NAME`, `META_NEXT_PAYMENT_TEMPLATE_NAME`, `META_TEMPLATE_LANGUAGE`, `SIGA_BRIDGE_BASE_URL`, `SIGA_BRIDGE_TOKEN` y `SIGA_BRIDGE_ENABLED`.
+- Confirmar zona horaria del servidor, API y DB.
+- Confirmar que las plantillas Meta esten aprobadas y que la app tenga permisos activos.
+- Confirmar que endpoints manuales esten protegidos por sesion y rol.
+- Confirmar que errores de Bridge, Meta y DB quedan visibles en logs sin tokens, cookies ni headers sensibles.
+
+## Diagnostico con datos reales
+
+El normalizador acepta tanto respuestas Bridge envueltas como `{ok,data,error,meta}` como respuestas desempaquetadas. Para una cuenta real como `1260522`, estos campos son validos y no deben romper el flujo:
+
+- `account.account` como `"1260522"` sin prefijo.
+- `company_id` numerico.
+- `customer.phones` como lista.
+- `customer.name` con espacios y nombres completos.
+- `account.plan.term` igual a `0`.
+- `account.plan.minimum_payment` como numero.
+- `account.amounts.stored_balance` mayor a `0`.
+- `account.amounts.overdue` y `payment_summary.overdue` negativos.
+- `account.amounts.late_fee` negativo.
+- `account.sale_date` como `YYYY-MM-DD HH:MM:SS`.
+- `account.status` como `Sano` y `account.process` como `Cobranza`.
+- `last_payment_date` como `YYYY-MM-DD`.
+
+Si Bridge confirma saldo `<= 0` o estado pagado/liquidado/saldado, no se envia y se cancelan futuros. Si Bridge no confirma pago y existe saldo pendiente, se evalua como `no_pagado`; un comprobante subido no se interpreta como pago.
+
+## SQL de verificacion
+
+Sesiones locales con folio o cuenta:
+
+```sql
+SELECT id, phone, folio, last_message_at, JSON_EXTRACT(extra_json, '$.siga_bridge') AS siga_bridge
+FROM chat_sessions
+WHERE folio IS NOT NULL
+   OR JSON_EXTRACT(extra_json, '$.no_cuenta') IS NOT NULL
+   OR JSON_EXTRACT(extra_json, '$.cuenta') IS NOT NULL
+   OR JSON_EXTRACT(extra_json, '$.siga_bridge.verification_cache.snapshot.no_cuenta') IS NOT NULL
+ORDER BY last_message_at DESC
+LIMIT 50;
+```
+
+Recordatorios de una cuenta:
+
+```sql
+SELECT *
+FROM payment_reminders
+WHERE cuenta = '1260522'
+ORDER BY created_at DESC;
+```
+
+Estado operativo:
+
+```sql
+SELECT status, reminder_type, scheduled_for, sent_at, error_code, error_message_sanitized
+FROM payment_reminders
+WHERE cuenta = '1260522'
+ORDER BY id DESC;
+```
+
+Estructura:
+
+```sql
+SHOW CREATE TABLE payment_reminders;
+SHOW FULL COLUMNS FROM payment_reminders;
+```
+
+Skips y fallos:
+
+```sql
+SELECT status, error_code, error_message_sanitized, COUNT(*) total
+FROM payment_reminders
+GROUP BY status, error_code, error_message_sanitized
+ORDER BY total DESC;
+```

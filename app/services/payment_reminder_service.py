@@ -58,6 +58,7 @@ REASON_MISSING_BRIDGE_FIELDS = "missing_bridge_fields"
 REASON_PAID_OR_SETTLED = "paid_or_settled"
 REASON_TEMPLATE_MISSING = "template_missing"
 REASON_META_ERROR = "meta_error"
+REASON_AUDIT_FIELDS_MISSING = "audit_fields_missing"
 
 OMISSION_REASONS = {
     CLASS_MISSING_CHAT_SESSION,
@@ -75,6 +76,7 @@ OMISSION_REASONS = {
 REMINDER_PAYMENT_PENDING = "payment_pending"
 REMINDER_PAYMENT_OVERDUE = "payment_overdue"
 REMINDER_NEXT_PAYMENT = "next_payment"
+REMINDER_AUDIT = "payment_audit"
 
 ACTIVE_REMINDER_STATUSES = {
     STATUS_SCHEDULED,
@@ -704,13 +706,22 @@ def _scheduled_datetime(due_date: date) -> datetime:
 
 
 def _collection_records_from_payload(payload: Any) -> list[Mapping[str, Any]]:
+    payload = _unwrap_bridge_payload(payload)
     if isinstance(payload, list):
         raw_items = payload
     elif isinstance(payload, Mapping):
         raw_items = payload.get("items") or payload.get("accounts") or payload.get("data") or []
+        if isinstance(raw_items, Mapping):
+            raw_items = raw_items.get("items") or raw_items.get("accounts") or [raw_items]
     else:
         raw_items = []
     return [item for item in raw_items if isinstance(item, Mapping)]
+
+
+def _unwrap_bridge_payload(payload: Any) -> Any:
+    if isinstance(payload, Mapping) and {"ok", "data"}.issubset(payload.keys()):
+        return payload.get("data") if payload.get("ok") is not False else None
+    return payload
 
 
 def _deep_first(data: Any, keys: set[str]) -> Any:
@@ -735,6 +746,8 @@ def _merge_record(
     account_payload: Any,
     payments_payload: Any,
 ) -> dict[str, Any]:
+    account_payload = _unwrap_bridge_payload(account_payload)
+    payments_payload = _unwrap_bridge_payload(payments_payload)
     merged: dict[str, Any] = dict(collection_record or {})
     if isinstance(account_payload, list):
         account_payload = next((item for item in account_payload if isinstance(item, Mapping)), None)
@@ -944,6 +957,15 @@ async def fetch_bridge_account_snapshot(
     payments_payload: Any = None
 
     try:
+        logger.info(
+            "payment_reminder.create.start",
+            extra={
+                "account": _mask(cuenta),
+                "folio_masked": _mask(folio),
+                "company_id": company_id,
+                "source": "siga_bridge",
+            },
+        )
         collection_payload = await client.get_collections(
             company_id,
             cuenta=cuenta,
@@ -975,12 +997,27 @@ async def fetch_bridge_account_snapshot(
                 bypass_cache=True,
             )
 
+        account_data = _unwrap_bridge_payload(account_payload)
+        customer_data = account_data.get("customer") if isinstance(account_data, Mapping) else None
+        account_node = account_data.get("account") if isinstance(account_data, Mapping) else None
+        phones = customer_data.get("phones") if isinstance(customer_data, Mapping) else None
+        logger.info(
+            "payment_reminder.bridge.loaded",
+            extra={
+                "account": _mask(resolved_cuenta or cuenta),
+                "company_id": company_id,
+                "has_collection": bool(collection_record),
+                "has_account": bool(account_node or account_data),
+                "has_customer": isinstance(customer_data, Mapping),
+                "phones_count": len(phones) if isinstance(phones, list) else 0,
+            },
+        )
         merged = _merge_record(collection_record, account_payload, payments_payload)
         if resolved_cuenta and merged.get("no_cuenta") in (None, ""):
             merged["no_cuenta"] = resolved_cuenta
         normalized = normalize_collection_record(
             merged,
-            payments=normalize_payments(payments_payload),
+            payments=normalize_payments(_unwrap_bridge_payload(payments_payload)),
             source="siga_bridge",
             bridge_status="ok",
             prefer_payment_total=True,
@@ -991,6 +1028,20 @@ async def fetch_bridge_account_snapshot(
             company_id=company_id,
             fallback_cuenta=resolved_cuenta,
             fallback_folio=folio,
+        )
+        logger.info(
+            "payment_reminder.normalized",
+            extra={
+                "company_id": company_id,
+                "account": _mask(snapshot.cuenta),
+                "phone_masked": _mask(snapshot.phone),
+                "minimum_payment": str(snapshot.minimum_payment) if snapshot.minimum_payment is not None else None,
+                "balance": str(snapshot.balance) if snapshot.balance is not None else None,
+                "status": snapshot.account_status,
+                "account_process": snapshot.process,
+                "payment_status": snapshot.payment_status,
+                "sale_date": snapshot.sale_date.isoformat() if snapshot.sale_date else None,
+            },
         )
         logger.info(
             "payment_reminder_bridge_lookup",
@@ -1004,6 +1055,14 @@ async def fetch_bridge_account_snapshot(
                 "missing_fields": snapshot.missing_fields or [],
             },
         )
+        logger.info(
+            "payment_reminder.validation.ok" if not snapshot.missing_fields else "payment_reminder.validation.failed",
+            extra={
+                "account": _mask(snapshot.cuenta),
+                "company_id": company_id,
+                "missing_fields": snapshot.missing_fields or [],
+            },
+        )
         return snapshot
     except SigaBridgeError as exc:
         logger.warning(
@@ -1014,6 +1073,25 @@ async def fetch_bridge_account_snapshot(
                 "folio_masked": _mask(folio),
                 "error_type": exc.__class__.__name__,
                 "status_code": getattr(exc, "status_code", None),
+            },
+        )
+        return BridgeAccountSnapshot(
+            bridge_found=False,
+            company_id=company_id,
+            cuenta=cuenta,
+            folio=folio,
+            missing_fields=["bridge_error"],
+            error_code="bridge_error",
+            error_message_sanitized=exc.__class__.__name__,
+        )
+    except Exception as exc:
+        logger.exception(
+            "payment_reminder_bridge_error",
+            extra={
+                "company_id": company_id,
+                "cuenta_masked": _mask(cuenta),
+                "folio_masked": _mask(folio),
+                "error_type": exc.__class__.__name__,
             },
         )
         return BridgeAccountSnapshot(
@@ -1063,7 +1141,11 @@ def _response_meta_message_id(response: Any) -> str | None:
         return None
     try:
         payload = response.json()
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "payment_reminder_meta_response_parse_failed",
+            extra={"error_type": exc.__class__.__name__},
+        )
         return None
     if not isinstance(payload, Mapping):
         return None
@@ -1238,7 +1320,167 @@ def upsert_scheduled_reminder(
         dry_run=False,
     )
     db.add(reminder)
+    db.flush()
+    logger.info(
+        "payment_reminder.create.inserted",
+        extra={
+            "payment_reminder_id": getattr(reminder, "id", None),
+            "account": _mask(snapshot.cuenta),
+            "session_id": session_id,
+            "status": reminder.status,
+            "scheduled_for": reminder.scheduled_for.isoformat() if reminder.scheduled_for else None,
+            "reminder_type": reminder_type,
+        },
+    )
     return reminder, STATUS_SCHEDULED
+
+
+def _audit_status_for_reason(classification: str | None, reason: str | None) -> str:
+    canonical = _canonical_omission_reason(classification, reason)
+    if canonical in {CLASS_BRIDGE_ERROR, REASON_META_ERROR, REASON_TEMPLATE_MISSING}:
+        return STATUS_FAILED
+    if canonical == REASON_PAID_OR_SETTLED or classification == CLASS_SETTLED:
+        return STATUS_CANCELLED_SETTLED
+    return STATUS_SKIPPED
+
+
+def _audit_reminder_type(reminder_type: str | None) -> str:
+    return reminder_type or REMINDER_AUDIT
+
+
+def _audit_error_message(
+    *,
+    classification: str | None,
+    reason: str | None,
+    missing_fields: list[str] | None,
+    error_message: str | None = None,
+) -> str | None:
+    parts = []
+    canonical = _canonical_omission_reason(classification, reason)
+    if canonical:
+        parts.append(canonical)
+    elif reason:
+        parts.append(str(reason))
+    elif classification:
+        parts.append(str(classification))
+    if missing_fields:
+        parts.append("missing_fields:" + ",".join(missing_fields))
+    if error_message:
+        parts.append(str(error_message))
+    message = " | ".join(part for part in parts if part)
+    return message[:255] if message else None
+
+
+def record_payment_reminder_audit(
+    db: Session,
+    *,
+    snapshot: BridgeAccountSnapshot,
+    schedule: PaymentSchedule | None,
+    classification: str | None,
+    reason: str | None,
+    reminder_type: str | None = None,
+    template_name: str | None = None,
+    session_id: int | None = None,
+    dry_run: bool = False,
+) -> PaymentReminder | None:
+    if dry_run:
+        return None
+
+    now = mexico_now_naive()
+    due_date = schedule.due_date if schedule else now.date()
+    scheduled_for = _scheduled_datetime(due_date) if schedule else now
+    cuenta = (
+        snapshot.cuenta
+        or snapshot.account_reference_formatted
+        or snapshot.account_reference_raw
+    )
+    if not cuenta:
+        logger.warning(
+            "payment_reminder.audit.skipped",
+            extra={
+                "reason": REASON_AUDIT_FIELDS_MISSING,
+                "classification": classification,
+                "folio_masked": _mask(snapshot.folio),
+                "phone_masked": _mask(snapshot.phone),
+            },
+        )
+        return None
+
+    audit_type = _audit_reminder_type(reminder_type)
+    canonical_reason = _canonical_omission_reason(classification, reason) or reason or classification
+    status = _audit_status_for_reason(classification, reason)
+    logger.info(
+        "payment_reminder.create.insert.start",
+        extra={
+            "account": _mask(cuenta),
+            "session_id": session_id,
+            "status": status,
+            "scheduled_for": scheduled_for.isoformat(),
+            "reminder_type": audit_type,
+            "skip_reason": canonical_reason,
+        },
+    )
+
+    existing = _existing_reminder(
+        db,
+        cuenta=cuenta,
+        due_date=due_date,
+        reminder_type=audit_type,
+    )
+    error_message = _audit_error_message(
+        classification=classification,
+        reason=reason,
+        missing_fields=snapshot.missing_fields or [],
+        error_message=snapshot.error_message_sanitized,
+    )
+    if existing:
+        reminder = existing
+        reminder.session_id = session_id if session_id is not None else reminder.session_id
+        reminder.phone = snapshot.phone or reminder.phone or "unknown"
+        reminder.folio = snapshot.folio or reminder.folio
+        reminder.next_due_date = schedule.next_due_date if schedule else reminder.next_due_date
+        reminder.scheduled_for = scheduled_for
+        reminder.template_name = template_name
+        reminder.status = status
+        reminder.updated_at = now
+    else:
+        reminder = PaymentReminder(
+            session_id=session_id,
+            phone=snapshot.phone or "unknown",
+            folio=snapshot.folio,
+            cuenta=cuenta,
+            due_date=due_date,
+            next_due_date=schedule.next_due_date if schedule else None,
+            scheduled_for=scheduled_for,
+            reminder_type=audit_type,
+            template_name=template_name,
+            status=status,
+            dry_run=False,
+        )
+        db.add(reminder)
+
+    reminder.saldo_snapshot = snapshot.balance
+    reminder.monto_minimo_snapshot = snapshot.minimum_payment
+    reminder.bridge_found = snapshot.bridge_found
+    reminder.bridge_snapshot_hash = snapshot.snapshot_hash
+    reminder.error_code = str(canonical_reason or classification or reason or STATUS_SKIPPED)[:80]
+    reminder.error_message_sanitized = error_message
+    if status == STATUS_CANCELLED_SETTLED:
+        reminder.cancelled_at = now
+    db.flush()
+    logger.info(
+        "payment_reminder.create.inserted",
+        extra={
+            "payment_reminder_id": getattr(reminder, "id", None),
+            "account": _mask(cuenta),
+            "session_id": session_id,
+            "status": reminder.status,
+            "scheduled_for": reminder.scheduled_for.isoformat() if reminder.scheduled_for else None,
+            "reminder_type": reminder.reminder_type,
+            "skip_reason": canonical_reason,
+        },
+    )
+    return reminder
 
 
 def _mark_result(
@@ -1643,7 +1885,16 @@ async def process_due_payment_reminder(
             reminder.monto_minimo_snapshot = snapshot.minimum_payment
             _mark_result(reminder, status=STATUS_CANCELLED_SETTLED)
             if snapshot.cuenta:
-                _cancel_future_settled(db, cuenta=snapshot.cuenta, current_id=reminder.id)
+                cancelled_count = _cancel_future_settled(db, cuenta=snapshot.cuenta, current_id=reminder.id)
+                logger.info(
+                    "payment_reminder.cancelled_settled",
+                    extra={
+                        "reminder_id": getattr(reminder, "id", None),
+                        "account": _mask(snapshot.cuenta),
+                        "cancelled_count": cancelled_count,
+                        "reason": REASON_PAID_OR_SETTLED,
+                    },
+                )
         return result
 
     if snapshot.missing_fields:
@@ -1763,7 +2014,16 @@ async def process_due_payment_reminder(
 
     if classification == CLASS_SETTLED:
         _mark_result(reminder, status=STATUS_CANCELLED_SETTLED)
-        _cancel_future_settled(db, cuenta=snapshot.cuenta, current_id=reminder.id)
+        cancelled_count = _cancel_future_settled(db, cuenta=snapshot.cuenta, current_id=reminder.id)
+        logger.info(
+            "payment_reminder.cancelled_settled",
+            extra={
+                "reminder_id": getattr(reminder, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "cancelled_count": cancelled_count,
+                "reason": REASON_PAID_OR_SETTLED,
+            },
+        )
         result["reason"] = REASON_PAID_OR_SETTLED
         return result
 
@@ -1808,6 +2068,16 @@ async def process_due_payment_reminder(
         snapshot=snapshot,
         schedule=schedule,
     )
+    logger.info(
+        "payment_reminder.send.attempt",
+        extra={
+            "reminder_id": getattr(reminder, "id", None),
+            "account": _mask(snapshot.cuenta),
+            "phone_masked": _mask(snapshot.phone),
+            "template_name": template_name,
+            "reminder_type": reminder_type,
+        },
+    )
     try:
         response = await send_template_message(
             snapshot.phone,
@@ -1832,6 +2102,17 @@ async def process_due_payment_reminder(
                 "error_type": exc.__class__.__name__,
             },
         )
+        logger.warning(
+            "payment_reminder.send.failed",
+            extra={
+                "reminder_id": getattr(reminder, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "phone_masked": _mask(snapshot.phone),
+                "template_name": template_name,
+                "error_type": exc.__class__.__name__,
+                "skip_reason": REASON_META_ERROR,
+            },
+        )
         result["reason"] = REASON_META_ERROR
         return result
     status_code = getattr(response, "status_code", None)
@@ -1842,12 +2123,33 @@ async def process_due_payment_reminder(
             error_code=REASON_META_ERROR,
             error_message=f"meta_status_{status_code or 'none'}",
         )
+        logger.warning(
+            "payment_reminder.send.failed",
+            extra={
+                "reminder_id": getattr(reminder, "id", None),
+                "account": _mask(snapshot.cuenta),
+                "phone_masked": _mask(snapshot.phone),
+                "template_name": template_name,
+                "http_status": status_code,
+                "skip_reason": REASON_META_ERROR,
+            },
+        )
         result["reason"] = REASON_META_ERROR
         return result
 
     reminder.reminder_type = reminder_type
     reminder.meta_message_id = _response_meta_message_id(response)
     _mark_result(reminder, status=STATUS_SENT)
+    logger.info(
+        "payment_reminder.send.accepted",
+        extra={
+            "reminder_id": getattr(reminder, "id", None),
+            "account": _mask(snapshot.cuenta),
+            "phone_masked": _mask(snapshot.phone),
+            "template_name": template_name,
+            "meta_message_id": reminder.meta_message_id,
+        },
+    )
     result["conversation_message_created"] = False
     try:
         message = await _record_sent_conversation_message(
@@ -1979,6 +2281,8 @@ async def sync_payment_reminder_candidates(
     company_id: int | None = None,
     limit: int | None = None,
     dry_run: bool | None = None,
+    cuenta: str | None = None,
+    folio: str | None = None,
     client: Any | None = None,
     today: date | None = None,
 ) -> dict[str, Any]:
@@ -1989,6 +2293,292 @@ async def sync_payment_reminder_candidates(
     client = client or get_siga_bridge_client()
 
     results = []
+
+    def add_result(
+        result: dict[str, Any],
+        *,
+        snapshot: BridgeAccountSnapshot | None = None,
+        schedule: PaymentSchedule | None = None,
+        source: str = "sync",
+        audit: bool = False,
+    ) -> dict[str, Any]:
+        if audit and snapshot is not None:
+            audit_row = record_payment_reminder_audit(
+                db,
+                snapshot=snapshot,
+                schedule=schedule,
+                classification=str(result.get("classification") or ""),
+                reason=str(result.get("reason") or ""),
+                reminder_type=result.get("reminder_type"),
+                template_name=result.get("template_name"),
+                session_id=result.get("session_id"),
+                dry_run=dry_run,
+            )
+            if audit_row is not None:
+                result["payment_reminder_id"] = getattr(audit_row, "id", None)
+                result["audited"] = True
+        results.append(result)
+        _log_payment_reminder_omission(source=source, result=result)
+        return result
+
+    def build_single_result(
+        *,
+        snapshot: BridgeAccountSnapshot,
+        session_resolution: ChatSessionResolution,
+        stats: ReminderStats,
+        schedule: PaymentSchedule | None,
+        classification: str,
+        template_name: str | None,
+        reminder_type: str | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return _build_process_result(
+            snapshot=snapshot,
+            schedule=schedule,
+            classification=classification,
+            template_name=template_name,
+            reminder_type=reminder_type,
+            dry_run=dry_run,
+            session_resolution=session_resolution,
+            reminder_stats=stats,
+            reason=reason,
+        )
+
+    if cuenta or folio:
+        logger.info(
+            "payment_reminder_candidate_sync_started",
+            extra={
+                "company_id": company_id,
+                "dry_run": dry_run,
+                "limit": 1,
+                "source": "single_account",
+                "account": _mask(cuenta),
+                "folio_masked": _mask(folio),
+                "chat_sessions_scanned": 0,
+                "scan_limit": 0,
+            },
+        )
+        snapshot = await fetch_bridge_account_snapshot(
+            cuenta=cuenta,
+            folio=folio,
+            company_id=company_id,
+            client=client,
+        )
+        session_resolution = resolve_chat_session_for_reminder(
+            db,
+            snapshot=snapshot,
+            phone=snapshot.phone,
+            folio=snapshot.folio or folio,
+            cuenta=snapshot.account_reference_formatted or snapshot.cuenta or cuenta,
+        )
+        stats = _reminder_stats(
+            db,
+            cuenta=snapshot.cuenta or cuenta,
+            session_id=session_resolution.session_id,
+        )
+
+        try:
+            if snapshot.error_code:
+                add_result(
+                    build_single_result(
+                        snapshot=snapshot,
+                        session_resolution=session_resolution,
+                        stats=stats,
+                        schedule=None,
+                        classification=CLASS_BRIDGE_ERROR,
+                        template_name=None,
+                        reminder_type=None,
+                        reason=snapshot.error_message_sanitized or snapshot.error_code,
+                    ),
+                    snapshot=snapshot,
+                    source="sync_account",
+                    audit=True,
+                )
+            elif snapshot.settled:
+                cancelled_count = 0
+                if not dry_run and snapshot.cuenta:
+                    cancelled_count = _cancel_future_settled(db, cuenta=snapshot.cuenta)
+                    logger.info(
+                        "payment_reminder.cancelled_settled",
+                        extra={
+                            "account": _mask(snapshot.cuenta),
+                            "cancelled_count": cancelled_count,
+                            "reason": REASON_PAID_OR_SETTLED,
+                            "source": "sync_account",
+                        },
+                    )
+                result = build_single_result(
+                    snapshot=snapshot,
+                    session_resolution=session_resolution,
+                    stats=stats,
+                    schedule=None,
+                    classification=CLASS_SETTLED,
+                    template_name=None,
+                    reminder_type=None,
+                    reason=REASON_PAID_OR_SETTLED,
+                )
+                result["cancelled_count"] = cancelled_count
+                add_result(result, snapshot=snapshot, source="sync_account", audit=True)
+            elif snapshot.missing_fields:
+                add_result(
+                    build_single_result(
+                        snapshot=snapshot,
+                        session_resolution=session_resolution,
+                        stats=stats,
+                        schedule=None,
+                        classification=CLASS_INSUFFICIENT_BRIDGE_DATA,
+                        template_name=None,
+                        reminder_type=None,
+                        reason=REASON_MISSING_BRIDGE_FIELDS,
+                    ),
+                    snapshot=snapshot,
+                    source="sync_account",
+                    audit=True,
+                )
+            elif not session_resolution.found:
+                add_result(
+                    build_single_result(
+                        snapshot=snapshot,
+                        session_resolution=session_resolution,
+                        stats=stats,
+                        schedule=None,
+                        classification=session_resolution.reason,
+                        template_name=None,
+                        reminder_type=None,
+                        reason=session_resolution.reason,
+                    ),
+                    snapshot=snapshot,
+                    source="sync_account",
+                    audit=True,
+                )
+            else:
+                try:
+                    schedule = calculate_snapshot_due_schedule(snapshot, today=today)
+                except PaymentScheduleError as exc:
+                    add_result(
+                        build_single_result(
+                            snapshot=snapshot,
+                            session_resolution=session_resolution,
+                            stats=stats,
+                            schedule=None,
+                            classification=CLASS_INSUFFICIENT_BRIDGE_DATA,
+                            template_name=None,
+                            reminder_type=None,
+                            reason=str(exc),
+                        ),
+                        snapshot=snapshot,
+                        source="sync_account",
+                        audit=True,
+                    )
+                else:
+                    classification = classify_reminder_case(
+                        bridge_found=snapshot.bridge_found,
+                        missing_fields=snapshot.missing_fields,
+                        payment_status=snapshot.payment_status,
+                        due_date=schedule.due_date,
+                        today=today,
+                    )
+                    template_name, reminder_type = _template_for_classification(classification)
+                    if classification in {CLASS_DUE_TODAY_UNPAID, CLASS_OVERDUE_UNPAID} and not template_name:
+                        add_result(
+                            build_single_result(
+                                snapshot=snapshot,
+                                session_resolution=session_resolution,
+                                stats=stats,
+                                schedule=schedule,
+                                classification=classification,
+                                template_name=None,
+                                reminder_type=reminder_type,
+                                reason=REASON_TEMPLATE_MISSING,
+                            ),
+                            snapshot=snapshot,
+                            schedule=schedule,
+                            source="sync_account",
+                            audit=True,
+                        )
+                    else:
+                        if not reminder_type:
+                            reminder_type = REMINDER_PAYMENT_PENDING
+                        logger.info(
+                            "payment_reminder.create.insert.start",
+                            extra={
+                                "account": _mask(snapshot.cuenta),
+                                "session_id": session_resolution.session_id,
+                                "status": STATUS_SCHEDULED,
+                                "scheduled_for": _scheduled_datetime(schedule.due_date).isoformat(),
+                                "reminder_type": reminder_type,
+                            },
+                        )
+                        reminder, status = upsert_scheduled_reminder(
+                            db,
+                            snapshot=snapshot,
+                            schedule=schedule,
+                            reminder_type=reminder_type,
+                            template_name=template_name,
+                            session_id=session_resolution.session_id,
+                            dry_run=dry_run,
+                        )
+                        result = build_single_result(
+                            snapshot=snapshot,
+                            session_resolution=session_resolution,
+                            stats=stats,
+                            schedule=schedule,
+                            classification=status if status in {CLASS_ALREADY_SCHEDULED, CLASS_ALREADY_SENT} else classification,
+                            template_name=template_name,
+                            reminder_type=reminder_type,
+                            reason=status,
+                        )
+                        if reminder is not None:
+                            result["payment_reminder_id"] = getattr(reminder, "id", None)
+                        add_result(result, snapshot=snapshot, schedule=schedule, source="sync_account")
+
+            if not dry_run:
+                db.commit()
+                logger.info(
+                    "payment_reminder.create.commit.ok",
+                    extra={
+                        "company_id": company_id,
+                        "account": _mask(snapshot.cuenta or cuenta),
+                        "source": "sync_account",
+                        "synced": len(results),
+                    },
+                )
+        except Exception as exc:
+            if not dry_run:
+                db.rollback()
+            logger.exception(
+                "payment_reminder.create.failed",
+                extra={
+                    "company_id": company_id,
+                    "account": _mask(snapshot.cuenta or cuenta),
+                    "source": "sync_account",
+                    "error_type": exc.__class__.__name__,
+                },
+            )
+            raise
+
+        counts = _reason_counts(results)
+        logger.info(
+            "payment_reminder_candidate_sync_finished",
+            extra={
+                "company_id": company_id,
+                "dry_run": dry_run,
+                "source": "single_account",
+                "chat_sessions_scanned": 0,
+                "chat_sessions_with_context": 1,
+                "synced": len(results),
+                "reason_counts": counts,
+            },
+        )
+        return {
+            "synced": len(results),
+            "chat_sessions_scanned": 0,
+            "chat_sessions_with_context": 1,
+            "reason_counts": counts,
+            "source": "single_account",
+            "results": results,
+        }
+
     scan_limit = max(limit * 20, 250)
     sessions = _chat_session_payment_candidates(db, limit=scan_limit)
     sessions_with_context = 0
@@ -2002,10 +2592,6 @@ async def sync_payment_reminder_candidates(
             "scan_limit": scan_limit,
         },
     )
-
-    def add_result(result: dict[str, Any]) -> None:
-        results.append(result)
-        _log_payment_reminder_omission(source="sync", result=result)
 
     for session in sessions:
         if len(results) >= limit:
@@ -2058,12 +2644,23 @@ async def sync_payment_reminder_candidates(
                     session_resolution=session_resolution,
                     reminder_stats=stats,
                     reason=snapshot.error_message_sanitized or snapshot.error_code,
-                )
+                ),
+                snapshot=snapshot,
+                audit=True,
             )
             continue
         if snapshot.settled:
             if not dry_run and snapshot.cuenta:
-                _cancel_future_settled(db, cuenta=snapshot.cuenta)
+                cancelled_count = _cancel_future_settled(db, cuenta=snapshot.cuenta)
+                logger.info(
+                    "payment_reminder.cancelled_settled",
+                    extra={
+                        "account": _mask(snapshot.cuenta),
+                        "cancelled_count": cancelled_count,
+                        "reason": REASON_PAID_OR_SETTLED,
+                        "source": "sync",
+                    },
+                )
             add_result(
                 _build_process_result(
                     snapshot=snapshot,
@@ -2075,7 +2672,9 @@ async def sync_payment_reminder_candidates(
                     session_resolution=session_resolution,
                     reminder_stats=stats,
                     reason=REASON_PAID_OR_SETTLED,
-                )
+                ),
+                snapshot=snapshot,
+                audit=True,
             )
             continue
         if snapshot.missing_fields:
@@ -2090,7 +2689,9 @@ async def sync_payment_reminder_candidates(
                     session_resolution=session_resolution,
                     reminder_stats=stats,
                     reason=REASON_MISSING_BRIDGE_FIELDS,
-                )
+                ),
+                snapshot=snapshot,
+                audit=True,
             )
             continue
 
@@ -2106,7 +2707,9 @@ async def sync_payment_reminder_candidates(
                     session_resolution=session_resolution,
                     reminder_stats=stats,
                     reason=session_resolution.reason,
-                )
+                ),
+                snapshot=snapshot,
+                audit=True,
             )
             continue
 
@@ -2124,7 +2727,9 @@ async def sync_payment_reminder_candidates(
                     session_resolution=session_resolution,
                     reminder_stats=stats,
                     reason=REASON_MISSING_BRIDGE_FIELDS,
-                )
+                ),
+                snapshot=snapshot,
+                audit=True,
             )
             continue
 
@@ -2136,9 +2741,37 @@ async def sync_payment_reminder_candidates(
             today=today,
         )
         template_name, reminder_type = _template_for_classification(classification)
+        if classification in {CLASS_DUE_TODAY_UNPAID, CLASS_OVERDUE_UNPAID} and not template_name:
+            add_result(
+                _build_process_result(
+                    snapshot=snapshot,
+                    schedule=schedule,
+                    classification=classification,
+                    template_name=None,
+                    reminder_type=reminder_type,
+                    dry_run=dry_run,
+                    session_resolution=session_resolution,
+                    reminder_stats=stats,
+                    reason=REASON_TEMPLATE_MISSING,
+                ),
+                snapshot=snapshot,
+                schedule=schedule,
+                audit=True,
+            )
+            continue
         if not reminder_type:
             reminder_type = REMINDER_PAYMENT_PENDING
-        _, status = upsert_scheduled_reminder(
+        logger.info(
+            "payment_reminder.create.insert.start",
+            extra={
+                "account": _mask(snapshot.cuenta),
+                "session_id": session_resolution.session_id,
+                "status": STATUS_SCHEDULED,
+                "scheduled_for": _scheduled_datetime(schedule.due_date).isoformat(),
+                "reminder_type": reminder_type,
+            },
+        )
+        reminder, status = upsert_scheduled_reminder(
             db,
             snapshot=snapshot,
             schedule=schedule,
@@ -2158,10 +2791,32 @@ async def sync_payment_reminder_candidates(
             reminder_stats=stats,
             reason=status,
         )
+        if reminder is not None:
+            result["payment_reminder_id"] = getattr(reminder, "id", None)
         add_result(result)
 
     if not dry_run:
-        db.commit()
+        try:
+            db.commit()
+            logger.info(
+                "payment_reminder.create.commit.ok",
+                extra={
+                    "company_id": company_id,
+                    "source": "sync",
+                    "synced": len(results),
+                },
+            )
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "payment_reminder.create.failed",
+                extra={
+                    "company_id": company_id,
+                    "source": "sync",
+                    "error_type": exc.__class__.__name__,
+                },
+            )
+            raise
     counts = _reason_counts(results)
     logger.info(
         "payment_reminder_candidate_sync_finished",
