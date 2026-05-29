@@ -1306,6 +1306,25 @@ async def _record_sent_conversation_message(
     return message
 
 
+def _mark_chat_session_cobranza(db: Session, chat_session: ChatSessions | None) -> None:
+    if not chat_session:
+        return
+    now = mexico_now_naive()
+    if hasattr(chat_session, "state"):
+        current_state = getattr(chat_session, "state", None)
+        if current_state != "COBRANZA":
+            if hasattr(chat_session, "previous_state") and current_state:
+                chat_session.previous_state = current_state
+            chat_session.state = "COBRANZA"
+            if hasattr(chat_session, "updated_at"):
+                chat_session.updated_at = now
+            db.add(chat_session)
+        return
+    if hasattr(chat_session, "status") and getattr(chat_session, "status", None) != "COBRANZA":
+        chat_session.status = "COBRANZA"
+        db.add(chat_session)
+
+
 def _existing_reminder(
     db: Session,
     *,
@@ -2626,11 +2645,7 @@ async def process_due_payment_reminder(
         )
         result["conversation_message_error"] = REASON_MESSAGE_INSERT_FAILED
 
-    chat_session = session_resolution.session
-    if chat_session and chat_session.status != "COBRANZA":
-        chat_session.status = "COBRANZA"
-        db.add(chat_session)
-        # db.commit() is usually handled by the caller transaction
+    _mark_chat_session_cobranza(db, session_resolution.session)
 
     next_template, next_type = _template_for_classification(CLASS_NOT_DUE)
     next_schedule, next_scheduled_for = _next_reminder_schedule_after_send(

@@ -580,10 +580,13 @@ def chat_session(**overrides):
         "id": 1,
         "phone": "5214420001679",
         "folio": "990001",
+        "state": "ESPERA",
+        "previous_state": None,
         "extra_json": {},
         "last_message": None,
         "last_message_at": None,
         "last_message_id": None,
+        "updated_at": None,
         "unread_count": 0,
     }
     values.update(overrides)
@@ -1194,3 +1197,15 @@ def test_sent_reminder_is_saved_as_conversation_message(monkeypatch):
     assert session.last_message.startswith("Recordatorio de pago enviado")
     assert session.last_message_at is not None
     assert any(event.get("type") == "new_message" for event in events)
+
+
+def test_mark_chat_session_cobranza_uses_state_not_status():
+    db = FakeDb([])
+    session = chat_session(id=8, state="ESPERA")
+
+    payment_service._mark_chat_session_cobranza(db, session)
+
+    assert session.state == "COBRANZA"
+    assert session.previous_state == "ESPERA"
+    assert session.updated_at is not None
+    assert session in db.added
