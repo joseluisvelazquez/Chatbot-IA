@@ -293,6 +293,29 @@ function upsertConversation(session) {
     return true
 }
 
+function upsertExactConversation(session) {
+    const normalized = normalizeConversation(session)
+    if (!normalized) return false
+
+    const current = state.conversations.byId[normalized.id] || {}
+    state.conversations.byId[normalized.id] = {
+        ...current,
+        ...normalized,
+        id: normalized.id,
+        session_id: normalized.id,
+        no_cuenta: mergeAccountValues(current.no_cuenta, normalized.no_cuenta),
+        folios: mergeUniqueList(current.folios, current.folio, normalized.folios, normalized.folio),
+        display_name: normalized.name || current.name || normalized.phone || "Cliente sin nombre",
+    }
+
+    const exists = state.conversations.order.includes(normalized.id)
+    if (!exists) {
+        state.conversations.order.unshift(normalized.id)
+    }
+
+    return true
+}
+
 function moveConversationToTop(sessionId) {
     const id = toSessionId(sessionId)
     if (!id) return
@@ -780,6 +803,13 @@ export function dispatch(action) {
 
         case "conversations/upsert": {
             if (upsertConversation(action.payload)) {
+                state.conversations._version++
+            }
+            break
+        }
+
+        case "conversations/upsert_exact": {
+            if (upsertExactConversation(action.payload)) {
                 state.conversations._version++
             }
             break

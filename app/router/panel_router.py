@@ -1427,6 +1427,66 @@ def get_conversations(
     return response
 
 
+@router.get("/conversations/{session_id}", response_model=ConversationResponse)
+def get_conversation(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_panel_user),
+):
+    require_company_scope(user)
+
+    session = get_scoped_session_or_404(
+        db,
+        user,
+        session_id,
+        detail="Sesion no encontrada",
+    )
+
+    phone_key = normalize_conversation_phone(session.phone)
+    name = None
+    if phone_key:
+        venta = (
+            db.query(BitacoraVentas.tel_1, BitacoraVentas.nombre_completo)
+            .filter(
+                func.right(BitacoraVentas.tel_1, 10) == phone_key,
+                BitacoraVentas.id_emp_bv == user.empresa_id,
+            )
+            .order_by(desc(BitacoraVentas.id_venta_b))
+            .first()
+        )
+        if venta and venta.nombre_completo:
+            name = venta.nombre_completo.strip()
+
+    folio = str(session.folio) if session.folio else None
+    no_cuenta = None
+    if folio:
+        no_cuenta = resolve_cuentas_from_folios([folio], db, user).get(folio)
+        cached_siga = get_cached_verification(session, folio, allow_stale=True)
+        if not no_cuenta and isinstance(cached_siga, dict) and cached_siga.get("no_cuenta"):
+            no_cuenta = str(cached_siga["no_cuenta"])
+        name = name or bridge_customer_name_from_snapshot(cached_siga)
+
+    return ConversationResponse(
+        id=session.id,
+        phone=session.phone,
+        name=name,
+        last_message=session.last_message,
+        last_message_at=session.last_message_at,
+        unread_count=int(session.unread_count or 0),
+        no_cuenta=no_cuenta,
+        folio=folio,
+        folios=[folio] if folio else [],
+        status=classify_panel_status(
+            verification_data={"is_completed": False},
+            has_open_inconsistencia=False,
+            last_activity=session.last_message_at,
+            session_state=str(session.state or ""),
+            previous_state=str(session.previous_state or ""),
+        ),
+        last_customer_message_at=session.last_customer_message_at,
+    )
+
+
 # =========================================
 # Obtener mensajes (PAGINADO REAL)
 # =========================================

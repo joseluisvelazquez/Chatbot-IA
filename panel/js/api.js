@@ -188,6 +188,10 @@ export async function getConversations(limit = 500, offset = 0) {
     return apiRequest(`/panel/conversations?limit=${limit}&offset=${offset}`);
 }
 
+export async function getConversation(sessionId) {
+    return apiRequest(`/panel/conversations/${sessionId}`);
+}
+
 export async function getMessages(sessionId, limit = 30, offset = 0) {
     return apiRequest(`/panel/messages/${sessionId}?limit=${limit}&offset=${offset}`);
 }

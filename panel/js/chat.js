@@ -1,5 +1,6 @@
 import {
     getConversations,
+    getConversation,
     getMessages,
     markConversationRead,
     sendFileMessage,
@@ -85,6 +86,32 @@ function isPanelDebugEnabled() {
 function debugChat(label, payload = {}) {
     if (!isPanelDebugEnabled()) return
     console.debug(`[chat] ${label}`, payload)
+}
+
+async function ensureConversationLoaded(sessionId) {
+    const numericSessionId = Number(sessionId)
+    if (!Number.isFinite(numericSessionId) || numericSessionId <= 0) return null
+
+    const current = getState().conversations.byId[numericSessionId]
+    if (current) return current
+
+    const conversation = await getConversation(numericSessionId)
+    if (!conversation?.id && !conversation?.session_id) return null
+
+    dispatch({
+        type: "conversations/upsert_exact",
+        payload: conversation,
+    })
+
+    debugChat("explicit_conversation_fetched", {
+        session_id: numericSessionId,
+        phone: conversation.phone,
+        name: conversation.name,
+        folio: conversation.folio,
+        no_cuenta: conversation.no_cuenta,
+    })
+
+    return getState().conversations.byId[numericSessionId] || conversation
 }
 
 function setupRealtimeRecovery() {
@@ -478,7 +505,7 @@ export async function initConversationsPage() {
     let selected = null
 
     if (hasExplicitSessionId) {
-        const sessionFromStore = state.conversations.byId[explicitSessionId]
+        const sessionFromStore = await ensureConversationLoaded(explicitSessionId)
         selected = {
             sessionId: explicitSessionId,
             phone: sessionFromStore?.phone || null,
@@ -1719,10 +1746,19 @@ export async function loadChat(sessionId, phone, name = null) {
         return
     }
 
-    const state = getState()
-    const sessionInfo = state.conversations.byId[numericSessionId]
+    let state = getState()
+    let sessionInfo = state.conversations.byId[numericSessionId]
     const explicitUrlSessionId = Number(new URLSearchParams(window.location.search).get("session_id"))
     const isExplicitUrlLoad = Number.isFinite(explicitUrlSessionId) && explicitUrlSessionId === numericSessionId
+
+    if (!sessionInfo && isExplicitUrlLoad) {
+        try {
+            sessionInfo = await ensureConversationLoaded(numericSessionId)
+            state = getState()
+        } catch (error) {
+            console.warn("No se pudo cargar la conversacion explicita:", error)
+        }
+    }
 
     if (!sessionInfo) {
         console.warn("Intentando cargar sesion inexistente:", sessionId)
