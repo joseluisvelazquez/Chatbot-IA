@@ -725,6 +725,58 @@ def _session_folio_candidate(session: ChatSessions) -> str | None:
     return None
 
 
+def _valid_session_phone(session: ChatSessions) -> str | None:
+    normalized = normalize_phone_for_whatsapp(getattr(session, "phone", None))
+    return normalized if is_valid_whatsapp_phone(normalized) else None
+
+
+def _relation_match_resolution(
+    db: Session,
+    *,
+    folio: str | None,
+    cuenta: str | None,
+    limit: int | None = None,
+) -> ChatSessionResolution | None:
+    expected_folio = _normalized_folio(folio)
+    expected_account = _normalized_account(cuenta)
+    if not expected_folio and not expected_account:
+        return None
+
+    search_limit = int(limit or max((settings.PAYMENT_REMINDER_SYNC_LIMIT or 100) * 20, 250))
+    sessions = _chat_session_payment_candidates(db, limit=search_limit)
+    matches = [
+        session
+        for session in sessions
+        if _valid_session_phone(session)
+        and _session_relation_match(session, folio=folio, cuenta=cuenta) is True
+    ]
+    if not matches:
+        return ChatSessionResolution(None, False, CLASS_MISSING_CHAT_SESSION)
+
+    phone_groups: dict[str, list[ChatSessions]] = {}
+    for session in matches:
+        phone_key = _conversation_phone_key(getattr(session, "phone", None))
+        if phone_key:
+            phone_groups.setdefault(phone_key, []).append(session)
+
+    if not phone_groups:
+        return ChatSessionResolution(None, False, CLASS_MISSING_CHAT_SESSION, candidates_count=len(matches))
+    if len(phone_groups) > 1:
+        return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(matches))
+
+    selected = next(iter(phone_groups.values()))[0]
+    if not expected_folio and expected_account and _session_account_has_ambiguous_folios(selected, cuenta):
+        return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=len(matches))
+    matched_by = "folio_account" if expected_folio and expected_account else "folio" if expected_folio else "account"
+    return ChatSessionResolution(
+        selected,
+        True,
+        f"{matched_by}_match",
+        matched_by,
+        len(matches),
+    )
+
+
 def _json_path_has_value(path: str):
     value = func.JSON_UNQUOTE(func.JSON_EXTRACT(ChatSessions.extra_json, path))
     value = func.NULLIF(func.NULLIF(value, ""), "null")
@@ -791,8 +843,11 @@ def resolve_chat_session_for_reminder(
     folio: str | None = None,
     cuenta: str | None = None,
     session_id: int | None = None,
+    prefer_relation_phone: bool = False,
 ) -> ChatSessionResolution:
-    expected_phone = normalize_phone_for_whatsapp(phone or (snapshot.phone if snapshot else None))
+    expected_phone = normalize_phone_for_whatsapp(phone)
+    if not expected_phone and not prefer_relation_phone:
+        expected_phone = normalize_phone_for_whatsapp(snapshot.phone if snapshot else None)
     expected_folio = folio or (snapshot.folio if snapshot else None)
     expected_account = (
         cuenta
@@ -804,33 +859,45 @@ def resolve_chat_session_for_reminder(
         session = db.query(ChatSessions).filter(ChatSessions.id == session_id).first()
         if not session:
             return ChatSessionResolution(None, False, CLASS_MISSING_CHAT_SESSION)
-        phone_key = _conversation_phone_key(expected_phone)
-        session_phone_key = _conversation_phone_key(session.phone)
-        if phone_key and session_phone_key and phone_key != session_phone_key:
-            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
         relation_match = _session_relation_match(
             session,
             folio=expected_folio,
             cuenta=expected_account,
         )
         if relation_match is False:
-            return ChatSessionResolution(None, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
+            return ChatSessionResolution(session, False, CLASS_CHAT_SESSION_ACCOUNT_MISMATCH, candidates_count=1)
         if (
             relation_match is None
             and (expected_folio or expected_account)
             and _session_has_multiple_relations(session)
         ):
-            return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=1)
+            return ChatSessionResolution(session, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=1)
         if (
             not expected_folio
             and expected_account
             and _session_account_has_ambiguous_folios(session, expected_account)
         ):
-            return ChatSessionResolution(None, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=1)
+            return ChatSessionResolution(session, False, CLASS_AMBIGUOUS_CHAT_SESSION, candidates_count=1)
         return ChatSessionResolution(session, True, "existing_session_id", "session_id", 1)
+
+    if prefer_relation_phone:
+        relation_resolution = _relation_match_resolution(
+            db,
+            folio=expected_folio,
+            cuenta=expected_account,
+        )
+        if relation_resolution is not None:
+            return relation_resolution
 
     lookup_values = _phone_lookup_values(expected_phone)
     if not lookup_values:
+        relation_resolution = _relation_match_resolution(
+            db,
+            folio=expected_folio,
+            cuenta=expected_account,
+        )
+        if relation_resolution is not None:
+            return relation_resolution
         return ChatSessionResolution(None, False, CLASS_MISSING_CHAT_SESSION)
 
     local10 = _conversation_phone_key(expected_phone)
@@ -1343,11 +1410,20 @@ def _apply_resolved_phone(
     *,
     session_resolution: ChatSessionResolution | None = None,
     fallback_phone: Any = None,
+    prefer_session_phone: bool = False,
 ) -> None:
+    session_phone = getattr(session_resolution.session, "phone", None) if session_resolution else None
+    if prefer_session_phone:
+        for candidate in (session_phone, fallback_phone):
+            normalized = normalize_phone_for_whatsapp(candidate)
+            if is_valid_whatsapp_phone(normalized):
+                snapshot.phone = normalized
+                snapshot.missing_fields = required_snapshot_missing_fields(snapshot)
+                return
+
     if is_valid_whatsapp_phone(snapshot.phone):
         return
 
-    session_phone = getattr(session_resolution.session, "phone", None) if session_resolution else None
     for candidate in (session_phone, fallback_phone):
         normalized = normalize_phone_for_whatsapp(candidate)
         if is_valid_whatsapp_phone(normalized):
@@ -2503,11 +2579,16 @@ async def dry_run_payment_reminder(
     session_resolution = resolve_chat_session_for_reminder(
         db,
         snapshot=snapshot,
-        phone=snapshot.phone,
+        phone=None,
         folio=snapshot.folio or folio,
         cuenta=snapshot.account_reference_formatted or snapshot.cuenta or cuenta,
+        prefer_relation_phone=True,
     )
-    _apply_resolved_phone(snapshot, session_resolution=session_resolution)
+    _apply_resolved_phone(
+        snapshot,
+        session_resolution=session_resolution,
+        prefer_session_phone=True,
+    )
     stats = _reminder_stats(
         db,
         cuenta=snapshot.cuenta or cuenta,
@@ -2619,15 +2700,17 @@ async def process_due_payment_reminder(
     session_resolution = resolve_chat_session_for_reminder(
         db,
         snapshot=snapshot,
-        phone=snapshot.phone or reminder.phone,
+        phone=getattr(reminder, "phone", None),
         folio=snapshot.folio or reminder.folio,
         cuenta=snapshot.account_reference_formatted or snapshot.cuenta or reminder.cuenta,
         session_id=getattr(reminder, "session_id", None),
+        prefer_relation_phone=getattr(reminder, "session_id", None) is None,
     )
     _apply_resolved_phone(
         snapshot,
         session_resolution=session_resolution,
         fallback_phone=getattr(reminder, "phone", None),
+        prefer_session_phone=True,
     )
     stats = _reminder_stats(
         db,
@@ -3265,7 +3348,7 @@ async def sync_payment_reminder_candidates(
         session_resolution = resolve_chat_session_for_reminder(
             db,
             snapshot=snapshot,
-            phone=snapshot.phone or getattr(session, "phone", None),
+            phone=getattr(session, "phone", None),
             folio=snapshot.folio or session_folio,
             cuenta=snapshot.account_reference_formatted or snapshot.cuenta or session_cuenta,
             session_id=getattr(session, "id", None),
@@ -3274,6 +3357,7 @@ async def sync_payment_reminder_candidates(
             snapshot,
             session_resolution=session_resolution,
             fallback_phone=getattr(session, "phone", None),
+            prefer_session_phone=True,
         )
         stats = _reminder_stats(
             db,
@@ -3554,11 +3638,16 @@ async def sync_payment_reminder_candidates(
         session_resolution = resolve_chat_session_for_reminder(
             db,
             snapshot=snapshot,
-            phone=snapshot.phone,
+            phone=None,
             folio=snapshot.folio or folio,
             cuenta=snapshot.account_reference_formatted or snapshot.cuenta or cuenta,
+            prefer_relation_phone=True,
         )
-        _apply_resolved_phone(snapshot, session_resolution=session_resolution)
+        _apply_resolved_phone(
+            snapshot,
+            session_resolution=session_resolution,
+            prefer_session_phone=True,
+        )
         stats = _reminder_stats(
             db,
             cuenta=snapshot.cuenta or cuenta,

@@ -835,7 +835,16 @@ def test_sync_uses_chat_sessions_as_candidate_source(monkeypatch):
 def test_sync_single_real_account_payload_schedules_reminder(monkeypatch):
     monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
     monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
-    db = FakeDb([chat_session(id=42, phone="5217122145781", folio=None, extra_json={})])
+    db = FakeDb(
+        [
+            chat_session(
+                id=42,
+                phone="5217122145781",
+                folio="1260522-F",
+                extra_json={"verifications": [{"folio": "1260522-F", "no_cuenta": "1260522"}]},
+            )
+        ]
+    )
 
     result = asyncio.run(
         payment_service.sync_payment_reminder_candidates(
@@ -903,7 +912,16 @@ def test_payment_reminders_test_mode_blocks_non_allowed_phone(monkeypatch):
     monkeypatch.setattr(settings, "TEST_PHONE_ONLY", '["5214271227177"]')
     monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
     monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
-    db = FakeDb([chat_session(id=42, phone="5217122145781", folio=None, extra_json={})])
+    db = FakeDb(
+        [
+            chat_session(
+                id=42,
+                phone="5217122145781",
+                folio="1260522-F",
+                extra_json={"verifications": [{"folio": "1260522-F", "no_cuenta": "1260522"}]},
+            )
+        ]
+    )
 
     result = asyncio.run(
         payment_service.sync_payment_reminder_candidates(
@@ -1076,7 +1094,16 @@ def test_sync_weekly_frequency_block_schedules_future_reminder(monkeypatch):
         lambda *args, **kwargs: (True, SimpleNamespace(sent_at=datetime(2026, 5, 28, 20, 40, 31)), next_allowed),
     )
     monkeypatch.setattr(payment_service, "_reminder_stats", lambda *args, **kwargs: payment_service.ReminderStats())
-    db = FakeDb([chat_session(id=42, phone="5217122145781", folio=None, extra_json={})])
+    db = FakeDb(
+        [
+            chat_session(
+                id=42,
+                phone="5217122145781",
+                folio="1260522-F",
+                extra_json={"verifications": [{"folio": "1260522-F", "no_cuenta": "1260522"}]},
+            )
+        ]
+    )
 
     result = asyncio.run(
         payment_service.sync_payment_reminder_candidates(
@@ -1475,6 +1502,81 @@ def test_local_session_phone_is_used_when_bridge_omits_phone(monkeypatch):
     assert result["reason_counts"] == {}
     assert db.added
     reminder = db.added[0]
+    assert reminder.phone == "5214271644542"
+    assert reminder.folio == "990003"
+    assert reminder.cuenta == "A900003"
+
+
+def test_sync_prefers_chat_session_phone_over_bridge_phone_for_matching_folio_account(monkeypatch):
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb(
+        [
+            chat_session(
+                id=90050,
+                phone="5214271227177",
+                folio="990001",
+                extra_json={"verifications": [{"folio": "990001", "no_cuenta": "A900001"}]},
+            )
+        ]
+    )
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            client=FakeMappedPaymentReminderBridge(
+                [{"folio": "990001", "no_cuenta": "A900001", "phone": "5214411197467"}]
+            ),
+            today=date(2026, 5, 26),
+        )
+    )
+
+    assert result["synced"] == 1
+    assert db.added
+    reminder = db.added[0]
+    assert reminder.session_id == 90050
+    assert reminder.phone == "5214271227177"
+    assert reminder.folio == "990001"
+    assert reminder.cuenta == "A900001"
+
+
+def test_single_account_sync_resolves_phone_from_session_that_entered_folio(monkeypatch):
+    monkeypatch.setattr(settings, "META_PAYMENT_PENDING_TEMPLATE_NAME", "mxcomp_pago_pendiente_v1")
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    db = FakeDb(
+        [
+            chat_session(
+                id=90052,
+                phone="5214271644542",
+                folio="990003",
+                extra_json={"verifications": [{"folio": "990003", "no_cuenta": "A900003"}]},
+            )
+        ]
+    )
+
+    result = asyncio.run(
+        payment_service.sync_payment_reminder_candidates(
+            db,
+            company_id=1,
+            limit=5,
+            dry_run=False,
+            cuenta="A900003",
+            folio="990003",
+            client=FakeMappedPaymentReminderBridge(
+                [{"folio": "990003", "no_cuenta": "A900003", "phone": "5214411197467"}]
+            ),
+            today=date(2026, 5, 26),
+        )
+    )
+
+    assert result["source"] == "single_account"
+    assert result["synced"] == 1
+    assert db.added
+    reminder = db.added[0]
+    assert reminder.session_id == 90052
     assert reminder.phone == "5214271644542"
     assert reminder.folio == "990003"
     assert reminder.cuenta == "A900003"
