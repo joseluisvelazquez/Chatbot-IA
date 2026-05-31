@@ -1127,6 +1127,121 @@ def test_sync_weekly_frequency_block_schedules_future_reminder(monkeypatch):
     assert reminder.error_code == payment_service.REASON_WEEKLY_FREQUENCY_BLOCKED
 
 
+def test_weekly_block_reschedules_current_to_next_allowed_day(monkeypatch):
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: None)
+    reminder = SimpleNamespace(
+        id=10,
+        status=payment_service.STATUS_PROCESSING,
+        phone="5214271227177",
+        folio="990001",
+        cuenta="A900001",
+        due_date=date(2026, 5, 29),
+        next_due_date=date(2026, 6, 5),
+        scheduled_for=datetime(2026, 5, 29, 10, 0, 0),
+        error_code=None,
+        error_message_sanitized=None,
+        updated_at=None,
+    )
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        folio="990001",
+        phone="5214271227177",
+        balance=Decimal("100.00"),
+        minimum_payment=Decimal("50.00"),
+        payment_status=PAYMENT_STATUS_UNPAID,
+    )
+    next_allowed = datetime(2026, 6, 4, 20, 40, 31)
+
+    target, schedule, merged = payment_service._reschedule_or_merge_after_weekly_block(
+        SimpleNamespace(),
+        reminder,
+        snapshot=snapshot,
+        reminder_type=payment_service.REMINDER_PAYMENT_OVERDUE,
+        template_name="mxcomp_pago_vencido_v1",
+        session_id=90050,
+        next_allowed_at=next_allowed,
+    )
+
+    assert target is reminder
+    assert merged is False
+    assert schedule.due_date == date(2026, 6, 4)
+    assert reminder.status == payment_service.STATUS_SCHEDULED
+    assert reminder.due_date == date(2026, 6, 4)
+    assert reminder.next_due_date == date(2026, 6, 11)
+    assert reminder.scheduled_for == next_allowed
+
+
+def test_weekly_block_merges_when_future_reminder_already_exists(monkeypatch):
+    current = SimpleNamespace(
+        id=10,
+        status=payment_service.STATUS_PROCESSING,
+        phone="5214271227177",
+        folio="990001",
+        cuenta="A900001",
+        due_date=date(2026, 5, 29),
+        next_due_date=date(2026, 6, 5),
+        scheduled_for=datetime(2026, 5, 29, 10, 0, 0),
+        error_code=None,
+        error_message_sanitized=None,
+        updated_at=None,
+    )
+    future = SimpleNamespace(
+        id=11,
+        status=payment_service.STATUS_SCHEDULED,
+        phone="5214271227177",
+        folio="990001",
+        cuenta="A900001",
+        due_date=date(2026, 6, 4),
+        next_due_date=date(2026, 6, 11),
+        scheduled_for=datetime(2026, 6, 4, 10, 0, 0),
+        template_name=None,
+        receipt_status=None,
+        receipt_id=None,
+        saldo_snapshot=None,
+        monto_minimo_snapshot=None,
+        bridge_found=False,
+        bridge_snapshot_hash=None,
+        error_code=None,
+        error_message_sanitized=None,
+        updated_at=None,
+    )
+    monkeypatch.setattr(payment_service, "_existing_reminder", lambda *args, **kwargs: future)
+    snapshot = BridgeAccountSnapshot(
+        bridge_found=True,
+        company_id=1,
+        cuenta="A900001",
+        folio="990001",
+        phone="5214271227177",
+        balance=Decimal("100.00"),
+        minimum_payment=Decimal("50.00"),
+        payment_status=PAYMENT_STATUS_UNPAID,
+    )
+    next_allowed = datetime(2026, 6, 4, 20, 40, 31)
+
+    target, schedule, merged = payment_service._reschedule_or_merge_after_weekly_block(
+        SimpleNamespace(),
+        current,
+        snapshot=snapshot,
+        reminder_type=payment_service.REMINDER_PAYMENT_OVERDUE,
+        template_name="mxcomp_pago_vencido_v1",
+        session_id=90050,
+        next_allowed_at=next_allowed,
+    )
+
+    assert target is future
+    assert merged is True
+    assert schedule.due_date == date(2026, 6, 4)
+    assert current.status == payment_service.STATUS_SKIPPED
+    assert current.error_code == payment_service.REASON_WEEKLY_FREQUENCY_BLOCKED
+    assert "merged_into_payment_reminder_id:11" in current.error_message_sanitized
+    assert future.status == payment_service.STATUS_SCHEDULED
+    assert future.due_date == date(2026, 6, 4)
+    assert future.next_due_date == date(2026, 6, 11)
+    assert future.scheduled_for == next_allowed
+
+
 def test_reminder_resolves_session_by_folio_when_phone_has_multiple_sessions():
     session_a = chat_session(id=1, folio="OLD")
     session_b = chat_session(id=2, folio="990001")

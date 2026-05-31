@@ -2304,18 +2304,85 @@ def _reschedule_after_weekly_block(
     schedule: PaymentSchedule,
     next_allowed_at: datetime,
 ) -> None:
-    next_due = schedule.next_due_date
-    if next_allowed_at.date() > next_due:
-        next_due = next_allowed_at.date()
+    next_due = next_allowed_at.date()
     reminder.due_date = next_due
-    reminder.next_due_date = next_due + timedelta(days=7)
-    reminder.scheduled_for = max(_scheduled_datetime(next_due), next_allowed_at)
+    reminder.next_due_date = next_due + timedelta(days=PAYMENT_REMINDER_MIN_INTERVAL_DAYS)
+    reminder.scheduled_for = next_allowed_at
     reminder.status = STATUS_SCHEDULED
     reminder.error_code = REASON_WEEKLY_FREQUENCY_BLOCKED
     reminder.error_message_sanitized = (
         f"next_allowed_payment_reminder_at:{next_allowed_at.isoformat()}"
     )[:255]
     reminder.updated_at = mexico_now_naive()
+
+
+def _same_reminder(left: Any, right: Any) -> bool:
+    left_id = getattr(left, "id", None)
+    right_id = getattr(right, "id", None)
+    return bool(left_id is not None and right_id is not None and left_id == right_id)
+
+
+def _reschedule_or_merge_after_weekly_block(
+    db: Session,
+    reminder: PaymentReminder,
+    *,
+    snapshot: BridgeAccountSnapshot,
+    reminder_type: str,
+    template_name: str | None,
+    session_id: int | None,
+    next_allowed_at: datetime,
+) -> tuple[PaymentReminder, PaymentSchedule, bool]:
+    target_schedule = _payment_schedule_from_next_allowed(next_allowed_at)
+    existing = _existing_reminder(
+        db,
+        cuenta=snapshot.cuenta or reminder.cuenta,
+        due_date=target_schedule.due_date,
+        reminder_type=reminder_type,
+        session_id=session_id,
+    )
+    if existing is not None and not _same_reminder(existing, reminder):
+        if existing.status in {STATUS_SCHEDULED, STATUS_PROCESSING}:
+            _update_reminder_from_snapshot(
+                existing,
+                snapshot=snapshot,
+                schedule=target_schedule,
+                template_name=template_name,
+                session_id=session_id,
+            )
+            existing.scheduled_for = next_allowed_at
+            existing.error_code = REASON_WEEKLY_FREQUENCY_BLOCKED
+            existing.error_message_sanitized = (
+                f"next_allowed_payment_reminder_at:{next_allowed_at.isoformat()}"
+            )[:255]
+        _mark_result(
+            reminder,
+            status=STATUS_SKIPPED,
+            error_code=REASON_WEEKLY_FREQUENCY_BLOCKED,
+            error_message=(
+                f"merged_into_payment_reminder_id:{getattr(existing, 'id', None)};"
+                f"next_allowed_payment_reminder_at:{next_allowed_at.isoformat()}"
+            ),
+        )
+        logger.info(
+            "payment_reminder.duplicate.prevented",
+            extra={
+                "payment_reminder_id": getattr(reminder, "id", None),
+                "merged_into_payment_reminder_id": getattr(existing, "id", None),
+                "account": _mask(snapshot.cuenta or reminder.cuenta),
+                "session_id": session_id,
+                "due_date": target_schedule.due_date.isoformat(),
+                "reminder_type": reminder_type,
+                "reason": REASON_WEEKLY_FREQUENCY_BLOCKED,
+            },
+        )
+        return existing, target_schedule, True
+
+    _reschedule_after_weekly_block(
+        reminder,
+        schedule=target_schedule,
+        next_allowed_at=next_allowed_at,
+    )
+    return reminder, target_schedule, False
 
 
 def _reminder_stats(
@@ -2945,19 +3012,25 @@ async def process_due_payment_reminder(
         exclude_id=getattr(reminder, "id", None),
     )
     if blocked and next_allowed:
-        _reschedule_after_weekly_block(
+        next_reminder, next_schedule, merged = _reschedule_or_merge_after_weekly_block(
+            db,
             reminder,
-            schedule=schedule,
+            snapshot=snapshot,
+            reminder_type=reminder_type,
+            template_name=template_name,
+            session_id=session_resolution.session_id,
             next_allowed_at=next_allowed,
         )
         logger.info(
             "payment_reminder.weekly_frequency.blocked",
             extra={
                 "reminder_id": getattr(reminder, "id", None),
+                "next_reminder_id": getattr(next_reminder, "id", None),
                 "account": _mask(snapshot.cuenta),
                 "session_id": session_resolution.session_id,
                 "last_sent_at": _sent_reference_at(last_sent).isoformat() if _sent_reference_at(last_sent) else None,
                 "next_allowed_at": next_allowed.isoformat(),
+                "merged_into_existing": merged,
             },
         )
         result["reason"] = REASON_WEEKLY_FREQUENCY_BLOCKED
@@ -2965,9 +3038,11 @@ async def process_due_payment_reminder(
         result["would_send"] = False
         result["would_create_conversation_message"] = False
         result["next_allowed_payment_reminder_at"] = next_allowed.isoformat()
-        result["scheduled_at"] = reminder.scheduled_for.isoformat() if reminder.scheduled_for else None
-        result["due_date"] = reminder.due_date.isoformat() if reminder.due_date else result.get("due_date")
-        result["next_due_date"] = reminder.next_due_date.isoformat() if reminder.next_due_date else result.get("next_due_date")
+        result["scheduled_at"] = next_allowed.isoformat()
+        result["due_date"] = next_schedule.due_date.isoformat()
+        result["next_due_date"] = next_schedule.next_due_date.isoformat() if next_schedule.next_due_date else None
+        result["payment_reminder_id"] = getattr(next_reminder, "id", None)
+        result["duplicate_prevented"] = bool(merged)
         return result
 
     already_sent = (
