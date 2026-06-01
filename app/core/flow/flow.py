@@ -41,12 +41,16 @@ FLOW = {
     # MENU DE AYUDA
     # --------------------------------------
 
-   ChatState.MENU_AYUDA: {
+    ChatState.MENU_AYUDA: {
         "text": msg.MENU_AYUDA,
         "buttons": [
             {"id": "MENU_VERIFICACION", "label": "📄 Ir a verificación"},
             {"id": "MENU_DUDA", "label": "❓ Hacer una pregunta"},
         ],
+        "options": {
+            "MENU_VERIFICACION": "__RESUME__",
+            "MENU_DUDA": ChatState.MENU_DUDA,
+        }
     },
 
     ChatState.MENU_DUDA: {
@@ -498,6 +502,27 @@ FLOW = {
 
     ChatState.DESPEDIDA: {
         "text": msg.DESPEDIDA,
+        "buttons": [],
+        "options": {},
+    },
+
+    ChatState.COBRANZA: {
+        "text": None,
+        "buttons": [],
+        "options": {
+            "REANUDACION": "__RESUME__",
+            "MENU_DUDA": ChatState.COBRANZA_DUDA,
+        },
+    },
+
+    ChatState.COBRANZA_DUDA: {
+        "text": "¿Qué duda tienes respecto a tus pagos?",
+        "buttons": [],
+        "options": {},
+    },
+
+    ChatState.COBRANZA_ESCALADO: {
+        "text": "Recibimos tu duda y pronto te la contestaremos, por favor mantente atento a la respuesta.",
         "buttons": [],
         "options": {},
     },

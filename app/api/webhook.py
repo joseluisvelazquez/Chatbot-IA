@@ -999,6 +999,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             intent=button_id,
             db=db,
             bridge_verification=bridge_verification,
+            is_media=is_media,
         )
         reply = result.reply
         buttons = result.buttons

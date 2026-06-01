@@ -1834,8 +1834,8 @@ export async function loadChat(sessionId, phone, name = null) {
                         </div>
 
                         <div id="reactivateControlContainer" class="hidden">
-                            <button onclick="openReactivationModal()" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Reactivar Chat">
-                                <i data-lucide="message-square-plus" class="w-4 h-4"></i> <span class="hidden sm:inline">Reactivar</span>
+                            <button onclick="openReactivationModal()" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors flex items-center gap-1 shadow-sm" title="Reactivar conversación">
+                                <i data-lucide="message-square-plus" class="w-4 h-4"></i> <span class="hidden sm:inline">Reactivar conversación</span>
                             </button>
                         </div>
                     </div>
@@ -2763,7 +2763,46 @@ window.removeCurrentFile = function (event) {
 
 window.openReactivationModal = function () {
     const modal = document.getElementById('reactivationModal');
-    if (modal) modal.classList.remove('hidden');
+    if (!modal) return;
+    
+    const globalState = getState();
+    const session = currentSessionId ? globalState.conversations.byId[currentSessionId] : null;
+    
+    const collectionsRadio = document.querySelector('input[name="reactivation_template"][value="collections"]');
+    const collectionsLabel = collectionsRadio ? collectionsRadio.closest('label') : null;
+    
+    if (session && collectionsRadio && collectionsLabel) {
+        const terminalStates = ["FINALIZADO", "DESPEDIDA", "ACLARACION", "LLAMADA", "DEVOLUCION_FINALIZADA", "COBRANZA"];
+        const isTerminal = terminalStates.includes(session.state);
+        
+        if (!isTerminal) {
+            collectionsRadio.disabled = true;
+            collectionsLabel.classList.add('opacity-50', 'cursor-not-allowed');
+            collectionsLabel.classList.remove('cursor-pointer');
+            
+            if (!document.getElementById('collectionsWarning')) {
+                const warn = document.createElement('p');
+                warn.id = 'collectionsWarning';
+                warn.className = 'text-red-500 text-xs mt-1 font-semibold';
+                warn.innerText = '⚠️ La verificación aún no termina. Usa Inactividad.';
+                collectionsLabel.querySelector('.ml-3').appendChild(warn);
+            }
+            
+            // Si estaba seleccionado, cambiar la selección a inactividad
+            if (collectionsRadio.checked) {
+                const inactivityRadio = document.querySelector('input[name="reactivation_template"][value="inactivity"]');
+                if (inactivityRadio) inactivityRadio.checked = true;
+            }
+        } else {
+            collectionsRadio.disabled = false;
+            collectionsLabel.classList.remove('opacity-50', 'cursor-not-allowed');
+            collectionsLabel.classList.add('cursor-pointer');
+            const warn = document.getElementById('collectionsWarning');
+            if (warn) warn.remove();
+        }
+    }
+
+    modal.classList.remove('hidden');
 }
 
 window.closeReactivationModal = function () {

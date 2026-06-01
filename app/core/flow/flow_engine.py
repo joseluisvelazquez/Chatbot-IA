@@ -412,6 +412,7 @@ def process_message(
     intent: str | None = None,
     db=None,
     bridge_verification=None,
+    is_media: bool = False,
 ) -> FlowResult:
     #logger.info(f"🟢 [Flujo] Inicio process_message | Estado: {session.state} | Intent: {intent} | Texto: '{text}'")
 
@@ -548,7 +549,8 @@ def process_message(
         ChatState.ESPERANDO_REGISTRO,
         ChatState.LLAMADA,
         ChatState.ACLARACION,
-        ChatState.DEVOLUCION_FINALIZADA
+        ChatState.DEVOLUCION_FINALIZADA,
+        ChatState.COBRANZA_ESCALADO
     }
     if current_state in escalation_states:
         if current_state == ChatState.ESPERANDO_REGISTRO:
@@ -759,6 +761,59 @@ def process_message(
         detected_intent = intent
         action = "advance"
     else:
+        if current_state == ChatState.COBRANZA:
+            if is_media:
+                return FlowResult(
+                    reply="Recibimos tu comprobante o archivo. Lo revisaremos a la brevedad y te daremos respuesta.",
+                    next_state=ChatState.COBRANZA_ESCALADO,
+                    buttons=[],
+                    previous_state=previous_state
+                )
+                
+            text_lower = text.strip().lower()
+            if text_lower == "tengo una duda":
+                return FlowResult(
+                    reply=None,
+                    next_state=ChatState.COBRANZA_DUDA,
+                    buttons=[],
+                    previous_state=previous_state
+                )
+            else:
+                return FlowResult(
+                    reply=None,
+                    next_state=ChatState.COBRANZA_ESCALADO,
+                    buttons=[],
+                    previous_state=previous_state
+                )
+
+        if current_state == ChatState.COBRANZA_DUDA:
+            if is_media:
+                reply_text = "Recibimos tu comprobante o archivo. Lo revisaremos a la brevedad y te daremos respuesta."
+            else:
+                reply_text = None # usa el default de COBRANZA_ESCALADO
+                
+            return FlowResult(
+                reply=reply_text,
+                next_state=ChatState.COBRANZA_ESCALADO,
+                buttons=[],
+                previous_state=previous_state
+            )
+
+        # --------------------------------------
+        # Manejo de imágenes no esperadas en verificación activa
+        # --------------------------------------
+        from app.core.states.state_types import is_persistent_state, is_terminal_state
+        if is_media and current_state != ChatState.VERIFICAR_FOTO_COMPONENTE:
+            if is_persistent_state(current_state) and not is_terminal_state(current_state):
+                return FlowResult(
+                    reply="Recibí tu archivo o comprobante, no olvides terminar tu verificación.",
+                    next_state=ChatState.MENU_AYUDA,
+                    buttons=[
+                        {"id": "MENU_VERIFICACION", "label": "📄 Ir a verificación"}
+                    ],
+                    previous_state=current_state.value
+                )
+
         # --------------------------------------
         # 1. Detectar intención (con prioridad)
         # --------------------------------------

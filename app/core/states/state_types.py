@@ -95,6 +95,8 @@ STATE_SYSTEM = {
     ChatState.FINALIZADO,
     ChatState.DESPEDIDA,
     ChatState.COBRANZA,
+    ChatState.COBRANZA_DUDA,
+    ChatState.COBRANZA_ESCALADO,
 }
 
 
@@ -147,13 +149,18 @@ def is_terminal_state(state: ChatState) -> bool:
         ChatState.DESPEDIDA,
         ChatState.ACLARACION,
         ChatState.LLAMADA,
-        ChatState.DEVOLUCION_FINALIZADA
+        ChatState.DEVOLUCION_FINALIZADA,
+        ChatState.COBRANZA,
+        ChatState.COBRANZA_DUDA,
+        ChatState.COBRANZA_ESCALADO
     }
 
 TERMINAL_STATES_FOR_LOCK = {
     ChatState.FINALIZADO,
     ChatState.DESPEDIDA,
     ChatState.COBRANZA,
+    ChatState.COBRANZA_DUDA,
+    ChatState.COBRANZA_ESCALADO,
     ChatState.ACLARACION,
     ChatState.LLAMADA,
     ChatState.DEVOLUCION_FINALIZADA,

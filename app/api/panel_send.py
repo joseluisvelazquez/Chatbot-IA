@@ -233,9 +233,16 @@ async def reactivate_conversation(
     chat.unread_count = 0
     
     if payload.template_key == "collections":
-        if chat.state != ChatState.COBRANZA.value:
-            chat.previous_state = chat.state
-            chat.state = ChatState.COBRANZA.value
+        from app.core.states.state_types import is_terminal_state
+        from app.core.states.states import ChatState
+        
+        try:
+            current_state_enum = ChatState(chat.state)
+            if is_terminal_state(current_state_enum) and chat.state != ChatState.COBRANZA.value:
+                chat.previous_state = chat.state
+                chat.state = ChatState.COBRANZA.value
+        except ValueError:
+            pass
     
     db.commit()
     db.refresh(msg)

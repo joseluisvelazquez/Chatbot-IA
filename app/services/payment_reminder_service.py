@@ -1751,10 +1751,16 @@ def _mark_chat_session_cobranza(db: Session, chat_session: ChatSessions | None) 
     now = mexico_now_naive()
     if hasattr(chat_session, "state"):
         current_state = getattr(chat_session, "state", None)
-        if current_state != "COBRANZA":
-            if hasattr(chat_session, "previous_state") and current_state:
-                chat_session.previous_state = current_state
-            chat_session.state = "COBRANZA"
+        if current_state and current_state != "COBRANZA":
+            from app.core.states.state_types import is_terminal_state
+            from app.core.states.states import ChatState
+            try:
+                if is_terminal_state(ChatState(current_state)):
+                    if hasattr(chat_session, "previous_state"):
+                        chat_session.previous_state = current_state
+                    chat_session.state = "COBRANZA"
+            except ValueError:
+                pass
             if hasattr(chat_session, "updated_at"):
                 chat_session.updated_at = now
             db.add(chat_session)

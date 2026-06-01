@@ -20,6 +20,8 @@ class ChatState(str, Enum):
     FINALIZADO = "FINALIZADO"
     DESPEDIDA = "DESPEDIDA"
     COBRANZA = "COBRANZA"
+    COBRANZA_DUDA = "COBRANZA_DUDA"
+    COBRANZA_ESCALADO = "COBRANZA_ESCALADO"
 
     # -------------------------
     # Navegación
