@@ -1179,7 +1179,7 @@ function updateDrawer(item) {
                 `
                 : "";
 
-            const verifyByCallButton = (item.session_state === "LLAMADA" || item.session_state === "ACLARACION")
+            const verifyByCallButton = (!String(item.session_state || "").startsWith("COBRANZA") && item.session_state !== "FINALIZADO")
                 ? `
                     <button
                         id="verifyByCallFooterBtn"

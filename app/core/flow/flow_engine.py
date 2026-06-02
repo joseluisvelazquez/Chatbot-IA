@@ -550,7 +550,8 @@ def process_message(
         ChatState.LLAMADA,
         ChatState.ACLARACION,
         ChatState.DEVOLUCION_FINALIZADA,
-        ChatState.COBRANZA_ESCALADO
+        ChatState.COBRANZA_ESCALADO,
+        ChatState.FINALIZADO
     }
     if current_state in escalation_states:
         if current_state == ChatState.ESPERANDO_REGISTRO:
