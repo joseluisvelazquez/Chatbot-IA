@@ -25,6 +25,9 @@ def utcnow_naive() -> datetime:
 # ------------------------------------------------------------
 
 from app.core.states.state_types import is_persistent_state
+from app.core.states.state_renderer import render_state
+from app.services.message_service import save_message
+from app.services.message_metadata import build_outgoing_interactive_metadata
 
 async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
 
@@ -67,20 +70,37 @@ async def send_reminder(db: Session, session: ChatSessions, reminder_type: str):
 
     session.state = state.value
 
+    # Guardamos el mensaje en la BD para que sea visible en el panel
+    outgoing_metadata = build_outgoing_interactive_metadata(text, buttons) if buttons else None
+    bot_msg = save_message(
+        db=db,
+        session_id=session.id,
+        phone=session.phone,
+        direction="out",
+        content=text,
+        type="text",
+        extra_json=outgoing_metadata,
+    )
+
     await send_whatsapp_message(session.phone, text, buttons)
-    return True
+    return bot_msg
 
 
-async def broadcast_reminder_update(db: Session, session: ChatSessions) -> None:
+async def broadcast_reminder_update(db: Session, session: ChatSessions, bot_msg=None) -> None:
     try:
         from app.services.verification_panel_service import build_verification_snapshot
-        from app.services.ws_events import build_verification_updated_event
+        from app.services.ws_events import build_verification_updated_event, build_new_message_event
         from app.websockets.manager import manager
 
         snapshot = build_verification_snapshot(db, session)
         event = build_verification_updated_event(snapshot, source="reminder") if snapshot else None
         if event:
             await manager.send_to_all(event)
+            
+        if bot_msg:
+            msg_event = build_new_message_event(session, bot_msg)
+            if msg_event:
+                await manager.send_to_all(msg_event)
     except Exception:
         pass
 
@@ -142,7 +162,7 @@ async def _send_due_reminders(db: Session) -> None:
 
         try:
 
-            changed = await send_reminder(
+            bot_msg = await send_reminder(
                 db=db,
                 session=session,
                 reminder_type=r.type
@@ -150,8 +170,9 @@ async def _send_due_reminders(db: Session) -> None:
 
             # commit después de enviar
             db.commit()
-            if changed:
-                await broadcast_reminder_update(db, session)
+            if bot_msg:
+                # bot_msg puede ser True si fue TIMEOUT, en ese caso enviamos None
+                await broadcast_reminder_update(db, session, bot_msg if hasattr(bot_msg, 'id') else None)
 
         except Exception:
             db.rollback()
